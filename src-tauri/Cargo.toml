@@ -1,0 +1,55 @@
+[package]
+name = "timekeeper"
+version = "0.1.0"
+description = "时约管家 Windows desktop scheduler"
+authors = ["TimeKeeper"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "timekeeper_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-stronghold = "2"
+chrono = { version = "0.4.45", features = ["serde"] }
+uuid = { version = "1.23.5", features = ["v7", "serde"] }
+thiserror = "2.0.18"
+calamine = { version = "0.36.0", features = ["chrono"] }
+sha2 = "0.11.0"
+hex = "0.4.3"
+arboard = { version = "3.6.1", default-features = false }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+tokio = { version = "1.52.3", features = ["sync", "time", "rt"] }
+sqlx = { version = "0.8.6", default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "chrono", "migrate"] }
+
+[profile.dev.package.rust-argon2]
+opt-level = 3
+
+[profile.dev.package.scrypt]
+opt-level = 3
+
+[profile.dev.package.salsa20]
+opt-level = 3
+
+[profile.dev.package.pbkdf2]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.hmac]
+opt-level = 3
