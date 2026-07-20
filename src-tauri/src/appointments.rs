@@ -6,6 +6,7 @@ use tauri::{AppHandle, Runtime, State};
 use uuid::Uuid;
 
 use crate::{
+    backup::BackupState,
     db::{Database, ImportWriteResult},
     importer::LegacyAppointment,
     models::{
@@ -230,7 +231,7 @@ fn db_error(error: sqlx::Error) -> String {
     format!("数据库操作失败: {error}")
 }
 
-fn appointment_from_row(row: &SqliteRow) -> Result<Appointment, String> {
+pub(crate) fn appointment_from_row(row: &SqliteRow) -> Result<Appointment, String> {
     let mode = AppointmentMode::from_str(&row.try_get::<String, _>("mode").map_err(db_error)?)?;
     let service_status = ServiceStatus::from_str(
         &row.try_get::<String, _>("service_status")
@@ -464,8 +465,10 @@ pub async fn create_appointment<R: Runtime>(
     app: AppHandle<R>,
     database: State<'_, Database>,
     notifications: State<'_, NotificationState>,
+    backup: State<'_, BackupState>,
     input: AppointmentInput,
 ) -> Result<AppointmentMutationResult, String> {
+    let _operation_guard = backup.lock_data_operation().await;
     let result = create_appointment_impl(database.inner(), input).await?;
     sync_notification(&app, notifications.inner(), &result.appointment);
     Ok(result)
@@ -537,9 +540,11 @@ pub async fn update_appointment<R: Runtime>(
     app: AppHandle<R>,
     database: State<'_, Database>,
     notifications: State<'_, NotificationState>,
+    backup: State<'_, BackupState>,
     id: String,
     input: AppointmentInput,
 ) -> Result<AppointmentMutationResult, String> {
+    let _operation_guard = backup.lock_data_operation().await;
     let result = update_appointment_impl(database.inner(), &id, input).await?;
     sync_notification(&app, notifications.inner(), &result.appointment);
     Ok(result)
@@ -620,9 +625,11 @@ pub async fn duplicate_appointment<R: Runtime>(
     app: AppHandle<R>,
     database: State<'_, Database>,
     notifications: State<'_, NotificationState>,
+    backup: State<'_, BackupState>,
     id: String,
     service_date: Option<String>,
 ) -> Result<AppointmentMutationResult, String> {
+    let _operation_guard = backup.lock_data_operation().await;
     let result = duplicate_appointment_impl(database.inner(), &id, service_date).await?;
     sync_notification(&app, notifications.inner(), &result.appointment);
     Ok(result)
@@ -684,8 +691,10 @@ fn parse_date_time(value: &str) -> Result<NaiveDateTime, String> {
 pub async fn delete_appointment(
     database: State<'_, Database>,
     notifications: State<'_, NotificationState>,
+    backup: State<'_, BackupState>,
     id: String,
 ) -> Result<(), String> {
+    let _operation_guard = backup.lock_data_operation().await;
     delete_appointment_impl(database.inner(), &id).await?;
     let _ = cancel_appointment_notification(notifications.inner(), &id);
     Ok(())
@@ -708,9 +717,11 @@ pub async fn set_appointment_service_status<R: Runtime>(
     app: AppHandle<R>,
     database: State<'_, Database>,
     notifications: State<'_, NotificationState>,
+    backup: State<'_, BackupState>,
     id: String,
     status: ServiceStatus,
 ) -> Result<Appointment, String> {
+    let _operation_guard = backup.lock_data_operation().await;
     let appointment = set_appointment_service_status_impl(database.inner(), &id, status).await?;
     sync_notification(&app, notifications.inner(), &appointment);
     Ok(appointment)
@@ -738,10 +749,12 @@ pub(crate) async fn set_appointment_service_status_impl(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn settle_appointment(
     database: State<'_, Database>,
+    backup: State<'_, BackupState>,
     id: String,
     amount_minor: i64,
     payment_method: Option<String>,
 ) -> Result<Appointment, String> {
+    let _operation_guard = backup.lock_data_operation().await;
     settle_appointment_impl(database.inner(), &id, amount_minor, payment_method).await
 }
 

@@ -61,9 +61,13 @@ const nextCountdown = computed(() => {
   if (!next?.startsAt) return "暂无待开始预约";
   const minutes = differenceInMinutes(parseISO(next.startsAt), now.value);
   if (minutes <= 0) return "即将开始";
-  if (minutes < 60) return `${minutes} 分钟后`;
-  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分后`;
-  return `${Math.floor(minutes / 1440)} 天后`;
+  if (minutes < 60) return `${minutes}分钟后`;
+  if (minutes < 24 * 60) {
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return remainingMinutes ? `${hours}时${remainingMinutes}分后` : `${hours}小时后`;
+  }
+  return `${Math.floor(minutes / 1440)}天后`;
 });
 
 async function refresh(): Promise<void> {
@@ -235,7 +239,7 @@ onUnmounted(() => globalThis.clearInterval(clockTimer));
 .today-lead__date p {
   margin-top: 6px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .metric-grid {
@@ -271,7 +275,7 @@ onUnmounted(() => globalThis.clearInterval(clockTimer));
 
 .metric span {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .metric strong {
@@ -284,8 +288,8 @@ onUnmounted(() => globalThis.clearInterval(clockTimer));
 
 .metric small {
   overflow: hidden;
-  color: #98a19e;
-  font-size: 9px;
+  color: var(--ink-muted);
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -322,6 +326,12 @@ onUnmounted(() => globalThis.clearInterval(clockTimer));
 
   .metric {
     padding: 9px;
+  }
+}
+
+@media (max-height: 760px) {
+  .today-workspace {
+    grid-template-rows: 136px minmax(200px, 1fr) minmax(160px, 1fr);
   }
 }
 </style>

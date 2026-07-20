@@ -18,4 +18,10 @@ describe("combineDateTime", () => {
       differenceInHours(parseISO(result.endsAt as string), parseISO(result.startsAt as string)),
     ).toBe(2);
   });
+
+  it("rejects equal start and end times instead of creating a 24-hour appointment", () => {
+    expect(() => combineDateTime("2026-07-13", "10:00", "10:00")).toThrow(
+      "开始时间和结束时间不能相同",
+    );
+  });
 });

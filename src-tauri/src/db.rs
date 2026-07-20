@@ -8,7 +8,7 @@ use sqlx::{
 use tauri::Manager;
 
 pub const DATABASE_FILE_NAME: &str = "timekeeper.db";
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+pub(crate) static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ImportWriteResult {

@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::{
     accounts::{find_imported_account_profile_id, insert_imported_account_profile},
     appointments::{insert_imported_appointment, restore_pending_notifications},
+    backup::BackupState,
     db::Database,
     notifications::NotificationState,
     vault::VaultState,
@@ -176,7 +177,9 @@ pub async fn commit_excel_import<R: Runtime>(
     database: State<'_, Database>,
     notifications: State<'_, NotificationState>,
     vault: State<'_, VaultState>,
+    backup: State<'_, BackupState>,
 ) -> Result<ExcelImportResult, String> {
+    let operation_guard = backup.lock_data_operation().await;
     let parsed = imports.take(&preview_token)?;
     let mut transaction = database
         .pool()
@@ -248,6 +251,7 @@ pub async fn commit_excel_import<R: Runtime>(
         return Err(format!("提交 Excel 导入事务失败：{error}"));
     }
 
+    drop(operation_guard);
     restore_pending_notifications(app, database.inner(), notifications.inner()).await?;
 
     Ok(ExcelImportResult {

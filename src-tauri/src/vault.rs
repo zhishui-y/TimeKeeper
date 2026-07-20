@@ -1,5 +1,7 @@
 use std::{
     fmt::Display,
+    fs::File,
+    io::Read,
     path::{Path, PathBuf},
     str,
     sync::{Mutex, MutexGuard},
@@ -26,6 +28,9 @@ const VERIFIER_VALUE: &[u8] = b"timekeeper-vault-v1";
 const PASSWORD_KEY_PREFIX: &str = "account-password:";
 const DEFAULT_AUTO_LOCK_MINUTES: u32 = 15;
 const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(30);
+// Stronghold v3 的密文头和最小封装长度可在无主密码时检查；密文真实性仍只能在解锁时验证。
+const STRONGHOLD_SNAPSHOT_HEADER: [u8; 7] = [0x50, 0x41, 0x52, 0x54, 0x49, 0x03, 0x00];
+const STRONGHOLD_MIN_SNAPSHOT_BYTES: u64 = 173;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +56,8 @@ pub enum VaultError {
     UnlockFailed,
     #[error("保险库盐文件丢失或损坏")]
     InvalidSalt,
+    #[error("Stronghold 快照文件格式无效")]
+    InvalidSnapshot,
     #[error("账号 ID 不合法")]
     InvalidAccountId,
     #[error("该账号尚未保存密码")]
@@ -260,6 +267,28 @@ impl VaultState {
     }
 }
 
+pub(crate) fn validate_backup_files(
+    snapshot_path: &Path,
+    salt_path: &Path,
+) -> Result<(), VaultError> {
+    let salt_metadata = std::fs::metadata(salt_path)?;
+    if !salt_metadata.is_file() || salt_metadata.len() != 32 {
+        return Err(VaultError::InvalidSalt);
+    }
+
+    let snapshot_metadata = std::fs::metadata(snapshot_path)?;
+    if !snapshot_metadata.is_file() || snapshot_metadata.len() < STRONGHOLD_MIN_SNAPSHOT_BYTES {
+        return Err(VaultError::InvalidSnapshot);
+    }
+
+    let mut header = [0_u8; STRONGHOLD_SNAPSHOT_HEADER.len()];
+    File::open(snapshot_path)?.read_exact(&mut header)?;
+    if header != STRONGHOLD_SNAPSHOT_HEADER {
+        return Err(VaultError::InvalidSnapshot);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn vault_status(state: State<'_, VaultState>) -> Result<VaultStatus, String> {
     state.status().map_err(|error| error.to_string())
@@ -269,7 +298,10 @@ pub fn vault_status(state: State<'_, VaultState>) -> Result<VaultStatus, String>
 pub async fn initialize_vault<R: Runtime>(
     password: String,
     app: AppHandle<R>,
+    backup: State<'_, BackupState>,
 ) -> Result<VaultStatus, String> {
+    let backup = backup.inner().clone();
+    let _operation_guard = backup.lock_data_operation().await;
     let worker_app = app.clone();
     let status =
         run_blocking_vault_operation(move || worker_app.state::<VaultState>().initialize(password))

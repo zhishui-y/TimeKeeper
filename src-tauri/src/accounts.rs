@@ -4,6 +4,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::{
+    backup::BackupState,
     db::{Database, ImportWriteResult},
     importer::LegacyAccountProfile,
     models::{AccountProfile, AccountProfileInput},
@@ -53,7 +54,7 @@ fn validate_input(mut input: AccountProfileInput) -> Result<AccountProfileInput,
     Ok(input)
 }
 
-fn profile_from_row(row: &SqliteRow) -> Result<AccountProfile, String> {
+pub(crate) fn profile_from_row(row: &SqliteRow) -> Result<AccountProfile, String> {
     Ok(AccountProfile {
         id: row.try_get("id").map_err(db_error)?,
         contact_name: row.try_get("contact_name").map_err(db_error)?,
@@ -148,8 +149,10 @@ pub(crate) async fn get_account_profile_impl(
 pub async fn create_account_profile(
     database: State<'_, Database>,
     vault: State<'_, VaultState>,
+    backup: State<'_, BackupState>,
     mut input: AccountProfileInput,
 ) -> Result<AccountProfile, String> {
+    let _operation_guard = backup.lock_data_operation().await;
     let password = input
         .password
         .take()
@@ -207,9 +210,11 @@ pub(crate) async fn create_account_profile_impl(
 pub async fn update_account_profile(
     database: State<'_, Database>,
     vault: State<'_, VaultState>,
+    backup: State<'_, BackupState>,
     id: String,
     mut input: AccountProfileInput,
 ) -> Result<AccountProfile, String> {
+    let _operation_guard = backup.lock_data_operation().await;
     let password = input
         .password
         .take()
@@ -286,8 +291,10 @@ pub(crate) async fn update_account_profile_impl(
 pub async fn delete_account_profile(
     database: State<'_, Database>,
     vault: State<'_, VaultState>,
+    backup: State<'_, BackupState>,
     id: String,
 ) -> Result<(), String> {
+    let _operation_guard = backup.lock_data_operation().await;
     let previous = vault
         .remove_secret(&id)
         .map_err(|error| format!("删除账号密码失败：{error}"))?;

@@ -104,9 +104,15 @@ function submit(): void {
   if (!draft.serviceDate) nextErrors.push("请选择预约日期");
   if (!draft.contactName.trim()) nextErrors.push("请填写联系人");
   if (draft.endTime && !draft.startTime) nextErrors.push("填写结束时间前，需要先填写开始时间");
+  if (draft.startTime && draft.endTime && draft.startTime === draft.endTime) {
+    nextErrors.push("开始时间和结束时间不能相同");
+  }
   const amount = draft.amountYuan ? Number(draft.amountYuan) : null;
   if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
     nextErrors.push("账单金额格式不正确");
+  }
+  if (draft.mode === "business" && draft.settlementStatus === "settled" && amount === null) {
+    nextErrors.push("已结算预约必须填写金额");
   }
   errors.value = nextErrors;
   if (nextErrors.length > 0) return;

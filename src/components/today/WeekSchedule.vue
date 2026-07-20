@@ -27,7 +27,7 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
   <section class="week-schedule">
     <header class="week-schedule__header">
       <div>
-        <span class="section-kicker">THIS WEEK</span>
+        <span class="section-kicker">本周安排</span>
         <h2>本周排班</h2>
       </div>
       <span class="week-schedule__hint">点击空白处快速新增</span>
@@ -60,8 +60,11 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
             <span class="schedule-chip__time">{{ formatTime(appointment.startsAt) }}</span>
             <strong>{{ appointment.contactName }}</strong>
           </button>
-          <span v-if="day.appointments.length > 3" class="week-day__more">
+          <span v-if="day.appointments.length > 3" class="week-day__more week-day__more--regular">
             +{{ day.appointments.length - 3 }} 条
+          </span>
+          <span v-if="day.appointments.length > 2" class="week-day__more week-day__more--compact">
+            +{{ day.appointments.length - 2 }} 条
           </span>
           <span v-if="day.appointments.length === 0" class="week-day__empty">暂无</span>
         </div>
@@ -95,8 +98,8 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
 }
 
 .week-schedule__hint {
-  color: #99a29f;
-  font-size: 10px;
+  color: var(--ink-muted);
+  font-size: 11px;
 }
 
 .week-grid {
@@ -147,7 +150,7 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
 
 .week-day__heading span {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .week-day__heading strong {
@@ -180,7 +183,7 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
   display: flex;
   width: 100%;
   min-width: 0;
-  height: 29px;
+  height: 31px;
   align-items: center;
   gap: 5px;
   padding: 0 6px;
@@ -211,14 +214,14 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
 .schedule-chip__time {
   flex: 0 0 auto;
   font-family: "Bahnschrift", sans-serif;
-  font-size: 9px;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
 
 .schedule-chip strong {
   min-width: 0;
   overflow: hidden;
-  font-size: 10px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -227,12 +230,36 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
 .week-day__empty {
   align-self: center;
   margin-top: 2px;
-  color: #8b9591;
-  font-size: 9px;
+  color: var(--ink-muted);
+  font-size: 10px;
 }
 
 .week-day__empty {
   margin: auto;
-  color: #b1b8b5;
+  color: #74807b;
+}
+
+.week-day__more--compact {
+  display: none;
+}
+
+@media (max-height: 760px) {
+  .week-day__track {
+    gap: 4px;
+    padding-block: 6px;
+  }
+
+  .schedule-chip {
+    height: 30px;
+  }
+
+  .schedule-chip:nth-of-type(n + 3),
+  .week-day__more--regular {
+    display: none;
+  }
+
+  .week-day__more--compact {
+    display: inline;
+  }
 }
 </style>

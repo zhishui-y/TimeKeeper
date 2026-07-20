@@ -24,14 +24,14 @@ const tone = computed(() => props.serviceStatus ?? props.settlementStatus ?? "ne
 <style scoped>
 .badge {
   display: inline-flex;
-  height: 22px;
+  height: 24px;
   align-items: center;
   padding: 0 7px;
   border: 1px solid var(--line);
   border-radius: 4px;
   color: var(--ink-muted);
   background: var(--surface-soft);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
 }

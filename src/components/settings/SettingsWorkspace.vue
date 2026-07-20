@@ -137,6 +137,10 @@ async function restoreBackup(): Promise<void> {
   backupBusy.value = true;
   try {
     await api.restoreBackup(path);
+    if (!isTauri) {
+      ui.markDataChanged();
+      await Promise.all([loadSettings(), loadVault()]);
+    }
     ui.notify(
       isTauri ? "备份已恢复，正在重启应用" : "演示模式：备份校验与恢复流程已完成",
       "success",
@@ -272,7 +276,7 @@ onMounted(() => {
         </div>
       </section>
 
-      <section class="settings-section">
+      <section class="settings-section settings-section--notifications">
         <header class="settings-section__header">
           <div class="settings-section__icon"><BellRing :size="19" /></div>
           <div>
@@ -305,7 +309,7 @@ onMounted(() => {
         </div>
       </section>
 
-      <section class="settings-section">
+      <section class="settings-section settings-section--vault">
         <header class="settings-section__header">
           <div class="settings-section__icon"><ShieldCheck :size="19" /></div>
           <div>
@@ -361,8 +365,8 @@ onMounted(() => {
         <header class="settings-section__header">
           <div class="settings-section__icon"><DatabaseBackup :size="19" /></div>
           <div>
-            <h2>备份与恢复</h2>
-            <p>每天首次解锁自动备份，恢复前会校验并保存当前版本。</p>
+            <h2>完整备份导出与恢复</h2>
+            <p>导出完整数据副本；恢复前会校验并保存当前版本。</p>
           </div>
         </header>
         <div class="settings-section__body settings-form">
@@ -381,10 +385,10 @@ onMounted(() => {
           </label>
           <div class="backup-actions">
             <button class="button" type="button" :disabled="backupBusy" @click="createBackup">
-              <HardDriveDownload :size="15" />立即备份
+              <HardDriveDownload :size="15" />导出完整备份
             </button>
             <button class="button" type="button" :disabled="backupBusy" @click="restoreBackup">
-              <Upload :size="15" />恢复备份
+              <Upload :size="15" />从备份恢复
             </button>
           </div>
           <div v-if="lastBackup" class="backup-result">
@@ -416,7 +420,7 @@ onMounted(() => {
 .settings-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
-  grid-template-rows: minmax(205px, auto) minmax(250px, auto) minmax(178px, auto);
+  grid-template-rows: minmax(218px, auto) minmax(205px, auto) minmax(150px, auto);
   gap: 12px;
 }
 
@@ -428,11 +432,29 @@ onMounted(() => {
 }
 
 .settings-section--import {
-  grid-row: span 2;
+  grid-column: 1;
+  grid-row: 1 / 3;
 }
 
 .settings-section--backup {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.settings-section--notifications {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.settings-section--vault {
   grid-column: 1 / -1;
+  grid-row: 3;
+}
+
+.settings-section--vault .settings-form {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.8fr) minmax(260px, 1.2fr) minmax(180px, 0.8fr);
+  align-items: end;
 }
 
 .settings-section__header {
@@ -459,14 +481,14 @@ onMounted(() => {
 
 .settings-section__header h2 {
   color: var(--ink-strong);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .settings-section__header p {
   margin-top: 3px;
   color: var(--ink-muted);
-  font-size: 10px;
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .settings-section__body {
@@ -494,7 +516,7 @@ onMounted(() => {
   border-radius: 5px;
   color: var(--ink-muted);
   background: var(--surface-soft);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .import-actions {
@@ -524,12 +546,12 @@ onMounted(() => {
 
 .import-preview__title strong {
   color: var(--ink-strong);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .import-preview__title span {
   color: var(--ink-muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .preview-stats {
@@ -550,7 +572,7 @@ onMounted(() => {
   border-radius: 4px;
   color: var(--ink-muted);
   background: #fff;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .preview-stats strong {
@@ -563,7 +585,7 @@ onMounted(() => {
   margin: 0 0 12px;
   padding-left: 18px;
   color: #7b5d2c;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.7;
 }
 
@@ -586,11 +608,11 @@ onMounted(() => {
 }
 
 .import-result strong {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .import-result span {
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -599,7 +621,7 @@ onMounted(() => {
   align-items: center;
   gap: 7px;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .unit-input .input {
@@ -619,7 +641,7 @@ onMounted(() => {
   align-items: center;
   gap: 6px;
   color: var(--amber);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
 }
 
@@ -661,14 +683,14 @@ onMounted(() => {
 .backup-result strong {
   min-width: 0;
   color: var(--ink);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .backup-result span,
 .settings-note {
   flex: 0 0 auto;
   color: var(--ink-muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .settings-footer {
@@ -685,6 +707,6 @@ onMounted(() => {
 
 .settings-footer span {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 </style>

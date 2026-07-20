@@ -4,8 +4,8 @@ import {
   CalendarDays,
   CircleDollarSign,
   Clock3,
+  DatabaseBackup,
   LayoutDashboard,
-  Settings,
 } from "@lucide/vue";
 
 defineProps<{
@@ -18,7 +18,7 @@ const navigation = [
   { name: "appointments", label: "预约记录", icon: Clock3 },
   { name: "accounts", label: "账号档案", icon: BookUser },
   { name: "revenue", label: "收益总结", icon: CircleDollarSign },
-  { name: "settings", label: "设置", icon: Settings },
+  { name: "settings", label: "数据与设置", icon: DatabaseBackup },
 ] as const;
 </script>
 
@@ -102,9 +102,9 @@ const navigation = [
 }
 
 .brand__copy span {
-  color: #8a9490;
+  color: var(--ink-muted);
   font-family: "Bahnschrift", sans-serif;
-  font-size: 8px;
+  font-size: 10px;
   letter-spacing: 0;
 }
 
@@ -124,8 +124,8 @@ const navigation = [
   gap: 11px;
   padding: 0 12px;
   border-radius: 5px;
-  color: #68736f;
-  font-size: 13px;
+  color: var(--ink-muted);
+  font-size: 14px;
   font-weight: 620;
   transition:
     color 130ms ease,
@@ -170,13 +170,13 @@ const navigation = [
 }
 
 .sidebar__footer strong {
-  color: #5a6662;
-  font-size: 11px;
+  color: var(--ink);
+  font-size: 12px;
 }
 
 .sidebar__footer span:not(.vault-dot) {
-  color: #98a19e;
-  font-size: 10px;
+  color: var(--ink-muted);
+  font-size: 11px;
 }
 
 .vault-dot {

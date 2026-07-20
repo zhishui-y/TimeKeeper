@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 use thiserror::Error;
 
-use crate::vault::VaultState;
+use crate::{backup::BackupState, vault::VaultState};
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const SETTINGS_RECOVERY_FILE_NAME: &str = "settings.previous.json";
@@ -35,7 +35,7 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
-    fn validate(&self) -> Result<(), SettingsError> {
+    pub(crate) fn validate(&self) -> Result<(), SettingsError> {
         if self.default_reminder_minutes > 7 * 24 * 60 {
             return Err(SettingsError::Validation("默认提醒时间不能超过7天".into()));
         }
@@ -139,11 +139,13 @@ pub fn get_settings(state: State<'_, SettingsState>) -> Result<AppSettings, Stri
 }
 
 #[tauri::command]
-pub fn update_settings(
+pub async fn update_settings(
     settings: AppSettings,
     state: State<'_, SettingsState>,
     vault: State<'_, VaultState>,
+    backup: State<'_, BackupState>,
 ) -> Result<AppSettings, String> {
+    let _operation_guard = backup.lock_data_operation().await;
     settings.validate().map_err(|error| error.to_string())?;
 
     let previous_auto_lock = state

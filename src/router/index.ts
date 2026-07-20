@@ -37,7 +37,7 @@ export const router = createRouter({
       path: "/settings",
       name: "settings",
       component: () => import("../views/SettingsView.vue"),
-      meta: { title: "设置", subtitle: "导入、提醒、安全与备份" },
+      meta: { title: "数据与设置", subtitle: "Excel 导入、完整备份与应用设置" },
     },
   ],
 });

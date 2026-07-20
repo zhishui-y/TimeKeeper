@@ -58,7 +58,7 @@ const emit = defineEmits<{
 
 .header__title p {
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .header__actions {

@@ -27,6 +27,17 @@ let settings: AppSettings = {
   lastAutomaticBackupDate: format(new Date(), "yyyy-MM-dd"),
 };
 
+interface MockBackupSnapshot {
+  appointments: Appointment[];
+  accounts: AccountProfile[];
+  passwords: Array<[string, string]>;
+  settings: AppSettings;
+  vault: Omit<VaultStatus, "unlocked">;
+}
+
+let backupSnapshot: MockBackupSnapshot | null = null;
+let lastBackupPath: string | null = null;
+
 function makeId(prefix: string): string {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   return `${prefix}-${random}`;
@@ -47,6 +58,16 @@ function accountSnapshot(accountProfileId?: string | null): Appointment["account
 
 function toAppointment(input: AppointmentInput, existing?: Appointment): Appointment {
   const timestamp = new Date().toISOString();
+  if (input.amountMinor !== null && input.amountMinor !== undefined && input.amountMinor < 0) {
+    throw new Error("金额不能为负数");
+  }
+  if (
+    input.mode === "business" &&
+    input.settlementStatus === "settled" &&
+    (input.amountMinor === null || input.amountMinor === undefined)
+  ) {
+    throw new Error("已结算预约必须填写金额");
+  }
   const { startsAt, endsAt } = combineDateTime(input.serviceDate, input.startTime, input.endTime);
   const entertainment = input.mode === "entertainment";
   return {
@@ -141,7 +162,14 @@ function periodFor(serviceDate: string, granularity: ReportGranularity): string 
 }
 
 function appointmentHours(item: Appointment): number {
-  if (!item.startsAt || !item.endsAt || item.mode !== "business") return 0;
+  if (
+    !item.startsAt ||
+    !item.endsAt ||
+    item.mode !== "business" ||
+    item.serviceStatus !== "completed"
+  ) {
+    return 0;
+  }
   return Math.max(differenceInMinutes(parseISO(item.endsAt), parseISO(item.startsAt)) / 60, 0);
 }
 
@@ -217,6 +245,8 @@ export const mockApi: ApiClient = {
   },
   async settleAppointment(id, amountMinor, paymentMethod) {
     const item = getAppointmentOrThrow(id);
+    if (item.mode !== "business") throw new Error("娱乐预约不参与结算");
+    if (amountMinor < 0) throw new Error("结算金额不能为负数");
     item.amountMinor = amountMinor;
     item.paymentMethod = paymentMethod ?? item.paymentMethod;
     item.settlementStatus = "settled";
@@ -329,7 +359,7 @@ export const mockApi: ApiClient = {
     const weekTo = format(endOfWeek(target, { weekStartsOn: 1 }), "yyyy-MM-dd");
     const settled = (items: Appointment[]) =>
       items
-        .filter((item) => item.settlementStatus === "settled")
+        .filter((item) => item.serviceStatus !== "cancelled" && item.settlementStatus === "settled")
         .reduce((sum, item) => sum + (item.amountMinor ?? 0), 0);
     const upcoming = appointments
       .filter((item) => item.serviceStatus === "scheduled" || item.serviceStatus === "in_progress")
@@ -341,14 +371,20 @@ export const mockApi: ApiClient = {
         appointments.filter((item) => item.serviceDate >= weekFrom && item.serviceDate <= weekTo),
       ),
       pendingMinor: appointments
-        .filter((item) => item.settlementStatus === "unsettled")
+        .filter(
+          (item) => item.serviceStatus !== "cancelled" && item.settlementStatus === "unsettled",
+        )
         .reduce((sum, item) => sum + (item.amountMinor ?? 0), 0),
       nextAppointment: upcoming ? structuredClone(upcoming) : null,
     };
   },
   async getRevenueSummary(from, to, granularity) {
     const scoped = appointments.filter(
-      (item) => item.mode === "business" && item.serviceDate >= from && item.serviceDate <= to,
+      (item) =>
+        item.mode === "business" &&
+        item.serviceStatus !== "cancelled" &&
+        item.serviceDate >= from &&
+        item.serviceDate <= to,
     );
     const pointsMap = new Map<string, RevenuePoint>();
     const paymentMap = new Map<string, number>();
@@ -413,15 +449,35 @@ export const mockApi: ApiClient = {
     };
   },
   async createBackup(destination) {
+    const path =
+      destination ?? "C:\\Users\\14620\\Documents\\TimeKeeper\\backups\\timekeeper-demo.tkbackup";
+    backupSnapshot = {
+      appointments: structuredClone(appointments),
+      accounts: structuredClone(accounts),
+      passwords: structuredClone([...passwords.entries()]),
+      settings: structuredClone(settings),
+      vault: {
+        initialized: vault.initialized,
+        autoLockMinutes: vault.autoLockMinutes,
+      },
+    };
+    lastBackupPath = path;
     return {
-      path:
-        destination ?? "C:\\Users\\14620\\Documents\\TimeKeeper\\backups\\timekeeper-demo.tkbackup",
+      path,
       createdAt: new Date().toISOString(),
       sizeBytes: 842_136,
     };
   },
-  async restoreBackup() {
-    return undefined;
+  async restoreBackup(path) {
+    if (!backupSnapshot || path !== lastBackupPath) {
+      throw new Error("未找到可恢复的演示备份，请先创建备份");
+    }
+    appointments = structuredClone(backupSnapshot.appointments);
+    accounts = structuredClone(backupSnapshot.accounts);
+    passwords.clear();
+    for (const [id, password] of backupSnapshot.passwords) passwords.set(id, password);
+    settings = structuredClone(backupSnapshot.settings);
+    vault = { ...structuredClone(backupSnapshot.vault), unlocked: false };
   },
   async getSettings() {
     return structuredClone(settings);
@@ -438,7 +494,10 @@ export const mockApi: ApiClient = {
     return "C:\\Users\\14620\\Documents\\TimeKeeper\\TimeKeeper-demo.tkbackup";
   },
   async selectBackupFile() {
-    return "C:\\Users\\14620\\Documents\\TimeKeeper\\backups\\timekeeper-latest.tkbackup";
+    return (
+      lastBackupPath ??
+      "C:\\Users\\14620\\Documents\\TimeKeeper\\backups\\timekeeper-latest.tkbackup"
+    );
   },
   async requestNotificationPermission() {
     return "granted";

@@ -24,6 +24,10 @@ const pageSubtitle = computed(() => String(route.meta.subtitle ?? ""));
 
 async function saveAppointment(input: AppointmentInput): Promise<void> {
   const isEditing = Boolean(ui.activeAppointment);
+  const isSettling =
+    ui.activeAppointment?.mode === "business" &&
+    ui.activeAppointment.settlementStatus === "unsettled" &&
+    input.settlementStatus === "settled";
   try {
     const result = ui.activeAppointment
       ? await api.updateAppointment(ui.activeAppointment.id, input)
@@ -31,9 +35,14 @@ async function saveAppointment(input: AppointmentInput): Promise<void> {
     ui.closeAppointmentDrawer();
     ui.markDataChanged();
     if (result.conflicts.length > 0) {
-      ui.notify(`已保存；与 ${result.conflicts.length} 条预约存在时间重叠`, "warning");
+      ui.notify(
+        isSettling
+          ? `已结算；该预约仍与 ${result.conflicts.length} 条预约存在时间重叠`
+          : `已保存；与 ${result.conflicts.length} 条预约存在时间重叠`,
+        "warning",
+      );
     } else {
-      ui.notify(isEditing ? "预约已更新" : "预约已创建", "success");
+      ui.notify(isSettling ? "预约已结算" : isEditing ? "预约已更新" : "预约已创建", "success");
     }
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");

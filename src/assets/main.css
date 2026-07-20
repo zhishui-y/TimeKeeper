@@ -7,7 +7,7 @@
   -webkit-font-smoothing: antialiased;
   --ink-strong: #18221f;
   --ink: #35413d;
-  --ink-muted: #75807c;
+  --ink-muted: #5f6b67;
   --line: #dce1dc;
   --line-strong: #cbd2cc;
   --surface: #ffffff;
@@ -271,7 +271,7 @@ p {
 
 .input::placeholder,
 .textarea::placeholder {
-  color: #a2aaa7;
+  color: #7d8884;
 }
 
 .search-field {
@@ -287,7 +287,7 @@ p {
   position: absolute;
   top: 9px;
   left: 10px;
-  color: #8b9692;
+  color: #68746f;
   pointer-events: none;
 }
 

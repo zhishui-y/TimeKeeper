@@ -3,6 +3,7 @@ import { CalendarRange, CheckCircle2, Clock3, Coins, Gauge } from "@lucide/vue";
 import { endOfMonth, format, startOfMonth } from "date-fns";
 import { computed, reactive, watch } from "vue";
 import { useRevenue } from "../../composables/useRevenue";
+import { useUiStore } from "../../stores/ui";
 import type { ReportGranularity } from "../../types/domain";
 import { formatCurrency } from "../../utils/formatters";
 import RevenueChart from "./RevenueChart.vue";
@@ -13,6 +14,7 @@ const range = reactive({
   to: format(endOfMonth(today), "yyyy-MM-dd"),
   granularity: "day" as ReportGranularity,
 });
+const ui = useUiStore();
 const { summary, loading, error, load } = useRevenue();
 
 const completionRate = computed(() => {
@@ -25,7 +27,7 @@ const maxPayment = computed(() =>
 );
 
 watch(
-  () => [range.from, range.to, range.granularity] as const,
+  () => [range.from, range.to, range.granularity, ui.dataRevision] as const,
   ([from, to, granularity]) => {
     if (from && to) void load(from, to, granularity);
   },

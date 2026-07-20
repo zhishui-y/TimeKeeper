@@ -43,6 +43,9 @@ export function combineDateTime(
   const start = parseISO(`${serviceDate}T${startTime}:00`);
   if (!endTime) return { startsAt: start.toISOString(), endsAt: null };
   let end = parseISO(`${serviceDate}T${endTime}:00`);
-  if (end <= start) end = addDays(end, 1);
+  if (end.getTime() === start.getTime()) {
+    throw new Error("开始时间和结束时间不能相同");
+  }
+  if (end < start) end = addDays(end, 1);
   return { startsAt: start.toISOString(), endsAt: end.toISOString() };
 }

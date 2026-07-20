@@ -18,7 +18,7 @@ const emit = defineEmits<{
   <section class="today-list">
     <header class="today-list__header">
       <div>
-        <span class="section-kicker">TODAY</span>
+        <span class="section-kicker">今日安排</span>
         <h2>今日预约</h2>
       </div>
       <span>{{ appointments.length }} 场</span>
@@ -122,7 +122,7 @@ const emit = defineEmits<{
 
 .today-list__header > span {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .today-list__body {
@@ -132,7 +132,7 @@ const emit = defineEmits<{
 
 .appointment-row {
   display: grid;
-  min-height: 64px;
+  min-height: 68px;
   grid-template-columns: 90px 4px minmax(140px, 1fr) 90px 66px;
   align-items: center;
   gap: 11px;
@@ -150,7 +150,7 @@ const emit = defineEmits<{
 
 .appointment-row__time {
   color: var(--ink-strong);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 650;
 }
 
@@ -179,7 +179,7 @@ const emit = defineEmits<{
 .appointment-row__title strong {
   overflow: hidden;
   color: var(--ink-strong);
-  font-size: 12px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -188,7 +188,7 @@ const emit = defineEmits<{
   margin-top: 4px;
   overflow: hidden;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -202,12 +202,12 @@ const emit = defineEmits<{
 
 .appointment-row__amount strong {
   color: var(--ink-strong);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .appointment-row__amount > span {
   color: var(--blue);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .appointment-row__actions {
