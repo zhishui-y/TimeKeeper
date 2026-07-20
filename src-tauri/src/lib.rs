@@ -9,7 +9,7 @@ mod reports;
 mod settings;
 mod vault;
 
-use std::io;
+use std::{io, path::PathBuf};
 
 use tauri::{
     AppHandle, Manager, Runtime, WindowEvent,
@@ -19,6 +19,22 @@ use tauri::{
 
 fn setup_error(error: impl std::fmt::Display) -> io::Error {
     io::Error::other(error.to_string())
+}
+
+fn app_data_dir(app: &tauri::App) -> Result<PathBuf, io::Error> {
+    #[cfg(debug_assertions)]
+    if let Some(configured) = std::env::var_os("TIMEKEEPER_DATA_DIR") {
+        let path = PathBuf::from(configured);
+        if !path.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "TIMEKEEPER_DATA_DIR must be an absolute path",
+            ));
+        }
+        return Ok(path);
+    }
+
+    app.path().app_data_dir().map_err(setup_error)
 }
 
 fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
@@ -80,7 +96,7 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            let data_dir = app.path().app_data_dir().map_err(setup_error)?;
+            let data_dir = app_data_dir(app)?;
             std::fs::create_dir_all(&data_dir).map_err(setup_error)?;
 
             let backup = backup::BackupState::new(&data_dir, data_dir.join(db::DATABASE_FILE_NAME))
@@ -92,7 +108,7 @@ pub fn run() {
             vault
                 .set_auto_lock_minutes(settings.snapshot().map_err(setup_error)?.auto_lock_minutes)
                 .map_err(setup_error)?;
-            let database = tauri::async_runtime::block_on(db::initialize_database(app.handle()))
+            let database = tauri::async_runtime::block_on(db::initialize_database(&data_dir))
                 .map_err(setup_error)?;
 
             let notification_state = notifications::NotificationState::default();

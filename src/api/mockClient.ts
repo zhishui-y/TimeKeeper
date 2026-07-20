@@ -70,6 +70,12 @@ function toAppointment(input: AppointmentInput, existing?: Appointment): Appoint
   }
   const { startsAt, endsAt } = combineDateTime(input.serviceDate, input.startTime, input.endTime);
   const entertainment = input.mode === "entertainment";
+  const nextAccountProfileId = input.accountProfileId || null;
+  const nextAccountSnapshot = nextAccountProfileId
+    ? existing?.accountProfileId === nextAccountProfileId && existing.accountSnapshot
+      ? existing.accountSnapshot
+      : accountSnapshot(nextAccountProfileId)
+    : (existing?.accountSnapshot ?? null);
   return {
     id: existing?.id ?? makeId("appointment"),
     serviceDate: input.serviceDate,
@@ -80,12 +86,13 @@ function toAppointment(input: AppointmentInput, existing?: Appointment): Appoint
     mode: input.mode,
     serviceStatus: input.serviceStatus,
     settlementStatus: entertainment ? "not_applicable" : input.settlementStatus,
-    accountProfileId: input.accountProfileId || null,
-    accountSnapshot: accountSnapshot(input.accountProfileId),
+    accountProfileId: nextAccountProfileId,
+    accountSnapshot: nextAccountSnapshot,
     rateNote: entertainment ? null : input.rateNote?.trim() || null,
     paymentMethod: entertainment ? null : input.paymentMethod?.trim() || null,
     amountMinor: entertainment ? null : (input.amountMinor ?? null),
-    reminderMinutes: input.reminderMinutes ?? settings.defaultReminderMinutes,
+    reminderMinutes:
+      input.reminderMinutes === undefined ? settings.defaultReminderMinutes : input.reminderMinutes,
     notes: input.notes?.trim() || null,
     importFingerprint: existing?.importFingerprint ?? null,
     createdAt: existing?.createdAt ?? timestamp,
@@ -316,7 +323,11 @@ export const mockApi: ApiClient = {
     return structuredClone(existing);
   },
   async deleteAccountProfile(id) {
+    getAccountOrThrow(id);
     accounts = accounts.filter((item) => item.id !== id);
+    appointments = appointments.map((item) =>
+      item.accountProfileId === id ? { ...item, accountProfileId: null } : item,
+    );
     passwords.delete(id);
   },
 
@@ -361,10 +372,30 @@ export const mockApi: ApiClient = {
       items
         .filter((item) => item.serviceStatus !== "cancelled" && item.settlementStatus === "settled")
         .reduce((sum, item) => sum + (item.amountMinor ?? 0), 0);
+    const now = new Date();
+    const applyTimeCutoff = date === format(now, "yyyy-MM-dd");
     const upcoming = appointments
+      .filter((item) => item.serviceDate >= date)
       .filter((item) => item.serviceStatus === "scheduled" || item.serviceStatus === "in_progress")
-      .filter((item) => item.startsAt && new Date(item.startsAt) >= new Date())
-      .sort((a, b) => (a.startsAt as string).localeCompare(b.startsAt as string))[0];
+      .filter(
+        (item) =>
+          item.serviceStatus === "in_progress" ||
+          !applyTimeCutoff ||
+          item.serviceDate > date ||
+          !item.startsAt ||
+          new Date(item.startsAt) >= now,
+      )
+      .sort((a, b) => {
+        if (a.serviceStatus !== b.serviceStatus) {
+          if (a.serviceStatus === "in_progress") return -1;
+          if (b.serviceStatus === "in_progress") return 1;
+        }
+        const dateOrder = a.serviceDate.localeCompare(b.serviceDate);
+        if (dateOrder !== 0) return dateOrder;
+        if (!a.startsAt) return b.startsAt ? 1 : 0;
+        if (!b.startsAt) return -1;
+        return a.startsAt.localeCompare(b.startsAt);
+      })[0];
     return {
       todaySettledMinor: settled(appointments.filter((item) => item.serviceDate === date)),
       weekSettledMinor: settled(

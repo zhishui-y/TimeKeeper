@@ -14,6 +14,7 @@ interface ReschedulePayload {
   appointment: Appointment;
   startsAt: Date;
   endsAt: Date | null;
+  allDay: boolean;
   revert: () => void;
 }
 
@@ -39,6 +40,7 @@ const events = computed<EventInput[]>(() =>
     end: appointment.endsAt ?? undefined,
     allDay: !appointment.startsAt,
     editable: appointment.serviceStatus !== "cancelled",
+    durationEditable: Boolean(appointment.startsAt),
     classNames: [
       `appointment-event--${appointment.mode}`,
       `appointment-event--${appointment.serviceStatus}`,
@@ -104,6 +106,7 @@ const calendarOptions = computed<CalendarOptions>(() => ({
       appointment,
       startsAt: info.event.start,
       endsAt: info.event.end,
+      allDay: info.event.allDay,
       revert: info.revert,
     });
   },
@@ -114,6 +117,7 @@ const calendarOptions = computed<CalendarOptions>(() => ({
       appointment,
       startsAt: info.event.start,
       endsAt: info.event.end,
+      allDay: info.event.allDay,
       revert: info.revert,
     });
   },

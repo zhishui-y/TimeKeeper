@@ -32,7 +32,6 @@ const option = computed(() => ({
     borderColor: "#dce1dc",
     borderWidth: 1,
     textStyle: { color: "#35413d", fontSize: 11 },
-    valueFormatter: (value: number) => `¥${(value / 100).toFixed(0)}`,
   },
   legend: {
     top: 5,
@@ -73,6 +72,7 @@ const option = computed(() => ({
       barMaxWidth: 28,
       data: props.points.map((point) => point.settledMinor),
       itemStyle: { borderRadius: [3, 3, 0, 0] },
+      tooltip: { valueFormatter: (value: number) => `¥${(value / 100).toFixed(0)}` },
     },
     {
       name: "待结金额",
@@ -80,6 +80,7 @@ const option = computed(() => ({
       barMaxWidth: 28,
       data: props.points.map((point) => point.unsettledMinor),
       itemStyle: { borderRadius: [3, 3, 0, 0] },
+      tooltip: { valueFormatter: (value: number) => `¥${(value / 100).toFixed(0)}` },
     },
     {
       name: "业务工时",
@@ -89,6 +90,7 @@ const option = computed(() => ({
       symbolSize: 5,
       data: props.points.map((point) => Number(point.businessHours.toFixed(1))),
       lineStyle: { width: 2 },
+      tooltip: { valueFormatter: (value: number) => `${Number(value).toFixed(1)} 小时` },
     },
   ],
 }));

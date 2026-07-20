@@ -8,6 +8,7 @@ defineProps<{
 
 const emit = defineEmits<{
   createAppointment: [];
+  openNotificationSettings: [];
 }>();
 </script>
 
@@ -18,9 +19,14 @@ const emit = defineEmits<{
       <p>{{ subtitle }}</p>
     </div>
     <div class="header__actions">
-      <button class="icon-button" type="button" title="通知" aria-label="通知">
+      <button
+        class="icon-button"
+        type="button"
+        title="通知设置"
+        aria-label="通知设置"
+        @click="emit('openNotificationSettings')"
+      >
         <Bell :size="17" />
-        <span class="notification-dot" />
       </button>
       <button class="button button--primary" type="button" @click="emit('createAppointment')">
         <Plus :size="16" :stroke-width="2.2" />
@@ -71,16 +77,5 @@ const emit = defineEmits<{
   position: relative;
   border-color: var(--line);
   background: var(--surface);
-}
-
-.notification-dot {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 5px;
-  height: 5px;
-  border: 1px solid #fff;
-  border-radius: 50%;
-  background: var(--accent);
 }
 </style>

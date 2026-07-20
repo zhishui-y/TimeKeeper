@@ -16,6 +16,7 @@ const query = shallowRef("");
 const needsReviewOnly = shallowRef(false);
 const drawerOpen = shallowRef(false);
 const activeProfile = shallowRef<AccountProfile | null>(null);
+const savingAccount = shallowRef(false);
 const masterPassword = shallowRef("");
 const revealedPasswords = shallowRef<Record<string, string>>({});
 const revealTimers = new Map<string, ReturnType<typeof globalThis.setTimeout>>();
@@ -35,6 +36,8 @@ async function search(): Promise<void> {
 }
 
 async function save(input: AccountProfileInput): Promise<void> {
+  if (savingAccount.value) return;
+  savingAccount.value = true;
   try {
     if (activeProfile.value) {
       await api.updateAccountProfile(activeProfile.value.id, input);
@@ -44,9 +47,12 @@ async function save(input: AccountProfileInput): Promise<void> {
     drawerOpen.value = false;
     activeProfile.value = null;
     await search();
+    ui.markAccountsChanged();
     ui.notify("账号档案已保存", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
+  } finally {
+    savingAccount.value = false;
   }
 }
 
@@ -86,8 +92,11 @@ async function remove(profile: AccountProfile): Promise<void> {
   try {
     await api.deleteAccountProfile(profile.id);
     await search();
+    ui.markAccountsChanged();
     ui.notify("账号档案已删除", "success");
   } catch (cause) {
+    await search();
+    ui.markAccountsChanged();
     ui.notify(errorMessage(cause), "danger");
   }
 }
@@ -103,7 +112,8 @@ async function submitVault(): Promise<void> {
 }
 
 async function lockVault(): Promise<void> {
-  await lock();
+  const result = await lock();
+  if (!result) return;
   revealedPasswords.value = {};
   ui.notify("密码库已锁定", "success");
 }
@@ -194,6 +204,7 @@ onMounted(() => void loadVault());
     <AccountDrawer
       :open="drawerOpen"
       :profile="activeProfile"
+      :saving="savingAccount"
       @close="drawerOpen = false"
       @save="save"
     />

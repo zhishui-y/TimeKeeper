@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, str::FromStr};
 
-use chrono::{Datelike, Days, Months, NaiveDate, NaiveDateTime};
+use chrono::{Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, Utc};
 use sqlx::Row;
 use tauri::State;
 
@@ -116,6 +116,15 @@ pub(crate) async fn get_dashboard_summary_impl(
     database: &Database,
     date: &str,
 ) -> Result<DashboardSummary, String> {
+    let local_now = Utc::now().naive_utc() + Duration::hours(8);
+    get_dashboard_summary_at(database, date, local_now).await
+}
+
+async fn get_dashboard_summary_at(
+    database: &Database,
+    date: &str,
+    local_now: NaiveDateTime,
+) -> Result<DashboardSummary, String> {
     let date_value = parse_date(date, "日期")?;
     let week_from = week_start(date_value)?;
     let week_to = week_from
@@ -150,15 +159,25 @@ pub(crate) async fn get_dashboard_summary_impl(
     )
     .await?;
 
+    let apply_time_cutoff = i64::from(date_value == local_now.date());
+    let cutoff = local_now.format(DATE_TIME_FORMAT).to_string();
     let next_id: Option<String> = sqlx::query(
         "SELECT id FROM appointments
          WHERE service_date >= ? AND service_status IN ('scheduled', 'in_progress')
-         ORDER BY service_date,
+           AND (
+             service_status = 'in_progress' OR ? = 0 OR service_date > ?
+             OR starts_at IS NULL OR starts_at >= ?
+           )
+         ORDER BY CASE WHEN service_status = 'in_progress' THEN 0 ELSE 1 END,
+           service_date,
            CASE WHEN starts_at IS NULL THEN 1 ELSE 0 END,
            starts_at, created_at
          LIMIT 1",
     )
     .bind(&normalized_date)
+    .bind(apply_time_cutoff)
+    .bind(&normalized_date)
+    .bind(cutoff)
     .fetch_optional(database.pool())
     .await
     .map_err(db_error)?
@@ -465,6 +484,60 @@ mod tests {
             assert_eq!(
                 dashboard.next_appointment.unwrap().service_date,
                 "2026-07-15"
+            );
+        });
+    }
+
+    #[test]
+    fn dashboard_skips_past_scheduled_times_but_keeps_an_ongoing_appointment() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let mut past = input(
+                "2026-07-20",
+                "10:00",
+                "11:00",
+                SettlementStatus::Unsettled,
+                1_000,
+            );
+            past.contact_name = "已过时预约".into();
+            past.service_status = ServiceStatus::Scheduled;
+            create_appointment_impl(&database, past).await.unwrap();
+
+            let mut future = input(
+                "2026-07-20",
+                "13:00",
+                "14:00",
+                SettlementStatus::Unsettled,
+                2_000,
+            );
+            future.contact_name = "未来预约".into();
+            future.service_status = ServiceStatus::Scheduled;
+            create_appointment_impl(&database, future).await.unwrap();
+
+            let noon =
+                NaiveDateTime::parse_from_str("2026-07-20T12:00:00", DATE_TIME_FORMAT).unwrap();
+            let dashboard = get_dashboard_summary_at(&database, "2026-07-20", noon)
+                .await
+                .unwrap();
+            assert_eq!(dashboard.next_appointment.unwrap().contact_name, "未来预约");
+
+            let mut ongoing = input(
+                "2026-07-20",
+                "09:00",
+                "12:30",
+                SettlementStatus::Unsettled,
+                3_000,
+            );
+            ongoing.contact_name = "进行中预约".into();
+            ongoing.service_status = ServiceStatus::InProgress;
+            create_appointment_impl(&database, ongoing).await.unwrap();
+
+            let dashboard = get_dashboard_summary_at(&database, "2026-07-20", noon)
+                .await
+                .unwrap();
+            assert_eq!(
+                dashboard.next_appointment.unwrap().contact_name,
+                "进行中预约"
             );
         });
     }

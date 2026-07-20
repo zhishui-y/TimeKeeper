@@ -15,6 +15,7 @@ const emit = defineEmits<{
 }>();
 
 const password = shallowRef("");
+const passwordConfirmation = shallowRef("");
 const localError = shallowRef("");
 const title = computed(() => (props.status.initialized ? "解锁时约管家" : "创建主密码"));
 const description = computed(() =>
@@ -29,12 +30,17 @@ function submit(): void {
     localError.value = "主密码至少需要8个字符";
     return;
   }
+  if (!props.status.initialized && password.value !== passwordConfirmation.value) {
+    localError.value = "两次输入的主密码不一致";
+    return;
+  }
   if (!password.value) {
     localError.value = "请输入主密码";
     return;
   }
   emit("submit", password.value);
   password.value = "";
+  passwordConfirmation.value = "";
 }
 </script>
 
@@ -44,13 +50,19 @@ function submit(): void {
       <span class="vault-gate__seal">时</span>
       <span>时约管家</span>
     </div>
-    <section class="vault-gate__dialog" aria-live="polite">
+    <section
+      class="vault-gate__dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="vault-gate-title"
+      aria-live="polite"
+    >
       <div class="vault-gate__icon">
         <ShieldCheck v-if="!status.initialized" :size="24" />
         <LockKeyhole v-else :size="24" />
       </div>
       <template v-if="ready">
-        <h1>{{ title }}</h1>
+        <h1 id="vault-gate-title">{{ title }}</h1>
         <p>{{ description }}</p>
         <form class="vault-gate__form" @submit.prevent="submit">
           <label>
@@ -59,11 +71,26 @@ function submit(): void {
               <KeyRound :size="16" />
               <input
                 v-model="password"
+                aria-label="主密码"
                 type="password"
                 :autocomplete="status.initialized ? 'current-password' : 'new-password'"
                 autofocus
                 :disabled="loading"
                 :placeholder="status.initialized ? '输入主密码' : '至少8个字符'"
+              />
+            </div>
+          </label>
+          <label v-if="!status.initialized">
+            <span>再次输入主密码</span>
+            <div class="vault-gate__input">
+              <KeyRound :size="16" />
+              <input
+                v-model="passwordConfirmation"
+                aria-label="再次输入主密码"
+                type="password"
+                autocomplete="new-password"
+                :disabled="loading"
+                placeholder="再次输入以确认"
               />
             </div>
           </label>
@@ -76,7 +103,7 @@ function submit(): void {
         </form>
       </template>
       <template v-else>
-        <h1>正在打开时约管家</h1>
+        <h1 id="vault-gate-title">正在打开时约管家</h1>
         <p>正在检查本地数据与密码库...</p>
         <div class="vault-gate__loading" />
       </template>

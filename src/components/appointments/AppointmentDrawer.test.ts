@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import AppointmentDrawer from "./AppointmentDrawer.vue";
 
 describe("AppointmentDrawer", () => {
-  function mountDrawer() {
+  function mountDrawer(defaultReminderMinutes = 30) {
     return mount(AppointmentDrawer, {
       props: {
         open: true,
@@ -13,10 +13,19 @@ describe("AppointmentDrawer", () => {
         requestedDate: "2026-07-13",
         requestedStartTime: null,
         accounts: [],
+        defaultReminderMinutes,
       },
       global: { stubs: { teleport: true } },
     });
   }
+
+  it("uses the configured reminder default for new appointments", () => {
+    const wrapper = mountDrawer(60);
+
+    expect(
+      (wrapper.get('input[aria-label="提前提醒分钟数"]').element as HTMLInputElement).value,
+    ).toBe("60");
+  });
 
   it("hides billing fields when entertainment mode is selected", async () => {
     const wrapper = mountDrawer();
@@ -53,6 +62,18 @@ describe("AppointmentDrawer", () => {
     await wrapper.get('button.button--primary[type="button"]').trigger("click");
 
     expect(wrapper.text()).toContain("已结算预约必须填写金额");
+    expect(wrapper.emitted("save")).toBeUndefined();
+  });
+
+  it("disables repeat submission while a save is in progress", async () => {
+    const wrapper = mountDrawer();
+    await wrapper.setProps({ saving: true });
+
+    const saveButton = wrapper.get('button.button--primary[type="button"]');
+    expect(saveButton.attributes("disabled")).toBeDefined();
+    expect(saveButton.text()).toContain("保存中");
+    await saveButton.trigger("click");
+
     expect(wrapper.emitted("save")).toBeUndefined();
   });
 });

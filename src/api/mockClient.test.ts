@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AppointmentInput } from "../types/domain";
+import { appointmentToInput } from "../utils/appointment";
 import { mockApi } from "./mockClient";
 
 function businessInput(
@@ -50,6 +51,26 @@ describe("browser mock API", () => {
     expect(result.appointment.settlementStatus).toBe("not_applicable");
     expect(result.appointment.amountMinor).toBeNull();
     expect(result.appointment.paymentMethod).toBeNull();
+  });
+
+  it("uses the reminder setting only when reminder minutes are omitted", async () => {
+    const previousSettings = await mockApi.getSettings();
+    await mockApi.updateSettings({ ...previousSettings, defaultReminderMinutes: 60 });
+
+    try {
+      const inherited = await mockApi.createAppointment(
+        businessInput("2099-08-05", "10:00", "11:00", "继承默认提醒", 1_000),
+      );
+      const disabled = await mockApi.createAppointment({
+        ...businessInput("2099-08-05", "12:00", "13:00", "关闭提醒", 1_000),
+        reminderMinutes: null,
+      });
+
+      expect(inherited.appointment.reminderMinutes).toBe(60);
+      expect(disabled.appointment.reminderMinutes).toBeNull();
+    } finally {
+      await mockApi.updateSettings(previousSettings);
+    }
   });
 
   it("keeps conflicts, service completion, settlement, and revenue separate", async () => {
@@ -105,6 +126,37 @@ describe("browser mock API", () => {
 
     expect((await mockApi.getRevenueSummary(date, date, "day")).settledMinor).toBe(0);
     expect((await mockApi.getDashboardSummary(date)).todaySettledMinor).toBe(0);
+  });
+
+  it("clears a deleted account link while preserving the appointment snapshot", async () => {
+    await mockApi.unlockVault("test-password");
+    const account = await mockApi.createAccountProfile({
+      accountName: `snapshot-account-${Date.now()}`,
+      password: "snapshot-secret",
+      contactName: "历史联系人",
+      server: "历史区服",
+      characterName: "历史角色",
+    });
+    const created = await mockApi.createAppointment({
+      ...businessInput("2099-08-06", "10:00", "11:00", "快照保留", 8_800),
+      accountProfileId: account.id,
+    });
+
+    await mockApi.deleteAccountProfile(account.id);
+    const unlinked = await mockApi.getAppointment(created.appointment.id);
+    expect(unlinked.accountProfileId).toBeNull();
+    expect(unlinked.accountSnapshot).toMatchObject({
+      accountName: account.accountName,
+      characterName: "历史角色",
+    });
+
+    await mockApi.updateAppointment(unlinked.id, {
+      ...appointmentToInput(unlinked),
+      notes: "删除账号后编辑",
+    });
+    const edited = await mockApi.getAppointment(unlinked.id);
+    expect(edited.accountProfileId).toBeNull();
+    expect(edited.accountSnapshot).toEqual(unlinked.accountSnapshot);
   });
 
   it("restores the in-memory demo data captured by a backup", async () => {

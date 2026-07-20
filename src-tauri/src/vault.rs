@@ -323,9 +323,10 @@ pub async fn unlock_vault<R: Runtime>(
     Ok(status)
 }
 
-async fn run_blocking_vault_operation<F>(operation: F) -> Result<VaultStatus, String>
+pub(crate) async fn run_blocking_vault_operation<T, F>(operation: F) -> Result<T, String>
 where
-    F: FnOnce() -> Result<VaultStatus, VaultError> + Send + 'static,
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, VaultError> + Send + 'static,
 {
     tauri::async_runtime::spawn_blocking(operation)
         .await
@@ -339,34 +340,50 @@ pub fn lock_vault(state: State<'_, VaultState>) -> Result<VaultStatus, String> {
 }
 
 #[tauri::command]
-pub fn reveal_account_password(id: String, state: State<'_, VaultState>) -> Result<String, String> {
-    state.get_secret(&id).map_err(|error| error.to_string())
+pub async fn reveal_account_password<R: Runtime>(
+    id: String,
+    app: AppHandle<R>,
+) -> Result<String, String> {
+    let worker_app = app.clone();
+    run_blocking_vault_operation(move || worker_app.state::<VaultState>().get_secret(&id)).await
 }
 
 #[tauri::command]
-pub fn copy_account_password(id: String, state: State<'_, VaultState>) -> Result<(), String> {
-    let password = state.get_secret(&id).map_err(|error| error.to_string())?;
-    let password_hash = Sha256::digest(password.as_bytes());
-    Clipboard::new()
-        .and_then(|mut clipboard| clipboard.set_text(password))
-        .map_err(|error| VaultError::Clipboard(error.to_string()).to_string())?;
+pub async fn copy_account_password<R: Runtime>(
+    id: String,
+    app: AppHandle<R>,
+) -> Result<(), String> {
+    let worker_app = app.clone();
+    let password_hash = run_blocking_vault_operation(move || {
+        let password = worker_app.state::<VaultState>().get_secret(&id)?;
+        let password_hash = Sha256::digest(password.as_bytes()).to_vec();
+        Clipboard::new()
+            .and_then(|mut clipboard| clipboard.set_text(password))
+            .map_err(|error| VaultError::Clipboard(error.to_string()))?;
+        Ok(password_hash)
+    })
+    .await?;
 
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(CLIPBOARD_CLEAR_AFTER).await;
-        let Ok(mut clipboard) = Clipboard::new() else {
-            return;
-        };
-        let Ok(current) = clipboard.get_text() else {
-            return;
-        };
-        if Sha256::digest(current.as_bytes()).as_slice() == password_hash.as_slice() {
-            let _ = clipboard.set_text(String::new());
-        }
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            let Ok(mut clipboard) = Clipboard::new() else {
+                return;
+            };
+            let Ok(current) = clipboard.get_text() else {
+                return;
+            };
+            if Sha256::digest(current.as_bytes()).as_slice() == password_hash.as_slice() {
+                let _ = clipboard.set_text(String::new());
+            }
+        })
+        .await;
     });
     Ok(())
 }
 
 pub fn spawn_auto_lock_task<R: Runtime>(app: AppHandle<R>) {
+    let backup_app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
@@ -375,6 +392,33 @@ pub fn spawn_auto_lock_task<R: Runtime>(app: AppHandle<R>) {
                 return;
             };
             let _ = state.lock_if_idle();
+        }
+    });
+
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            let Some(state) = backup_app.try_state::<VaultState>() else {
+                return;
+            };
+            let should_check_backup = state.status().is_ok_and(|status| status.initialized);
+            if !should_check_backup {
+                continue;
+            }
+            let Some(backup_state) = backup_app.try_state::<BackupState>() else {
+                return;
+            };
+            let Some(settings_state) = backup_app.try_state::<SettingsState>() else {
+                return;
+            };
+            let backup_state = backup_state.inner().clone();
+            let settings_state = settings_state.inner().clone();
+            if let Err(error) =
+                backup::create_automatic_backup_if_due(&backup_state, &settings_state).await
+            {
+                eprintln!("automatic backup failed: {error}");
+            }
         }
     });
 }

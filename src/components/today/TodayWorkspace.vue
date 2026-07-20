@@ -20,37 +20,40 @@ import { formatCurrency, formatDateHeading, formatTimeRange } from "../../utils/
 import TodayAppointmentList from "./TodayAppointmentList.vue";
 import WeekSchedule from "./WeekSchedule.vue";
 
-const today = new Date();
-const todayKey = format(today, "yyyy-MM-dd");
-const weekStart = startOfWeek(today, { weekStartsOn: 1 });
-const weekEnd = endOfWeek(today, { weekStartsOn: 1 });
+const now = shallowRef(new Date());
+const todayKey = computed(() => format(now.value, "yyyy-MM-dd"));
+const weekStart = computed(() => startOfWeek(now.value, { weekStartsOn: 1 }));
+const weekEnd = computed(() => endOfWeek(now.value, { weekStartsOn: 1 }));
+const currentMonthLabel = computed(() => format(now.value, "yyyy · MM"));
 const ui = useUiStore();
 const {
+  filters,
   items,
   loading,
   error,
   load: loadAppointments,
 } = useAppointments({
-  from: format(weekStart, "yyyy-MM-dd"),
-  to: format(weekEnd, "yyyy-MM-dd"),
+  from: format(weekStart.value, "yyyy-MM-dd"),
+  to: format(weekEnd.value, "yyyy-MM-dd"),
 });
 const dashboard = useDashboard();
-const now = shallowRef(new Date());
 let clockTimer: ReturnType<typeof globalThis.setInterval> | undefined;
 
 const todayAppointments = computed(() =>
-  items.value.filter((item) => item.serviceDate === todayKey && item.serviceStatus !== "cancelled"),
+  items.value.filter(
+    (item) => item.serviceDate === todayKey.value && item.serviceStatus !== "cancelled",
+  ),
 );
 
 const weekDays = computed(() =>
   Array.from({ length: 7 }, (_, index) => {
-    const date = addDays(weekStart, index);
+    const date = addDays(weekStart.value, index);
     const dateKey = format(date, "yyyy-MM-dd");
     return {
       date: dateKey,
       weekday: format(date, "EEE", { locale: zhCN }),
       dayNumber: format(date, "d"),
-      isToday: isSameDay(date, today),
+      isToday: isSameDay(date, now.value),
       appointments: items.value.filter((item) => item.serviceDate === dateKey),
     };
   }),
@@ -58,7 +61,8 @@ const weekDays = computed(() =>
 
 const nextCountdown = computed(() => {
   const next = dashboard.summary.value?.nextAppointment;
-  if (!next?.startsAt) return "暂无待开始预约";
+  if (!next) return "暂无待开始预约";
+  if (!next.startsAt) return "待定时段";
   const minutes = differenceInMinutes(parseISO(next.startsAt), now.value);
   if (minutes <= 0) return "即将开始";
   if (minutes < 60) return `${minutes}分钟后`;
@@ -71,7 +75,7 @@ const nextCountdown = computed(() => {
 });
 
 async function refresh(): Promise<void> {
-  await Promise.all([loadAppointments(), dashboard.load(todayKey)]);
+  await Promise.all([loadAppointments(), dashboard.load(todayKey.value)]);
 }
 
 async function changeStatus(appointment: Appointment, status: ServiceStatus): Promise<void> {
@@ -93,14 +97,22 @@ watch(
   () => void refresh(),
 );
 
+watch(todayKey, () => {
+  filters.from = format(weekStart.value, "yyyy-MM-dd");
+  filters.to = format(weekEnd.value, "yyyy-MM-dd");
+  void refresh();
+});
+
 onMounted(() => {
-  void dashboard.load(todayKey);
+  void dashboard.load(todayKey.value);
   clockTimer = globalThis.setInterval(() => {
     now.value = new Date();
   }, 30_000);
 });
 
-onUnmounted(() => globalThis.clearInterval(clockTimer));
+onUnmounted(() => {
+  if (clockTimer !== undefined) globalThis.clearInterval(clockTimer);
+});
 </script>
 
 <template>
@@ -112,7 +124,7 @@ onUnmounted(() => globalThis.clearInterval(clockTimer));
 
     <section class="today-lead">
       <div class="today-lead__date">
-        <span class="section-kicker">{{ format(today, "yyyy · MM") }}</span>
+        <span class="section-kicker">{{ currentMonthLabel }}</span>
         <h2>{{ formatDateHeading(todayKey) }}</h2>
         <p>先看下一场，再安排今天。</p>
       </div>

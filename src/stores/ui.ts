@@ -17,6 +17,8 @@ export const useUiStore = defineStore("ui", () => {
   const requestedDate = shallowRef(format(new Date(), "yyyy-MM-dd"));
   const requestedStartTime = shallowRef<string | null>(null);
   const dataRevision = shallowRef(0);
+  const accountRevision = shallowRef(0);
+  const appointmentDefaultReminderMinutes = shallowRef(30);
   const toast = shallowRef<ToastMessage | null>(null);
   let toastTimer: number | undefined;
 
@@ -46,6 +48,14 @@ export const useUiStore = defineStore("ui", () => {
     dataRevision.value += 1;
   }
 
+  function markAccountsChanged(): void {
+    accountRevision.value += 1;
+  }
+
+  function setAppointmentDefaultReminderMinutes(minutes: number): void {
+    appointmentDefaultReminderMinutes.value = minutes;
+  }
+
   function notify(message: string, tone: ToastTone = "neutral"): void {
     window.clearTimeout(toastTimer);
     toast.value = { id: Date.now(), message, tone };
@@ -65,11 +75,15 @@ export const useUiStore = defineStore("ui", () => {
     requestedDate,
     requestedStartTime,
     dataRevision,
+    accountRevision,
+    appointmentDefaultReminderMinutes,
     toast,
     openCreateAppointment,
     openEditAppointment,
     closeAppointmentDrawer,
     markDataChanged,
+    markAccountsChanged,
+    setAppointmentDefaultReminderMinutes,
     notify,
     dismissToast,
   };

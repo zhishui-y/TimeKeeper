@@ -29,6 +29,8 @@ const VAULT_ARCHIVE_NAME: &str = "vault.hold";
 const SALT_ARCHIVE_NAME: &str = "vault.salt";
 const SETTINGS_ARCHIVE_NAME: &str = "settings.json";
 const MANIFEST_ARCHIVE_NAME: &str = "manifest.json";
+const DATABASE_WAL_ROLLBACK_NAME: &str = "database.sqlite3-wal";
+const DATABASE_SHM_ROLLBACK_NAME: &str = "database.sqlite3-shm";
 const REQUIRED_ARCHIVE_FILES: [&str; 4] = [
     DATABASE_ARCHIVE_NAME,
     SETTINGS_ARCHIVE_NAME,
@@ -149,6 +151,8 @@ struct ManifestFile {
 #[serde(rename_all = "camelCase")]
 struct RestoreRollback {
     original_files: Vec<String>,
+    #[serde(default)]
+    database_sidecars: Vec<String>,
 }
 
 #[derive(Debug, Error)]
@@ -235,7 +239,26 @@ impl BackupState {
                     .map(|_| entry.name.clone())
             })
             .collect::<Vec<_>>();
-        let rollback = RestoreRollback { original_files };
+        let mut database_sidecars = Vec::new();
+        for (name, path) in self.database_sidecars() {
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                    database_sidecars.push(name.to_string());
+                }
+                Ok(_) => {
+                    return Err(BackupError::InvalidBackup(format!(
+                        "数据库边车文件不是普通文件：{}",
+                        path.display()
+                    )));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let rollback = RestoreRollback {
+            original_files,
+            database_sidecars,
+        };
         write_json_synced(&self.rollback_dir.join("rollback.json"), &rollback)?;
 
         let apply_result = self.apply_staged_files(&manifest, &rollback);
@@ -484,6 +507,14 @@ impl BackupState {
         manifest: &BackupManifest,
         rollback: &RestoreRollback,
     ) -> Result<(), BackupError> {
+        for (name, target) in self.database_sidecars() {
+            if !rollback.database_sidecars.iter().any(|entry| entry == name) {
+                continue;
+            }
+            reject_existing_regular_file(&target)?;
+            fs::rename(&target, self.rollback_dir.join(name))?;
+        }
+
         for entry in &manifest.files {
             let target = self.target_for(&entry.name).ok_or_else(|| {
                 BackupError::InvalidBackup(format!("不支持的恢复文件：{}", entry.name))
@@ -566,6 +597,19 @@ impl BackupState {
                 fs::remove_file(&target)?;
             }
         }
+        for (name, target) in self.database_sidecars() {
+            if !rollback.database_sidecars.iter().any(|entry| entry == name) {
+                continue;
+            }
+            let original = self.rollback_dir.join(name);
+            if original.exists() {
+                if target.exists() {
+                    reject_existing_regular_file(&target)?;
+                    fs::remove_file(&target)?;
+                }
+                fs::rename(original, target)?;
+            }
+        }
         fs::remove_dir_all(&self.rollback_dir)?;
         Ok(())
     }
@@ -578,6 +622,19 @@ impl BackupState {
             SETTINGS_ARCHIVE_NAME => Some(self.data_dir.join(SETTINGS_ARCHIVE_NAME)),
             _ => None,
         }
+    }
+
+    fn database_sidecars(&self) -> [(&'static str, PathBuf); 2] {
+        [
+            (
+                DATABASE_WAL_ROLLBACK_NAME,
+                path_with_appended_suffix(&self.database_path, "-wal"),
+            ),
+            (
+                DATABASE_SHM_ROLLBACK_NAME,
+                path_with_appended_suffix(&self.database_path, "-shm"),
+            ),
+        ]
     }
 }
 
@@ -1467,6 +1524,23 @@ fn reject_target_symlink(path: &Path) -> Result<(), BackupError> {
     Ok(())
 }
 
+fn reject_existing_regular_file(path: &Path) -> Result<(), BackupError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(BackupError::InvalidBackup(format!(
+            "数据库边车文件不是普通文件：{}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn path_with_appended_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
+}
+
 fn remove_dir_if_empty(path: &Path) -> Result<(), std::io::Error> {
     if path.is_dir() && fs::read_dir(path)?.next().is_none() {
         fs::remove_dir(path)?;
@@ -1498,10 +1572,12 @@ mod tests {
     use super::*;
     use crate::{
         appointments::{
-            create_appointment_impl, get_appointment_impl, set_appointment_service_status_impl,
+            create_appointment_impl, delete_appointment_impl, duplicate_appointment_impl,
+            get_appointment_impl, insert_imported_appointment, set_appointment_service_status_impl,
             settle_appointment_impl,
         },
         db::Database,
+        importer::parse_legacy_workbook,
         models::{
             AppointmentInput, AppointmentMode, ReportGranularity, ServiceStatus, SettlementStatus,
         },
@@ -1729,6 +1805,78 @@ mod tests {
             .block_on(state.stage_restore(Path::new(&backup.path)))
             .unwrap();
         assert!(state.apply_pending_restore().unwrap());
+        assert_eq!(
+            fs::read(dir.join(SETTINGS_ARCHIVE_NAME)).unwrap(),
+            original_settings
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn restore_isolates_database_sidecars_and_recovers_them_after_interruption() {
+        let dir = test_dir("database-sidecars");
+        fs::create_dir_all(&dir).unwrap();
+        let database = dir.join("timekeeper.db");
+        create_timekeeper_database(&database);
+        let original_settings = serde_json::to_vec_pretty(&AppSettings::default()).unwrap();
+        fs::write(dir.join(SETTINGS_ARCHIVE_NAME), &original_settings).unwrap();
+        create_vault_files(&dir);
+        let state = BackupState::new(&dir, &database).unwrap();
+        let backup = runtime()
+            .block_on(state.create_backup_internal(None, BackupKind::Manual))
+            .unwrap();
+        runtime()
+            .block_on(state.stage_restore(Path::new(&backup.path)))
+            .unwrap();
+
+        let wal_path = path_with_appended_suffix(&database, "-wal");
+        let shm_path = path_with_appended_suffix(&database, "-shm");
+        let wal_bytes = b"stale-wal-from-current-database";
+        let shm_bytes = b"stale-shm-from-current-database";
+        fs::write(&wal_path, wal_bytes).unwrap();
+        fs::write(&shm_path, shm_bytes).unwrap();
+
+        let manifest: BackupManifest =
+            serde_json::from_slice(&fs::read(&state.pending_marker).unwrap()).unwrap();
+        fs::create_dir_all(&state.rollback_dir).unwrap();
+        let rollback = RestoreRollback {
+            original_files: manifest
+                .files
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect(),
+            database_sidecars: vec![
+                DATABASE_WAL_ROLLBACK_NAME.to_string(),
+                DATABASE_SHM_ROLLBACK_NAME.to_string(),
+            ],
+        };
+        write_json_synced(&state.rollback_dir.join("rollback.json"), &rollback).unwrap();
+        for entry in &manifest.files {
+            fs::rename(
+                state.target_for(&entry.name).unwrap(),
+                state.rollback_dir.join(&entry.name),
+            )
+            .unwrap();
+        }
+        fs::rename(
+            &wal_path,
+            state.rollback_dir.join(DATABASE_WAL_ROLLBACK_NAME),
+        )
+        .unwrap();
+        fs::rename(
+            &shm_path,
+            state.rollback_dir.join(DATABASE_SHM_ROLLBACK_NAME),
+        )
+        .unwrap();
+
+        state.recover_interrupted_restore().unwrap();
+        assert_eq!(fs::read(&wal_path).unwrap(), wal_bytes);
+        assert_eq!(fs::read(&shm_path).unwrap(), shm_bytes);
+        assert!(!state.rollback_dir.exists());
+
+        assert!(state.apply_pending_restore().unwrap());
+        assert!(!wal_path.exists());
+        assert!(!shm_path.exists());
         assert_eq!(
             fs::read(dir.join(SETTINGS_ARCHIVE_NAME)).unwrap(),
             original_settings
@@ -2168,6 +2316,108 @@ mod tests {
         });
         assert!(!state.pending_dir.exists());
         assert!(!state.pending_marker.exists());
+        drop(runtime);
+        drop(state);
+        remove_test_dir_after_sqlite_shutdown(dir);
+    }
+
+    #[test]
+    fn imported_24_hour_appointment_duplicates_and_survives_backup_restore() {
+        let dir = test_dir("imported-24-hour-round-trip");
+        fs::create_dir_all(&dir).unwrap();
+        let database_path = dir.join("timekeeper.db");
+        let state = BackupState::new(&dir, &database_path).unwrap();
+        let runtime = runtime();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("legacy_import.xlsx");
+        let parsed = parse_legacy_workbook(&fixture, 2026).unwrap();
+        let imported = parsed
+            .appointments
+            .iter()
+            .find(|appointment| {
+                appointment
+                    .starts_at
+                    .as_ref()
+                    .is_some_and(|start| start.time() == chrono::NaiveTime::MIN)
+            })
+            .expect("fixture should contain a 24:00 appointment")
+            .clone();
+
+        let (backup, imported_id, duplicate_id) = runtime.block_on(async {
+            let settings = SettingsState::load(&dir).unwrap();
+            let vault = VaultState::new(&dir).unwrap();
+            vault
+                .initialize("temporary import backup password".into())
+                .unwrap();
+            let database = Database::initialize(&database_path).await.unwrap();
+            let mut transaction = database.pool().begin().await.unwrap();
+            let write = insert_imported_appointment(&mut transaction, &imported, None)
+                .await
+                .unwrap();
+            transaction.commit().await.unwrap();
+
+            let stored = get_appointment_impl(&database, &write.record_id)
+                .await
+                .unwrap();
+            assert_eq!(stored.service_date, "2026-03-05");
+            assert_eq!(stored.starts_at.as_deref(), Some("2026-03-05T00:00:00"));
+            assert_eq!(stored.ends_at.as_deref(), Some("2026-03-05T01:00:00"));
+
+            let duplicate =
+                duplicate_appointment_impl(&database, &write.record_id, Some("2026-03-12".into()))
+                    .await
+                    .unwrap();
+            assert_eq!(
+                duplicate.appointment.starts_at.as_deref(),
+                Some("2026-03-12T00:00:00")
+            );
+            assert_eq!(
+                duplicate.appointment.ends_at.as_deref(),
+                Some("2026-03-12T01:00:00")
+            );
+
+            let backup = state
+                .create_backup_internal(None, BackupKind::Manual)
+                .await
+                .unwrap();
+            delete_appointment_impl(&database, &write.record_id)
+                .await
+                .unwrap();
+            delete_appointment_impl(&database, &duplicate.appointment.id)
+                .await
+                .unwrap();
+            state.stage_restore(Path::new(&backup.path)).await.unwrap();
+            database.pool().close().await;
+            drop(database);
+            drop(vault);
+            drop(settings);
+            (backup, write.record_id, duplicate.appointment.id)
+        });
+
+        assert!(Path::new(&backup.path).is_file());
+        assert!(state.apply_pending_restore().unwrap());
+        runtime.block_on(async {
+            let restored_database = Database::initialize(&database_path).await.unwrap();
+            let restored_import = get_appointment_impl(&restored_database, &imported_id)
+                .await
+                .unwrap();
+            let restored_duplicate = get_appointment_impl(&restored_database, &duplicate_id)
+                .await
+                .unwrap();
+            assert_eq!(restored_import.service_date, "2026-03-05");
+            assert_eq!(
+                restored_import.starts_at.as_deref(),
+                Some("2026-03-05T00:00:00")
+            );
+            assert_eq!(
+                restored_duplicate.starts_at.as_deref(),
+                Some("2026-03-12T00:00:00")
+            );
+            restored_database.pool().close().await;
+        });
+
         drop(runtime);
         drop(state);
         remove_test_dir_after_sqlite_shutdown(dir);

@@ -44,7 +44,11 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
           <span>{{ day.weekday }}</span>
           <strong>{{ day.dayNumber }}</strong>
         </button>
-        <div class="week-day__track" :style="{ minHeight: `${76 + maxCount * 3}px` }">
+        <div
+          class="week-day__track"
+          :style="{ minHeight: `${76 + maxCount * 3}px` }"
+          @click="emit('create', day.date)"
+        >
           <button
             v-for="appointment in day.appointments.slice(0, 3)"
             :key="appointment.id"

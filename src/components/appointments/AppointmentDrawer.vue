@@ -29,13 +29,18 @@ interface Draft {
   notes: string;
 }
 
-const props = defineProps<{
-  open: boolean;
-  appointment: Appointment | null;
-  requestedDate: string;
-  requestedStartTime: string | null;
-  accounts: readonly AccountProfile[];
-}>();
+const props = withDefaults(
+  defineProps<{
+    open: boolean;
+    appointment: Appointment | null;
+    requestedDate: string;
+    requestedStartTime: string | null;
+    accounts: readonly AccountProfile[];
+    defaultReminderMinutes: number;
+    saving?: boolean;
+  }>(),
+  { saving: false },
+);
 
 const emit = defineEmits<{
   close: [];
@@ -81,7 +86,7 @@ function resetDraft(): void {
         ? ""
         : String(source.amountMinor / 100),
     reminderEnabled: source?.reminderMinutes !== null,
-    reminderMinutes: source?.reminderMinutes ?? 30,
+    reminderMinutes: source?.reminderMinutes ?? props.defaultReminderMinutes,
     notes: source?.notes ?? "",
   });
   errors.value = [];
@@ -100,6 +105,7 @@ function selectMode(mode: AppointmentMode): void {
 }
 
 function submit(): void {
+  if (props.saving) return;
   const nextErrors: string[] = [];
   if (!draft.serviceDate) nextErrors.push("请选择预约日期");
   if (!draft.contactName.trim()) nextErrors.push("请填写联系人");
@@ -304,6 +310,7 @@ watch(
                     type="number"
                     min="0"
                     max="1440"
+                    aria-label="提前提醒分钟数"
                     :disabled="!draft.reminderEnabled"
                   />
                   <span>分钟前</span>
@@ -322,9 +329,9 @@ watch(
 
           <footer class="drawer__footer">
             <button class="button" type="button" @click="emit('close')">取消</button>
-            <button class="button button--primary" type="button" @click="submit">
+            <button class="button button--primary" type="button" :disabled="saving" @click="submit">
               <Save :size="16" />
-              保存预约
+              {{ saving ? "保存中…" : "保存预约" }}
             </button>
           </footer>
         </aside>

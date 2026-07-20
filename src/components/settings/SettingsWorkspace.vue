@@ -11,7 +11,7 @@ import {
   ShieldCheck,
   Upload,
 } from "@lucide/vue";
-import { onMounted, reactive, shallowRef } from "vue";
+import { onMounted, reactive, shallowRef, watch } from "vue";
 import { api, errorMessage, isTauri } from "../../api/client";
 import { useVault } from "../../composables/useVault";
 import { useUiStore } from "../../stores/ui";
@@ -47,6 +47,7 @@ async function loadSettings(): Promise<void> {
   loadingSettings.value = true;
   try {
     Object.assign(settings, await api.getSettings());
+    ui.setAppointmentDefaultReminderMinutes(settings.defaultReminderMinutes);
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
   } finally {
@@ -57,6 +58,7 @@ async function loadSettings(): Promise<void> {
 async function saveSettings(): Promise<void> {
   try {
     Object.assign(settings, await api.updateSettings({ ...settings }));
+    ui.setAppointmentDefaultReminderMinutes(settings.defaultReminderMinutes);
     await loadVault();
     ui.notify("设置已保存", "success");
   } catch (cause) {
@@ -79,8 +81,12 @@ async function previewImport(): Promise<void> {
   }
   importBusy.value = true;
   importResult.value = null;
+  const path = importPath.value;
+  const year = baseYear.value;
   try {
-    importPreview.value = await api.previewExcelImport(importPath.value, baseYear.value);
+    const preview = await api.previewExcelImport(path, year);
+    if (path !== importPath.value || year !== baseYear.value) return;
+    importPreview.value = preview;
     ui.notify("导入预览已生成，请确认后再提交", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
@@ -96,6 +102,7 @@ async function commitImport(): Promise<void> {
     importResult.value = await api.commitExcelImport(importPreview.value.previewToken);
     importPreview.value = null;
     ui.markDataChanged();
+    ui.markAccountsChanged();
     ui.notify("Excel 账本导入完成", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
@@ -163,9 +170,14 @@ async function submitVault(): Promise<void> {
 }
 
 async function lockVault(): Promise<void> {
-  await lock();
+  const result = await lock();
+  if (!result) return;
   ui.notify("密码库已锁定", "success");
 }
+
+watch(baseYear, () => {
+  importPreview.value = null;
+});
 
 onMounted(() => {
   void Promise.all([loadSettings(), loadVault()]);

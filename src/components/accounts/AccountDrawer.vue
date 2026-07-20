@@ -18,10 +18,14 @@ interface Draft {
   needsReview: boolean;
 }
 
-const props = defineProps<{
-  open: boolean;
-  profile: AccountProfile | null;
-}>();
+const props = withDefaults(
+  defineProps<{
+    open: boolean;
+    profile: AccountProfile | null;
+    saving?: boolean;
+  }>(),
+  { saving: false },
+);
 
 const emit = defineEmits<{
   close: [];
@@ -69,6 +73,7 @@ function optionalNumber(value: string): number | null {
 }
 
 function submit(): void {
+  if (props.saving) return;
   const nextErrors: string[] = [];
   if (!draft.accountName.trim()) nextErrors.push("请填写登录账号");
   if (!props.profile && !draft.password) nextErrors.push("新建账号必须填写密码");
@@ -211,8 +216,8 @@ watch(
           </form>
           <footer class="account-drawer__footer">
             <button class="button" type="button" @click="emit('close')">取消</button>
-            <button class="button button--primary" type="button" @click="submit">
-              <Save :size="16" />保存档案
+            <button class="button button--primary" type="button" :disabled="saving" @click="submit">
+              <Save :size="16" />{{ saving ? "保存中…" : "保存档案" }}
             </button>
           </footer>
         </aside>

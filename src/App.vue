@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, shallowRef } from "vue";
-import { RouterView, useRoute } from "vue-router";
+import { computed, onMounted, onUnmounted, shallowRef, watch } from "vue";
+import { RouterView, useRoute, useRouter } from "vue-router";
 import { api, errorMessage } from "./api/client";
 import AppToast from "./components/common/AppToast.vue";
 import AppointmentDrawer from "./components/appointments/AppointmentDrawer.vue";
@@ -13,16 +13,20 @@ import { useUiStore } from "./stores/ui";
 import type { AppointmentInput } from "./types/domain";
 
 const route = useRoute();
+const router = useRouter();
 const ui = useUiStore();
-const { items: accounts } = useAccounts();
+const { items: accounts, load: loadAccounts } = useAccounts();
 const vault = useVault();
 const vaultReady = shallowRef(false);
+const savingAppointment = shallowRef(false);
 let vaultTimer: ReturnType<typeof globalThis.setInterval> | undefined;
 
 const pageTitle = computed(() => String(route.meta.title ?? "时约管家"));
 const pageSubtitle = computed(() => String(route.meta.subtitle ?? ""));
 
 async function saveAppointment(input: AppointmentInput): Promise<void> {
+  if (savingAppointment.value) return;
+  savingAppointment.value = true;
   const isEditing = Boolean(ui.activeAppointment);
   const isSettling =
     ui.activeAppointment?.mode === "business" &&
@@ -46,6 +50,8 @@ async function saveAppointment(input: AppointmentInput): Promise<void> {
     }
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
+  } finally {
+    savingAppointment.value = false;
   }
 }
 
@@ -56,8 +62,22 @@ async function submitVault(password: string): Promise<void> {
   if (result) ui.notify("密码库已解锁", "success");
 }
 
+async function loadAppointmentDefaults(): Promise<void> {
+  try {
+    const settings = await api.getSettings();
+    ui.setAppointmentDefaultReminderMinutes(settings.defaultReminderMinutes);
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  }
+}
+
+watch(
+  () => ui.accountRevision,
+  () => void loadAccounts(),
+);
+
 onMounted(async () => {
-  await vault.load();
+  await Promise.all([vault.load(), loadAppointmentDefaults()]);
   vaultReady.value = true;
   vaultTimer = globalThis.setInterval(() => void vault.load(), 30_000);
 });
@@ -75,6 +95,7 @@ onUnmounted(() => {
         :title="pageTitle"
         :subtitle="pageSubtitle"
         @create-appointment="ui.openCreateAppointment()"
+        @open-notification-settings="router.push({ name: 'settings' })"
       />
       <main class="app-content">
         <RouterView />
@@ -87,6 +108,8 @@ onUnmounted(() => {
       :requested-date="ui.requestedDate"
       :requested-start-time="ui.requestedStartTime"
       :accounts="accounts"
+      :default-reminder-minutes="ui.appointmentDefaultReminderMinutes"
+      :saving="savingAppointment"
       @close="ui.closeAppointmentDrawer"
       @save="saveAppointment"
     />

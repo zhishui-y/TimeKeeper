@@ -5,7 +5,6 @@ use sqlx::{
     migrate::Migrator,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
 };
-use tauri::Manager;
 
 pub const DATABASE_FILE_NAME: &str = "timekeeper.db";
 pub(crate) static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -67,12 +66,9 @@ impl Database {
     }
 }
 
-pub async fn initialize_database(app: &tauri::AppHandle) -> Result<Database, String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("无法确定应用数据目录: {error}"))?;
-    std::fs::create_dir_all(&data_dir).map_err(|error| format!("创建应用数据目录失败: {error}"))?;
+pub async fn initialize_database(data_dir: impl AsRef<Path>) -> Result<Database, String> {
+    let data_dir = data_dir.as_ref();
+    std::fs::create_dir_all(data_dir).map_err(|error| format!("创建应用数据目录失败: {error}"))?;
 
     Database::initialize(data_dir.join(DATABASE_FILE_NAME)).await
 }

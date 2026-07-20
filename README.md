@@ -26,6 +26,15 @@ pnpm dev
 pnpm tauri dev
 ```
 
+需要验收真实 Tauri 命令但不能触碰正式数据时，可为 debug 构建指定独立的绝对目录：
+
+```powershell
+$env:TIMEKEEPER_DATA_DIR = Join-Path $env:TEMP "timekeeper-acceptance-$([guid]::NewGuid())"
+pnpm tauri dev
+```
+
+`TIMEKEEPER_DATA_DIR` 只在 debug 构建中生效；release/安装版始终使用系统应用数据目录。
+
 ## 质量检查
 
 ```powershell

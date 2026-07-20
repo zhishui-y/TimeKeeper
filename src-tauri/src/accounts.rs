@@ -1,6 +1,6 @@
 use chrono::{NaiveDate, Utc};
 use sqlx::{QueryBuilder, Row, Sqlite, Transaction, sqlite::SqliteRow};
-use tauri::State;
+use tauri::{AppHandle, Manager, Runtime, State};
 use uuid::Uuid;
 
 use crate::{
@@ -8,7 +8,7 @@ use crate::{
     db::{Database, ImportWriteResult},
     importer::LegacyAccountProfile,
     models::{AccountProfile, AccountProfileInput},
-    vault::VaultState,
+    vault::{VaultState, run_blocking_vault_operation},
 };
 
 fn optional_text(value: Option<String>) -> Option<String> {
@@ -76,6 +76,17 @@ pub(crate) fn profile_from_row(row: &SqliteRow) -> Result<AccountProfile, String
 
 fn db_error(error: sqlx::Error) -> String {
     format!("数据库操作失败: {error}")
+}
+
+async fn rollback_transaction(
+    transaction: Transaction<'_, Sqlite>,
+    primary_error: String,
+    rollback_context: &str,
+) -> String {
+    match transaction.rollback().await {
+        Ok(()) => primary_error,
+        Err(error) => format!("{primary_error}；{rollback_context}: {error}"),
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -146,10 +157,10 @@ pub(crate) async fn get_account_profile_impl(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn create_account_profile(
+pub async fn create_account_profile<R: Runtime>(
     database: State<'_, Database>,
-    vault: State<'_, VaultState>,
     backup: State<'_, BackupState>,
+    app: AppHandle<R>,
     mut input: AccountProfileInput,
 ) -> Result<AccountProfile, String> {
     let _operation_guard = backup.lock_data_operation().await;
@@ -158,16 +169,55 @@ pub async fn create_account_profile(
         .take()
         .filter(|password| !password.is_empty())
         .ok_or_else(|| "新建账号档案时密码不能为空".to_string())?;
-    let profile = create_account_profile_impl(database.inner(), input).await?;
-    if let Err(error) = vault.set_secret(&profile.id, password) {
-        let _ = delete_account_profile_impl(database.inner(), &profile.id).await;
-        return Err(format!("保存账号密码失败：{error}"));
+    let mut transaction = database.pool().begin().await.map_err(db_error)?;
+    let profile = match insert_account_profile(&mut transaction, input).await {
+        Ok(profile) => profile,
+        Err(error) => {
+            return Err(
+                rollback_transaction(transaction, error, "回滚未提交的账号元数据失败").await,
+            );
+        }
+    };
+
+    let worker_app = app.clone();
+    let profile_id = profile.id.clone();
+    if let Err(error) = run_blocking_vault_operation(move || {
+        worker_app
+            .state::<VaultState>()
+            .set_secret(&profile_id, password)
+    })
+    .await
+    {
+        let error = format!("保存账号密码失败：{error}");
+        return Err(rollback_transaction(transaction, error, "回滚未提交的账号元数据失败").await);
     }
+
+    transaction.commit().await.map_err(|error| {
+        format!("提交账号元数据失败：{error}；为避免出现可见账号但密码缺失，已保留保险库中的密码")
+    })?;
     Ok(profile)
 }
 
+#[cfg(test)]
 pub(crate) async fn create_account_profile_impl(
     database: &Database,
+    input: AccountProfileInput,
+) -> Result<AccountProfile, String> {
+    let mut transaction = database.pool().begin().await.map_err(db_error)?;
+    let profile = match insert_account_profile(&mut transaction, input).await {
+        Ok(profile) => profile,
+        Err(error) => {
+            return Err(
+                rollback_transaction(transaction, error, "回滚未提交的账号元数据失败").await,
+            );
+        }
+    };
+    transaction.commit().await.map_err(db_error)?;
+    Ok(profile)
+}
+
+async fn insert_account_profile(
+    transaction: &mut Transaction<'_, Sqlite>,
     input: AccountProfileInput,
 ) -> Result<AccountProfile, String> {
     let input = validate_input(input)?;
@@ -199,18 +249,23 @@ pub(crate) async fn create_account_profile_impl(
     })
     .bind(&now)
     .bind(&now)
-    .execute(database.pool())
+    .execute(&mut **transaction)
     .await
     .map_err(db_error)?;
 
-    get_account_profile_impl(database, &id).await
+    let row = sqlx::query("SELECT * FROM account_profiles WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(db_error)?;
+    profile_from_row(&row)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn update_account_profile(
+pub async fn update_account_profile<R: Runtime>(
     database: State<'_, Database>,
-    vault: State<'_, VaultState>,
     backup: State<'_, BackupState>,
+    app: AppHandle<R>,
     id: String,
     mut input: AccountProfileInput,
 ) -> Result<AccountProfile, String> {
@@ -219,35 +274,81 @@ pub async fn update_account_profile(
         .password
         .take()
         .filter(|password| !password.is_empty());
-    let previous = match password {
-        Some(password) => Some(
-            vault
-                .set_secret(&id, password)
-                .map_err(|error| format!("更新账号密码失败：{error}"))?,
-        ),
-        None => None,
+    let mut transaction = database.pool().begin().await.map_err(db_error)?;
+    let profile = match update_account_profile_in_transaction(&mut transaction, &id, input).await {
+        Ok(profile) => profile,
+        Err(error) => {
+            return Err(rollback_transaction(transaction, error, "回滚未提交的账号更新失败").await);
+        }
     };
 
-    match update_account_profile_impl(database.inner(), &id, input).await {
-        Ok(profile) => Ok(profile),
+    let Some(password) = password else {
+        transaction.commit().await.map_err(db_error)?;
+        return Ok(profile);
+    };
+
+    let worker_app = app.clone();
+    let secret_id = id.clone();
+    let previous = match run_blocking_vault_operation(move || {
+        worker_app
+            .state::<VaultState>()
+            .set_secret(&secret_id, password)
+    })
+    .await
+    {
+        Ok(previous) => previous,
         Err(error) => {
-            if let Some(previous) = previous {
-                match previous {
-                    Some(password) => {
-                        let _ = vault.set_secret(&id, password);
-                    }
-                    None => {
-                        let _ = vault.remove_secret(&id);
-                    }
-                }
-            }
-            Err(error)
+            let error = format!("更新账号密码失败：{error}");
+            return Err(rollback_transaction(transaction, error, "回滚未提交的账号更新失败").await);
         }
+    };
+
+    if let Err(error) = transaction.commit().await {
+        let primary_error = format!("提交账号档案更新失败：{error}");
+        if let Some(previous_password) = previous {
+            let worker_app = app.clone();
+            let secret_id = id.clone();
+            if let Err(rollback_error) = run_blocking_vault_operation(move || {
+                worker_app
+                    .state::<VaultState>()
+                    .set_secret(&secret_id, previous_password)
+                    .map(|_| ())
+            })
+            .await
+            {
+                return Err(format!(
+                    "{primary_error}；恢复原账号密码也失败：{rollback_error}"
+                ));
+            }
+            return Err(primary_error);
+        }
+        return Err(format!(
+            "{primary_error}；原保险库中没有旧密码，为避免可见账号缺少密码，已保留新密码"
+        ));
     }
+
+    Ok(profile)
 }
 
+#[cfg(test)]
 pub(crate) async fn update_account_profile_impl(
     database: &Database,
+    id: &str,
+    input: AccountProfileInput,
+) -> Result<AccountProfile, String> {
+    let mut transaction = database.pool().begin().await.map_err(db_error)?;
+    let profile = match update_account_profile_in_transaction(&mut transaction, id, input).await {
+        Ok(profile) => profile,
+        Err(error) => {
+            return Err(rollback_transaction(transaction, error, "回滚未提交的账号更新失败").await);
+        }
+    };
+    transaction.commit().await.map_err(db_error)?;
+    Ok(profile)
+}
+
+async fn update_account_profile_in_transaction(
+    transaction: &mut Transaction<'_, Sqlite>,
     id: &str,
     input: AccountProfileInput,
 ) -> Result<AccountProfile, String> {
@@ -277,36 +378,43 @@ pub(crate) async fn update_account_profile_impl(
     })
     .bind(now)
     .bind(id)
-    .execute(database.pool())
+    .execute(&mut **transaction)
     .await
     .map_err(db_error)?;
 
     if result.rows_affected() == 0 {
         return Err(format!("账号档案不存在: {id}"));
     }
-    get_account_profile_impl(database, id).await
+    let row = sqlx::query("SELECT * FROM account_profiles WHERE id = ?")
+        .bind(id)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(db_error)?;
+    profile_from_row(&row)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn delete_account_profile(
+pub async fn delete_account_profile<R: Runtime>(
     database: State<'_, Database>,
-    vault: State<'_, VaultState>,
     backup: State<'_, BackupState>,
+    app: AppHandle<R>,
     id: String,
 ) -> Result<(), String> {
     let _operation_guard = backup.lock_data_operation().await;
-    let previous = vault
-        .remove_secret(&id)
-        .map_err(|error| format!("删除账号密码失败：{error}"))?;
-    match delete_account_profile_impl(database.inner(), &id).await {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            if let Some(password) = previous {
-                let _ = vault.set_secret(&id, password);
-            }
-            Err(error)
-        }
-    }
+    delete_account_profile_impl(database.inner(), &id).await?;
+
+    let worker_app = app.clone();
+    let secret_id = id.clone();
+    run_blocking_vault_operation(move || {
+        worker_app
+            .state::<VaultState>()
+            .remove_secret(&secret_id)
+            .map(|_| ())
+    })
+    .await
+    .map_err(|error| {
+        format!("账号元数据已删除，但清理保险库密码失败（可能留下不可见的孤儿秘密）：{error}")
+    })
 }
 
 pub(crate) async fn delete_account_profile_impl(
@@ -480,6 +588,105 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(error.contains("vault"));
+        });
+    }
+
+    #[test]
+    fn rolled_back_profile_insert_never_becomes_visible() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let mut transaction = database.pool().begin().await.unwrap();
+            let profile = insert_account_profile(&mut transaction, input("rolled-back-account"))
+                .await
+                .unwrap();
+
+            transaction.rollback().await.unwrap();
+
+            let error = get_account_profile_impl(&database, &profile.id)
+                .await
+                .unwrap_err();
+            assert!(error.contains("不存在"));
+        });
+    }
+
+    #[test]
+    fn missing_profile_update_is_rejected_inside_the_transaction() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let mut transaction = database.pool().begin().await.unwrap();
+
+            let error = update_account_profile_in_transaction(
+                &mut transaction,
+                "missing-account",
+                input("must-not-be-written"),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(error.contains("账号档案不存在"));
+            transaction.rollback().await.unwrap();
+            assert!(
+                list_account_profiles_impl(&database, None, None)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        });
+    }
+
+    #[test]
+    fn deleting_profile_clears_live_link_and_keeps_non_secret_snapshot() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let profile = create_account_profile_impl(&database, input("linked-account"))
+                .await
+                .unwrap();
+            let now = Utc::now().to_rfc3339();
+            let snapshot = r#"{"accountName":"linked-account"}"#;
+            sqlx::query(
+                "INSERT INTO appointments (
+                    id, service_date, contact_name, mode, service_status,
+                    settlement_status, account_profile_id, account_snapshot_json,
+                    created_at, updated_at
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind("linked-appointment")
+            .bind("2026-07-20")
+            .bind("测试联系人")
+            .bind("business")
+            .bind("scheduled")
+            .bind("unsettled")
+            .bind(&profile.id)
+            .bind(snapshot)
+            .bind(&now)
+            .bind(&now)
+            .execute(database.pool())
+            .await
+            .unwrap();
+
+            delete_account_profile_impl(&database, &profile.id)
+                .await
+                .unwrap();
+
+            let row = sqlx::query(
+                "SELECT account_profile_id, account_snapshot_json
+                 FROM appointments WHERE id = ?",
+            )
+            .bind("linked-appointment")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+            assert_eq!(
+                row.try_get::<Option<String>, _>("account_profile_id")
+                    .unwrap(),
+                None
+            );
+            assert_eq!(
+                row.try_get::<Option<String>, _>("account_snapshot_json")
+                    .unwrap()
+                    .as_deref(),
+                Some(snapshot)
+            );
         });
     }
 

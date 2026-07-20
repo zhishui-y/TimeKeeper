@@ -12,6 +12,7 @@ interface ReschedulePayload {
   appointment: Appointment;
   startsAt: Date;
   endsAt: Date | null;
+  allDay: boolean;
   revert: () => void;
 }
 
@@ -30,7 +31,7 @@ async function reschedule(payload: ReschedulePayload): Promise<void> {
   try {
     const result = await api.updateAppointment(
       payload.appointment.id,
-      rescheduledInput(payload.appointment, payload.startsAt, payload.endsAt),
+      rescheduledInput(payload.appointment, payload.startsAt, payload.endsAt, payload.allDay),
     );
     undoState.value = { id: payload.appointment.id, input: previous };
     globalThis.clearTimeout(undoTimer);

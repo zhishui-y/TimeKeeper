@@ -24,8 +24,17 @@ export function rescheduledInput(
   appointment: Appointment,
   startsAt: Date,
   endsAt: Date | null,
+  allDay: boolean,
 ): AppointmentInput {
   const input = appointmentToInput(appointment);
+  if (!appointment.startsAt || allDay) {
+    return {
+      ...input,
+      serviceDate: format(startsAt, "yyyy-MM-dd"),
+      startTime: null,
+      endTime: null,
+    };
+  }
   return {
     ...input,
     serviceDate: format(startsAt, "yyyy-MM-dd"),
