@@ -2,66 +2,72 @@
 import { BarChart, LineChart } from "echarts/charts";
 import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
 import { use } from "echarts/core";
-import { SVGRenderer } from "echarts/renderers";
+import { CanvasRenderer } from "echarts/renderers";
 import { computed, onBeforeUnmount, onMounted, shallowRef } from "vue";
 import VChart from "vue-echarts";
 import type { RevenuePoint } from "../../types/domain";
 
-use([BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, SVGRenderer]);
+use([BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
 
 const props = defineProps<{
   points: readonly RevenuePoint[];
 }>();
 
-const chart = shallowRef<InstanceType<typeof VChart> | null>(null);
+const reducedMotionQuery =
+  typeof globalThis.matchMedia === "function"
+    ? globalThis.matchMedia("(prefers-reduced-motion: reduce)")
+    : null;
+const prefersReducedMotion = shallowRef(reducedMotionQuery?.matches ?? false);
 
-function resizeChart(): void {
-  chart.value?.resize();
+function updateReducedMotion(): void {
+  prefersReducedMotion.value = reducedMotionQuery?.matches ?? false;
 }
 
-onMounted(() => globalThis.addEventListener("resize", resizeChart));
-onBeforeUnmount(() => globalThis.removeEventListener("resize", resizeChart));
+onMounted(() => reducedMotionQuery?.addEventListener("change", updateReducedMotion));
+onBeforeUnmount(() => reducedMotionQuery?.removeEventListener("change", updateReducedMotion));
 
 const option = computed(() => ({
-  animationDuration: 420,
-  color: ["#28634f", "#d3a04e", "#80938b"],
-  grid: { top: 42, right: 22, bottom: 32, left: 54, containLabel: false },
+  animation: !prefersReducedMotion.value,
+  animationDuration: prefersReducedMotion.value ? 0 : 420,
+  animationDurationUpdate: prefersReducedMotion.value ? 0 : 300,
+  color: ["#24614d", "#c98834", "#759288"],
+  grid: { top: 46, right: 24, bottom: 36, left: 58, containLabel: false },
   tooltip: {
     trigger: "axis",
-    backgroundColor: "#ffffff",
-    borderColor: "#dce1dc",
+    backgroundColor: "#fffdf8",
+    borderColor: "#d8ddd5",
     borderWidth: 1,
-    textStyle: { color: "#35413d", fontSize: 11 },
+    textStyle: { color: "#314039", fontSize: 12 },
   },
   legend: {
     top: 5,
     right: 10,
     itemWidth: 10,
     itemHeight: 7,
-    textStyle: { color: "#75807c", fontSize: 10 },
+    textStyle: { color: "#66736d", fontSize: 11 },
   },
   xAxis: {
     type: "category",
     data: props.points.map((point) => point.period.slice(5)),
-    axisLine: { lineStyle: { color: "#dce1dc" } },
+    axisLine: { lineStyle: { color: "#d8ddd5" } },
     axisTick: { show: false },
-    axisLabel: { color: "#7b8581", fontSize: 10 },
+    axisLabel: { color: "#66736d", fontSize: 11 },
   },
   yAxis: [
     {
       type: "value",
       axisLabel: {
-        color: "#8b9591",
-        fontSize: 9,
+        color: "#66736d",
+        fontSize: 10,
         formatter: (value: number) => `¥${value / 100}`,
       },
-      splitLine: { lineStyle: { color: "#edf0ec" } },
+      splitLine: { lineStyle: { color: "#e9ede6" } },
     },
     {
       type: "value",
       name: "小时",
-      nameTextStyle: { color: "#9aa39f", fontSize: 9 },
-      axisLabel: { color: "#8b9591", fontSize: 9 },
+      nameTextStyle: { color: "#66736d", fontSize: 10 },
+      axisLabel: { color: "#66736d", fontSize: 10 },
       splitLine: { show: false },
     },
   ],
@@ -97,7 +103,12 @@ const option = computed(() => ({
 </script>
 
 <template>
-  <VChart ref="chart" class="revenue-chart" :option="option" :init-options="{ renderer: 'svg' }" />
+  <VChart
+    class="revenue-chart"
+    :option="option"
+    :init-options="{ renderer: 'canvas' }"
+    :autoresize="{ throttle: 120 }"
+  />
 </template>
 
 <style scoped>

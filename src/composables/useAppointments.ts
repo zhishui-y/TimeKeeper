@@ -7,16 +7,47 @@ export function useAppointments(initialFilters: AppointmentFilters = {}) {
   const items = shallowRef<Appointment[]>([]);
   const loading = shallowRef(false);
   const error = shallowRef<string | null>(null);
+  const inFlight = new Map<string, Promise<Appointment[]>>();
+  let requestVersion = 0;
+
+  function requestKey(value: AppointmentFilters): string {
+    return JSON.stringify([
+      value.from ?? null,
+      value.to ?? null,
+      value.query ?? null,
+      value.mode ?? null,
+      value.serviceStatus ?? null,
+      value.settlementStatus ?? null,
+      value.accountProfileId ?? null,
+    ]);
+  }
+
+  function fetchAppointments(requestedFilters: AppointmentFilters): Promise<Appointment[]> {
+    const key = requestKey(requestedFilters);
+    const existing = inFlight.get(key);
+    if (existing) return existing;
+
+    const request = api.listAppointments(requestedFilters);
+    inFlight.set(key, request);
+    const clear = () => {
+      if (inFlight.get(key) === request) inFlight.delete(key);
+    };
+    void request.then(clear, clear);
+    return request;
+  }
 
   async function load(): Promise<void> {
+    const version = ++requestVersion;
+    const requestedFilters = { ...filters };
     loading.value = true;
     error.value = null;
     try {
-      items.value = await api.listAppointments({ ...filters });
+      const nextItems = await fetchAppointments(requestedFilters);
+      if (version === requestVersion) items.value = nextItems;
     } catch (cause) {
-      error.value = errorMessage(cause);
+      if (version === requestVersion) error.value = errorMessage(cause);
     } finally {
-      loading.value = false;
+      if (version === requestVersion) loading.value = false;
     }
   }
 

@@ -23,7 +23,7 @@ async function createBusinessAppointment(
   content: string,
 ): Promise<void> {
   await page.getByRole("button", { name: "新建预约", exact: true }).click();
-  const drawer = page.getByRole("complementary", { name: "预约编辑" });
+  const drawer = page.getByRole("dialog", { name: /新建预约|编辑预约/ });
   await expect(drawer).toBeVisible();
   await drawer.getByLabel("日期 *").fill(today);
   await drawer.getByLabel("开始时间").fill("06:00");
@@ -49,7 +49,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       await page.getByRole("link", { name: "账号档案" }).click();
       await page.getByRole("button", { name: "新建账号" }).click();
 
-      const drawer = page.getByRole("complementary", { name: "账号档案编辑" });
+      const drawer = page.getByRole("dialog", { name: "新建账号档案" });
       await expect(drawer).toBeVisible();
       await drawer.getByLabel("登录账号 *").fill(accountName);
       await drawer.getByLabel("密码 *").fill("FeatureMatrix#2026");
@@ -76,7 +76,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
 
     await test.step("不刷新页面打开全局预约并看到新账号", async () => {
       await page.getByRole("button", { name: "新建预约", exact: true }).click();
-      const drawer = page.getByRole("complementary", { name: "预约编辑" });
+      const drawer = page.getByRole("dialog", { name: /新建预约|编辑预约/ });
       const accountSelect = drawer.getByLabel("关联账号");
       await expect(accountSelect.locator("option").filter({ hasText: contactName })).toHaveCount(1);
     });
@@ -93,7 +93,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
 
     await test.step("新建预约继承最新默认值", async () => {
       await page.getByRole("button", { name: "新建预约", exact: true }).click();
-      const drawer = page.getByRole("complementary", { name: "预约编辑" });
+      const drawer = page.getByRole("dialog", { name: /新建预约|编辑预约/ });
       await expect(drawer.getByLabel("开启提醒")).toBeChecked();
       await expect(drawer.locator(".reminder-input input")).toHaveValue("60");
     });
@@ -130,7 +130,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
 
     await test.step("保存一条娱乐预约", async () => {
       await page.getByRole("button", { name: "新建预约", exact: true }).click();
-      const drawer = page.getByRole("complementary", { name: "预约编辑" });
+      const drawer = page.getByRole("dialog", { name: /新建预约|编辑预约/ });
       await drawer.getByRole("button", { name: /娱乐模式/ }).click();
       await drawer.getByLabel("日期 *").fill(today);
       await drawer.getByLabel("开始时间").fill("07:00");
@@ -182,7 +182,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
 
     await test.step("复制预约并把副本编辑成可区分的数据", async () => {
       await appointmentRow(page, originalContact).getByRole("button", { name: "复制预约" }).click();
-      const drawer = page.getByRole("complementary", { name: "预约编辑" });
+      const drawer = page.getByRole("dialog", { name: "编辑预约" });
       await expect(drawer.getByRole("heading", { name: "编辑预约" })).toBeVisible();
       await drawer.getByLabel("联系人 *").fill(copiedContact);
       await drawer.getByLabel("预约内容").fill("复制后的安全测试数据");
@@ -195,7 +195,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       await appointmentRow(page, originalContact)
         .getByRole("button", { name: "编辑", exact: true })
         .click();
-      const drawer = page.getByRole("complementary", { name: "预约编辑" });
+      const drawer = page.getByRole("dialog", { name: "编辑预约" });
       await drawer.getByLabel("联系人 *").fill(editedContact);
       await drawer.getByRole("button", { name: "保存预约" }).click();
       await expect(drawer).toBeHidden();

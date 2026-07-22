@@ -54,6 +54,7 @@ const emit = defineEmits<{
           <tr
             v-for="profile in profiles"
             :key="profile.id"
+            v-memo="[profile, revealedPasswords[profile.id], vaultUnlocked]"
             :class="{ 'needs-review': profile.needsReview }"
           >
             <td>
@@ -142,7 +143,7 @@ const emit = defineEmits<{
 }
 
 .needs-review {
-  background: #fffaf2;
+  background: color-mix(in srgb, var(--amber-soft) 46%, var(--surface));
 }
 
 .contact-cell {
@@ -161,7 +162,8 @@ const emit = defineEmits<{
 .account-name {
   display: block;
   color: var(--ink-strong);
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .password-cell {
@@ -174,16 +176,17 @@ const emit = defineEmits<{
 
 .password-cell code {
   display: block;
-  color: #4f5d58;
+  color: var(--ink);
   font-family: "Cascadia Mono", monospace;
-  font-size: 10px;
+  font-size: 11px;
+  letter-spacing: 0.025em;
 }
 
 .password-cell .icon-button,
 .row-actions .icon-button {
-  width: 25px;
-  height: 25px;
-  flex-basis: 25px;
+  width: 28px;
+  height: 28px;
+  flex-basis: 28px;
 }
 
 .score-cell {
@@ -199,5 +202,37 @@ const emit = defineEmits<{
 .action-danger:hover {
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+.account-table th:last-child,
+.account-table td:last-child {
+  position: sticky;
+  z-index: 2;
+  right: 0;
+  background: var(--surface);
+  box-shadow: -10px 0 18px rgba(28, 45, 38, 0.05);
+}
+
+.account-table th:last-child {
+  z-index: 3;
+  background: var(--surface-soft);
+}
+
+.account-table tr.needs-review td:last-child {
+  background: color-mix(in srgb, var(--amber-soft) 46%, var(--surface));
+}
+
+.account-table tbody tr:hover td:last-child {
+  background: var(--surface-soft);
+}
+
+.account-table tbody tr {
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.account-table tbody tr:hover {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--brand) 72%, transparent);
 }
 </style>

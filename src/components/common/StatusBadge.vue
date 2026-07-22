@@ -24,41 +24,58 @@ const tone = computed(() => props.serviceStatus ?? props.settlementStatus ?? "ne
 <style scoped>
 .badge {
   display: inline-flex;
-  height: 24px;
+  height: 26px;
   align-items: center;
-  padding: 0 7px;
+  gap: 6px;
+  padding: 0 9px;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 999px;
   color: var(--ink-muted);
   background: var(--surface-soft);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 680;
+  letter-spacing: 0.01em;
   white-space: nowrap;
 }
 
+.badge::before {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+  opacity: 0.72;
+}
+
 .badge--scheduled {
-  border-color: #c6d7df;
-  color: #466a7f;
+  border-color: var(--blue-border);
+  color: var(--blue);
   background: var(--blue-soft);
 }
 
 .badge--in_progress,
 .badge--unsettled {
-  border-color: #e1c696;
-  color: #8a5917;
+  border-color: var(--amber-border);
+  color: var(--amber);
   background: var(--amber-soft);
 }
 
 .badge--completed,
 .badge--settled {
-  border-color: #b8d3c3;
+  border-color: var(--brand-border);
   color: var(--brand-strong);
   background: var(--brand-soft);
 }
 
 .badge--cancelled,
 .badge--not_applicable {
-  color: #7f8784;
-  background: #f0f2ef;
+  color: #747f79;
+  background: var(--neutral-soft);
+}
+
+.badge--cancelled::before,
+.badge--not_applicable::before {
+  opacity: 0.42;
 }
 </style>

@@ -1,12 +1,19 @@
 // @vitest-environment jsdom
 
 import { mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import AppointmentDrawer from "./AppointmentDrawer.vue";
 
 describe("AppointmentDrawer", () => {
+  let unmount: (() => void) | undefined;
+
+  afterEach(() => {
+    unmount?.();
+    unmount = undefined;
+  });
+
   function mountDrawer(defaultReminderMinutes = 30) {
-    return mount(AppointmentDrawer, {
+    const wrapper = mount(AppointmentDrawer, {
       props: {
         open: true,
         appointment: null,
@@ -17,6 +24,8 @@ describe("AppointmentDrawer", () => {
       },
       global: { stubs: { teleport: true } },
     });
+    unmount = () => wrapper.unmount();
+    return wrapper;
   }
 
   it("uses the configured reminder default for new appointments", () => {
@@ -75,5 +84,15 @@ describe("AppointmentDrawer", () => {
     await saveButton.trigger("click");
 
     expect(wrapper.emitted("save")).toBeUndefined();
+  });
+
+  it("exposes a modal dialog and closes it with Escape", async () => {
+    const wrapper = mountDrawer();
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.get('[role="dialog"]').attributes("aria-modal")).toBe("true");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+
+    expect(wrapper.emitted("close")).toHaveLength(1);
   });
 });

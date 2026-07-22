@@ -160,10 +160,11 @@ function move(direction: "prev" | "next" | "today"): void {
         <CalendarDays :size="17" />
         <h2>{{ currentTitle }}</h2>
       </div>
-      <div class="segmented" aria-label="日历视图">
+      <div class="segmented" role="group" aria-label="日历视图">
         <button
           class="segmented__item"
           :class="{ 'is-active': activeView === 'timeGridDay' }"
+          :aria-pressed="activeView === 'timeGridDay'"
           type="button"
           @click="changeView('timeGridDay')"
         >
@@ -172,6 +173,7 @@ function move(direction: "prev" | "next" | "today"): void {
         <button
           class="segmented__item"
           :class="{ 'is-active': activeView === 'timeGridWeek' }"
+          :aria-pressed="activeView === 'timeGridWeek'"
           type="button"
           @click="changeView('timeGridWeek')"
         >
@@ -180,6 +182,7 @@ function move(direction: "prev" | "next" | "today"): void {
         <button
           class="segmented__item"
           :class="{ 'is-active': activeView === 'dayGridMonth' }"
+          :aria-pressed="activeView === 'dayGridMonth'"
           type="button"
           @click="changeView('dayGridMonth')"
         >
@@ -198,37 +201,41 @@ function move(direction: "prev" | "next" | "today"): void {
   display: grid;
   height: 100%;
   min-height: 0;
-  grid-template-rows: 52px minmax(0, 1fr);
+  grid-template-rows: 56px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg, var(--radius));
   background: var(--surface);
+  box-shadow: var(--shadow-sm, var(--shadow-soft));
 }
 
 .calendar-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
+  gap: 16px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--line);
+  background: linear-gradient(90deg, var(--surface-soft), var(--surface));
 }
 
 .calendar-toolbar__date {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
 }
 
 .calendar-toolbar__date > svg {
-  margin-left: 8px;
+  margin-left: 7px;
   color: var(--brand);
 }
 
 .calendar-toolbar__date h2 {
   overflow: hidden;
   color: var(--ink-strong);
-  font-size: 14px;
+  font-size: 16px;
+  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -236,18 +243,23 @@ function move(direction: "prev" | "next" | "today"): void {
 .calendar-board__canvas {
   min-height: 0;
   overflow: hidden;
-  padding: 0 10px 10px;
+  padding: 0 12px 12px;
 }
 
 .calendar-board__canvas :deep(.fc) {
+  --fc-border-color: var(--line);
+  --fc-neutral-bg-color: var(--surface-soft);
+  --fc-page-bg-color: var(--surface);
+  --fc-today-bg-color: color-mix(in srgb, var(--brand-soft) 54%, transparent);
   height: 100%;
   color: var(--ink);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-size: 12px;
 }
 
 .calendar-board__canvas :deep(.fc-theme-standard td),
 .calendar-board__canvas :deep(.fc-theme-standard th) {
-  border-color: #e5e9e4;
+  border-color: var(--line);
 }
 
 .calendar-board__canvas :deep(.fc-scrollgrid) {
@@ -255,21 +267,31 @@ function move(direction: "prev" | "next" | "today"): void {
 }
 
 .calendar-board__canvas :deep(.fc-col-header-cell) {
-  height: 38px;
-  color: #65716d;
-  background: #f8faf7;
-  font-weight: 650;
+  height: 42px;
+  color: var(--ink);
+  background: var(--surface-soft);
+  font-weight: 700;
   vertical-align: middle;
 }
 
+.calendar-board__canvas :deep(.fc-col-header-cell-cushion) {
+  padding: 7px 5px;
+}
+
 .calendar-board__canvas :deep(.fc-timegrid-slot-label) {
-  color: #929b98;
-  font-family: "Bahnschrift", sans-serif;
-  font-size: 9px;
+  color: var(--ink-muted);
+  font-family: "Bahnschrift", var(--font-sans);
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .calendar-board__canvas :deep(.fc-timegrid-slot) {
-  height: 24px;
+  height: 25px;
+}
+
+.calendar-board__canvas :deep(.fc-timegrid-axis-cushion),
+.calendar-board__canvas :deep(.fc-timegrid-slot-label-cushion) {
+  padding-inline: 5px;
 }
 
 .calendar-board__canvas :deep(.fc-timegrid-now-indicator-line) {
@@ -281,13 +303,23 @@ function move(direction: "prev" | "next" | "today"): void {
 }
 
 .calendar-board__canvas :deep(.fc-event) {
-  border: 1px solid #b4d0c1;
+  border: 1px solid var(--brand-border, var(--line-strong));
   border-left: 3px solid var(--brand);
-  border-radius: 3px;
+  border-radius: 7px;
   color: var(--brand-strong);
   background: var(--brand-soft);
-  box-shadow: none;
+  box-shadow: var(--shadow-control, none);
   cursor: pointer;
+  transition:
+    border-color 130ms ease,
+    box-shadow 130ms ease,
+    filter 130ms ease;
+}
+
+.calendar-board__canvas :deep(.fc-event:hover) {
+  border-color: var(--brand);
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--brand) 14%, transparent);
+  filter: saturate(1.04);
 }
 
 .calendar-board__canvas :deep(.fc-event-main) {
@@ -295,18 +327,19 @@ function move(direction: "prev" | "next" | "today"): void {
 }
 
 .calendar-board__canvas :deep(.appointment-event--entertainment) {
-  border-color: #bbced9;
+  border-color: var(--blue-border, var(--line-strong));
   border-left-color: var(--blue);
-  color: #365d74;
+  color: var(--blue);
   background: var(--blue-soft);
 }
 
 .calendar-board__canvas :deep(.appointment-event--cancelled) {
-  border-color: #d3d8d4;
-  border-left-color: #909a96;
-  color: #7d8582;
-  background: #eff1ee;
-  opacity: 0.68;
+  border-color: var(--line);
+  border-left-color: var(--ink-faint, var(--ink-muted));
+  color: var(--ink-muted);
+  background: var(--neutral-soft, var(--surface-soft));
+  box-shadow: none;
+  opacity: 0.76;
 }
 
 .calendar-board__canvas :deep(.fc-event-inner) {
@@ -314,8 +347,8 @@ function move(direction: "prev" | "next" | "today"): void {
   min-width: 0;
   height: 100%;
   flex-direction: column;
-  gap: 1px;
-  padding: 2px 4px;
+  gap: 2px;
+  padding: 3px 5px;
   overflow: hidden;
 }
 
@@ -328,21 +361,75 @@ function move(direction: "prev" | "next" | "today"): void {
 }
 
 .calendar-board__canvas :deep(.fc-event-inner strong) {
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.2;
 }
 
 .calendar-board__canvas :deep(.fc-event-inner small) {
-  font-size: 9px;
-  opacity: 0.82;
+  font-size: 10px;
+  line-height: 1.2;
+  opacity: 0.9;
 }
 
 .calendar-board__canvas :deep(.fc-event-inner span) {
   margin-top: auto;
-  font-family: "Bahnschrift", sans-serif;
-  font-size: 8px;
+  font-family: "Bahnschrift", var(--font-sans);
+  font-size: 10px;
+  font-weight: 650;
 }
 
 .calendar-board__canvas :deep(.fc-day-today) {
-  background: #f5f8f4 !important;
+  background: color-mix(in srgb, var(--brand-soft) 58%, transparent) !important;
+}
+
+.calendar-board__canvas :deep(.fc-daygrid-day-number) {
+  padding: 7px;
+  color: var(--ink);
+  font-family: "Bahnschrift", var(--font-sans);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.calendar-board__canvas :deep(.fc-daygrid-day-frame) {
+  min-height: 82px;
+}
+
+@media (max-width: 1180px) {
+  .calendar-toolbar {
+    gap: 10px;
+    padding-inline: 10px;
+  }
+
+  .calendar-toolbar__date {
+    gap: 5px;
+  }
+
+  .calendar-toolbar__date > svg {
+    margin-left: 4px;
+  }
+
+  .calendar-toolbar__date h2 {
+    font-size: 15px;
+  }
+
+  .calendar-board__canvas {
+    padding-inline: 9px;
+    padding-bottom: 9px;
+  }
+}
+
+@media (max-height: 760px) {
+  .calendar-board {
+    grid-template-rows: 52px minmax(0, 1fr);
+  }
+
+  .calendar-board__canvas :deep(.fc-col-header-cell) {
+    height: 38px;
+  }
+
+  .calendar-board__canvas :deep(.fc-timegrid-slot) {
+    height: 24px;
+  }
 }
 </style>

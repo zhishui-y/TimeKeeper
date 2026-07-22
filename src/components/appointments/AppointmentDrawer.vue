@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { BriefcaseBusiness, Gamepad2, Save, X } from "@lucide/vue";
-import { reactive, shallowRef, watch } from "vue";
+import { reactive, shallowRef, useTemplateRef, watch } from "vue";
+import { useModalFocus } from "../../composables/useModalFocus";
 import type {
   AccountProfile,
   Appointment,
@@ -36,10 +37,11 @@ const props = withDefaults(
     requestedDate: string;
     requestedStartTime: string | null;
     accounts: readonly AccountProfile[];
+    accountsLoading?: boolean;
     defaultReminderMinutes: number;
     saving?: boolean;
   }>(),
-  { saving: false },
+  { accountsLoading: false, saving: false },
 );
 
 const emit = defineEmits<{
@@ -66,6 +68,7 @@ const draft = reactive<Draft>({
 });
 
 const errors = shallowRef<string[]>([]);
+const drawerRef = useTemplateRef("drawer");
 
 function resetDraft(): void {
   const source = props.appointment ? appointmentToInput(props.appointment) : null;
@@ -148,6 +151,12 @@ watch(
   },
   { immediate: true },
 );
+
+useModalFocus({
+  open: () => props.open,
+  container: drawerRef,
+  close: () => emit("close"),
+});
 </script>
 
 <template>
@@ -160,11 +169,18 @@ watch(
           aria-label="关闭预约编辑"
           @click="emit('close')"
         />
-        <aside class="drawer" aria-label="预约编辑">
+        <aside
+          ref="drawer"
+          class="drawer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="appointment-drawer-title"
+          tabindex="-1"
+        >
           <header class="drawer__header">
             <div>
               <span class="section-kicker">APPOINTMENT</span>
-              <h2>{{ appointment ? "编辑预约" : "新建预约" }}</h2>
+              <h2 id="appointment-drawer-title">{{ appointment ? "编辑预约" : "新建预约" }}</h2>
             </div>
             <button class="icon-button" type="button" aria-label="关闭" @click="emit('close')">
               <X :size="18" />
@@ -239,8 +255,12 @@ watch(
                 </label>
                 <label class="field">
                   <span class="field__label">关联账号</span>
-                  <select v-model="draft.accountProfileId" class="select">
-                    <option value="">不关联账号</option>
+                  <select
+                    v-model="draft.accountProfileId"
+                    class="select"
+                    :disabled="accountsLoading"
+                  >
+                    <option value="">{{ accountsLoading ? "账号加载中…" : "不关联账号" }}</option>
                     <option v-for="account in accounts" :key="account.id" :value="account.id">
                       {{ account.contactName || account.accountName }} ·
                       {{ account.server || "区服待补" }}
@@ -352,21 +372,26 @@ watch(
   inset: 0;
   width: 100%;
   border: 0;
-  background: rgba(31, 42, 38, 0.28);
+  background: rgba(20, 31, 27, 0.42);
+  backdrop-filter: blur(4px);
   cursor: default;
 }
 
 .drawer {
   position: absolute;
-  top: 0;
-  right: 0;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
   display: grid;
-  width: min(580px, 52vw);
-  height: 100%;
-  grid-template-rows: 72px minmax(0, 1fr) 64px;
-  border-left: 1px solid var(--line-strong);
-  background: #fbfcfa;
-  box-shadow: -18px 0 42px rgba(24, 36, 31, 0.16);
+  width: min(600px, calc(100vw - 32px));
+  height: auto;
+  grid-template-rows: 78px minmax(0, 1fr) 70px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--brand) 18%, var(--line));
+  border-radius: var(--radius-lg, 18px);
+  background: var(--canvas, #f7f5ef);
+  box-shadow: -24px 16px 64px rgba(18, 34, 28, 0.24);
+  will-change: transform;
 }
 
 .drawer__header,
@@ -374,21 +399,23 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 22px;
+  padding: 0 24px;
   border-bottom: 1px solid var(--line);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
 }
 
 .drawer__header h2 {
   margin-top: 2px;
   color: var(--ink-strong);
-  font-size: 18px;
+  font-family: var(--font-serif, "Noto Serif SC", serif);
+  font-size: 20px;
+  letter-spacing: 0.02em;
 }
 
 .drawer__body {
   min-height: 0;
   overflow-y: auto;
-  padding: 18px 22px 28px;
+  padding: 20px 24px 30px;
 }
 
 .drawer__footer {
@@ -401,29 +428,31 @@ watch(
 .mode-switch {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 18px;
+  gap: 10px;
+  margin-bottom: 20px;
 }
 
 .mode-switch__item {
   display: flex;
-  min-height: 58px;
+  min-height: 66px;
   align-items: center;
   gap: 10px;
-  padding: 9px 12px;
+  padding: 10px 13px;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius, 12px);
   color: var(--ink-muted);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 95%, transparent);
   text-align: left;
   cursor: pointer;
 }
 
 .mode-switch__item.is-active {
-  border-color: #93b5a6;
+  border-color: color-mix(in srgb, var(--brand) 48%, var(--line));
   color: var(--brand-strong);
-  background: var(--brand-soft);
-  box-shadow: inset 3px 0 0 var(--brand);
+  background: color-mix(in srgb, var(--brand-soft) 84%, var(--surface));
+  box-shadow:
+    inset 3px 0 0 var(--brand),
+    0 8px 18px rgba(31, 75, 59, 0.08);
 }
 
 .mode-switch__item span {
@@ -434,12 +463,12 @@ watch(
 }
 
 .mode-switch__item strong {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .mode-switch__item small {
   color: inherit;
-  font-size: 10px;
+  font-size: 11px;
   opacity: 0.78;
 }
 
@@ -459,8 +488,8 @@ watch(
 .form-section {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px 0;
+  gap: 13px;
+  padding: 18px 0;
   border-top: 1px solid var(--line);
 }
 
@@ -470,16 +499,18 @@ watch(
 
 .form-section h3 {
   color: var(--ink-strong);
-  font-size: 12px;
+  font-family: var(--font-serif, "Noto Serif SC", serif);
+  font-size: 13px;
   font-weight: 750;
+  letter-spacing: 0.025em;
 }
 
 .form-section--billing {
-  margin: 0 -10px;
-  padding: 16px 10px;
-  border: 1px solid #dbe6dd;
-  border-radius: var(--radius);
-  background: #f5f8f4;
+  margin: 0 -12px;
+  padding: 18px 12px;
+  border: 1px solid color-mix(in srgb, var(--brand) 18%, var(--line));
+  border-radius: var(--radius-lg, 14px);
+  background: color-mix(in srgb, var(--brand-soft) 42%, var(--surface));
 }
 
 .form-grid {
@@ -535,7 +566,7 @@ watch(
 
 .drawer-enter-active .drawer,
 .drawer-leave-active .drawer {
-  transition: transform 180ms ease;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .drawer-enter-from,
@@ -545,6 +576,19 @@ watch(
 
 .drawer-enter-from .drawer,
 .drawer-leave-to .drawer {
-  transform: translateX(24px);
+  transform: translateX(32px) scale(0.985);
+}
+
+@media (max-height: 740px) {
+  .drawer {
+    top: 8px;
+    right: 8px;
+    bottom: 8px;
+    grid-template-rows: 68px minmax(0, 1fr) 60px;
+  }
+
+  .drawer__body {
+    padding-top: 14px;
+  }
 }
 </style>

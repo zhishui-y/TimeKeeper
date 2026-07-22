@@ -137,7 +137,8 @@ const emit = defineEmits<{
 .cell-stack strong {
   display: block;
   color: var(--ink-strong);
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .cell-stack {
@@ -149,7 +150,7 @@ const emit = defineEmits<{
 
 .cell-stack span {
   color: var(--ink-muted);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .mode-mark {
@@ -157,14 +158,14 @@ const emit = defineEmits<{
   align-items: center;
   gap: 4px;
   color: var(--brand-strong);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
 }
 
 .mode-mark::before {
-  width: 6px;
-  height: 6px;
-  border-radius: 2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 3px;
   background: var(--brand);
   content: "";
 }
@@ -188,13 +189,23 @@ const emit = defineEmits<{
 }
 
 .row-actions .icon-button {
-  width: 27px;
-  height: 27px;
-  flex-basis: 27px;
+  width: 29px;
+  height: 29px;
+  flex-basis: 29px;
 }
 
 .row-actions .action-danger:hover {
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+.appointment-table tbody tr {
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.appointment-table tbody tr:hover {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--brand) 72%, transparent);
 }
 </style>

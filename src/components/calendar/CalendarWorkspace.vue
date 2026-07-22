@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Info, RotateCcw } from "@lucide/vue";
-import { shallowRef, watch } from "vue";
+import { onBeforeUnmount, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAppointments } from "../../composables/useAppointments";
 import { useUiStore } from "../../stores/ui";
@@ -66,6 +66,10 @@ watch(
   () => ui.dataRevision,
   () => void load(),
 );
+
+onBeforeUnmount(() => {
+  if (undoTimer !== undefined) globalThis.clearTimeout(undoTimer);
+});
 </script>
 
 <template>
@@ -102,26 +106,46 @@ watch(
 .calendar-workspace {
   position: relative;
   height: 100%;
+  min-height: 0;
+  gap: 12px;
+}
+
+.calendar-workspace > .page-toolbar {
+  min-height: 42px;
 }
 
 .calendar-legend {
   display: flex;
+  min-width: 0;
   align-items: center;
-  gap: 16px;
+  gap: 8px;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .calendar-legend span {
   display: inline-flex;
+  min-height: 30px;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  box-shadow: var(--shadow-control, none);
+  white-space: nowrap;
+}
+
+.calendar-legend span:last-child {
+  color: var(--ink);
+  background: var(--surface-soft);
 }
 
 .legend-dot {
   width: 8px;
   height: 8px;
-  border-radius: 2px;
+  flex: 0 0 8px;
+  border-radius: 3px;
 }
 
 .legend-dot--business {
@@ -133,6 +157,7 @@ watch(
 }
 
 .calendar-workspace__board {
+  min-height: 0;
   flex: 1;
 }
 
@@ -145,12 +170,12 @@ watch(
   align-items: center;
   gap: 7px;
   padding: 0 13px;
-  border: 1px solid #adc6b9;
-  border-radius: var(--radius);
+  border: 1px solid var(--brand-border, var(--line-strong));
+  border-radius: var(--radius-sm, var(--radius));
   color: var(--brand-strong);
-  background: #fff;
+  background: var(--surface);
   box-shadow: var(--shadow);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 650;
   cursor: pointer;
 }
@@ -166,5 +191,20 @@ watch(
 .undo-leave-to {
   opacity: 0;
   transform: translateY(6px);
+}
+
+@media (max-width: 1180px) {
+  .calendar-workspace {
+    gap: 10px;
+  }
+
+  .calendar-legend {
+    gap: 6px;
+  }
+
+  .calendar-legend span {
+    padding-inline: 7px;
+    font-size: 11px;
+  }
 }
 </style>

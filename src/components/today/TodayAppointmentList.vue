@@ -98,46 +98,57 @@ const emit = defineEmits<{
 
 <style scoped>
 .today-list {
+  display: grid;
   min-height: 0;
+  grid-template-rows: 54px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg, var(--radius));
   background: var(--surface);
+  box-shadow: var(--shadow-sm, var(--shadow-soft));
 }
 
 .today-list__header {
   display: flex;
-  height: 54px;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 18px;
   border-bottom: 1px solid var(--line);
+  background: linear-gradient(90deg, var(--surface-soft), var(--surface));
 }
 
 .today-list__header h2 {
-  margin-top: 1px;
+  margin-top: 2px;
   color: var(--ink-strong);
-  font-size: 14px;
+  font-size: 16px;
+  line-height: 1.2;
 }
 
 .today-list__header > span {
-  color: var(--ink-muted);
-  font-size: 11px;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .today-list__body {
-  max-height: 100%;
-  overflow-y: auto;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .appointment-row {
   display: grid;
-  min-height: 68px;
-  grid-template-columns: 90px 4px minmax(140px, 1fr) 90px 66px;
+  min-height: 72px;
+  grid-template-columns: 96px 4px minmax(140px, 1fr) 96px 72px;
   align-items: center;
-  gap: 11px;
-  padding: 8px 10px 8px 16px;
-  border-bottom: 1px solid #edf0ec;
+  gap: 12px;
+  padding: 9px 11px 9px 18px;
+  border-bottom: 1px solid var(--line);
+  transition: background-color 140ms ease;
 }
 
 .appointment-row:last-child {
@@ -145,20 +156,22 @@ const emit = defineEmits<{
 }
 
 .appointment-row:hover {
-  background: #fafbf9;
+  background: var(--surface-soft);
 }
 
 .appointment-row__time {
   color: var(--ink-strong);
-  font-size: 12px;
-  font-weight: 650;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
 .appointment-row__marker {
   width: 3px;
-  height: 34px;
-  border-radius: 2px;
+  height: 38px;
+  border-radius: 999px;
   background: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-soft) 72%, transparent);
 }
 
 .appointment-row__marker.is-entertainment {
@@ -179,7 +192,8 @@ const emit = defineEmits<{
 .appointment-row__title strong {
   overflow: hidden;
   color: var(--ink-strong);
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -188,7 +202,7 @@ const emit = defineEmits<{
   margin-top: 4px;
   overflow: hidden;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -202,24 +216,47 @@ const emit = defineEmits<{
 
 .appointment-row__amount strong {
   color: var(--ink-strong);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .appointment-row__amount > span {
   color: var(--blue);
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .appointment-row__actions {
   display: flex;
+  gap: 2px;
   justify-content: flex-end;
 }
 
 .today-list__empty {
   display: grid;
-  min-height: 130px;
+  min-height: 0;
   place-items: center;
   color: var(--ink-muted);
-  font-size: 12px;
+  background: radial-gradient(circle at center, var(--brand-soft), transparent 66%);
+  font-size: 13px;
+}
+
+@media (max-width: 1180px) {
+  .today-list__header {
+    padding-inline: 15px;
+  }
+
+  .appointment-row {
+    min-height: 68px;
+    grid-template-columns: 90px 4px minmax(120px, 1fr) 88px 68px;
+    gap: 9px;
+    padding-inline: 15px 9px;
+  }
+}
+
+@media (max-height: 760px) {
+  .appointment-row {
+    min-height: 66px;
+    padding-block: 7px;
+  }
 }
 </style>

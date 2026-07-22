@@ -98,19 +98,43 @@ watch(
 <style scoped>
 .appointments-workspace {
   height: 100%;
-  gap: 10px;
+  gap: 12px;
 }
 
 .appointments-workspace__toolbar {
-  flex: 0 0 38px;
+  min-height: 54px;
+  flex: 0 0 54px;
+  padding: 7px 9px 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg, 14px);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: var(--shadow-xs, 0 3px 14px rgba(31, 49, 42, 0.04));
 }
 
 .result-line {
   display: flex;
-  min-height: 24px;
+  min-height: 20px;
   align-items: center;
   justify-content: space-between;
+  padding: 0 4px;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 11px;
+}
+
+.result-line span:first-child {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+@media (max-width: 1260px) {
+  .appointments-workspace__toolbar {
+    min-height: 96px;
+    flex-basis: 96px;
+    align-items: flex-start;
+  }
+
+  .appointments-workspace__toolbar > .button {
+    margin-top: 1px;
+  }
 }
 </style>

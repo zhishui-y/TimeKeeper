@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Save, X } from "@lucide/vue";
-import { reactive, shallowRef, watch } from "vue";
+import { reactive, shallowRef, useTemplateRef, watch } from "vue";
+import { useModalFocus } from "../../composables/useModalFocus";
 import type { AccountProfile, AccountProfileInput } from "../../types/domain";
 
 interface Draft {
@@ -47,6 +48,7 @@ const draft = reactive<Draft>({
   needsReview: false,
 });
 const errors = shallowRef<string[]>([]);
+const drawerRef = useTemplateRef("accountDrawer");
 
 function reset(): void {
   Object.assign(draft, {
@@ -107,6 +109,12 @@ watch(
   },
   { immediate: true },
 );
+
+useModalFocus({
+  open: () => props.open,
+  container: drawerRef,
+  close: () => emit("close"),
+});
 </script>
 
 <template>
@@ -119,11 +127,20 @@ watch(
           aria-label="关闭账号编辑"
           @click="emit('close')"
         />
-        <aside class="account-drawer" aria-label="账号档案编辑">
+        <aside
+          ref="accountDrawer"
+          class="account-drawer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="account-drawer-title"
+          tabindex="-1"
+        >
           <header class="account-drawer__header">
             <div>
               <span class="section-kicker">ACCOUNT PROFILE</span>
-              <h2>{{ profile ? "编辑账号档案" : "新建账号档案" }}</h2>
+              <h2 id="account-drawer-title">
+                {{ profile ? "编辑账号档案" : "新建账号档案" }}
+              </h2>
             </div>
             <button class="icon-button" type="button" aria-label="关闭" @click="emit('close')">
               <X :size="18" />
@@ -238,20 +255,25 @@ watch(
   inset: 0;
   width: 100%;
   border: 0;
-  background: rgba(31, 42, 38, 0.28);
+  background: rgba(20, 31, 27, 0.42);
+  backdrop-filter: blur(4px);
 }
 
 .account-drawer {
   position: absolute;
-  top: 0;
-  right: 0;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
   display: grid;
-  width: min(520px, 48vw);
-  height: 100%;
-  grid-template-rows: 72px minmax(0, 1fr) 64px;
-  border-left: 1px solid var(--line-strong);
-  background: #fbfcfa;
-  box-shadow: -18px 0 42px rgba(24, 36, 31, 0.16);
+  width: min(540px, calc(100vw - 32px));
+  height: auto;
+  grid-template-rows: 78px minmax(0, 1fr) 70px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--brand) 18%, var(--line));
+  border-radius: var(--radius-lg, 18px);
+  background: var(--canvas, #f7f5ef);
+  box-shadow: -24px 16px 64px rgba(18, 34, 28, 0.24);
+  will-change: transform;
 }
 
 .account-drawer__header,
@@ -259,20 +281,22 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 22px;
+  padding: 0 24px;
   border-bottom: 1px solid var(--line);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
 }
 
 .account-drawer__header h2 {
   margin-top: 2px;
   color: var(--ink-strong);
-  font-size: 18px;
+  font-family: var(--font-serif, "Noto Serif SC", serif);
+  font-size: 20px;
+  letter-spacing: 0.02em;
 }
 
 .account-drawer__body {
   overflow-y: auto;
-  padding: 8px 22px 26px;
+  padding: 8px 24px 28px;
 }
 
 .account-drawer__footer {
@@ -285,8 +309,8 @@ watch(
 .account-section {
   display: flex;
   flex-direction: column;
-  gap: 11px;
-  padding: 17px 0;
+  gap: 12px;
+  padding: 19px 0;
   border-bottom: 1px solid var(--line);
 }
 
@@ -296,7 +320,9 @@ watch(
 
 .account-section h3 {
   color: var(--ink-strong);
-  font-size: 12px;
+  font-family: var(--font-serif, "Noto Serif SC", serif);
+  font-size: 13px;
+  letter-spacing: 0.025em;
 }
 
 .account-grid {
@@ -337,7 +363,7 @@ watch(
 
 .account-drawer-enter-active .account-drawer,
 .account-drawer-leave-active .account-drawer {
-  transition: transform 180ms ease;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .account-drawer-enter-from,
@@ -347,6 +373,15 @@ watch(
 
 .account-drawer-enter-from .account-drawer,
 .account-drawer-leave-to .account-drawer {
-  transform: translateX(24px);
+  transform: translateX(32px) scale(0.985);
+}
+
+@media (max-height: 740px) {
+  .account-drawer {
+    top: 8px;
+    right: 8px;
+    bottom: 8px;
+    grid-template-rows: 68px minmax(0, 1fr) 60px;
+  }
 }
 </style>

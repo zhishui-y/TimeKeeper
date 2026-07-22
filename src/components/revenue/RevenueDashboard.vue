@@ -1,12 +1,17 @@
 <script setup lang="ts">
 import { CalendarRange, CheckCircle2, Clock3, Coins, Gauge } from "@lucide/vue";
 import { endOfMonth, format, startOfMonth } from "date-fns";
-import { computed, reactive, watch } from "vue";
+import { computed, defineAsyncComponent, reactive, watch } from "vue";
 import { useRevenue } from "../../composables/useRevenue";
 import { useUiStore } from "../../stores/ui";
 import type { ReportGranularity } from "../../types/domain";
 import { formatCurrency } from "../../utils/formatters";
-import RevenueChart from "./RevenueChart.vue";
+
+const RevenueChart = defineAsyncComponent({
+  loader: () => import("./RevenueChart.vue"),
+  delay: 180,
+  timeout: 20_000,
+});
 
 const today = new Date();
 const range = reactive({
@@ -24,6 +29,11 @@ const completionRate = computed(() => {
 
 const maxPayment = computed(() =>
   Math.max(...(summary.value?.paymentMethods.map((item) => item.amountMinor) ?? [1]), 1),
+);
+
+const chartDescription = computed(
+  () =>
+    `收益与工时趋势，${summary.value?.from ?? range.from} 至 ${summary.value?.to ?? range.to}，共 ${summary.value?.points.length ?? 0} 个数据点`,
 );
 
 watch(
@@ -100,7 +110,7 @@ watch(
           </div>
           <span>{{ summary?.from }} — {{ summary?.to }}</span>
         </header>
-        <RevenueChart :points="summary?.points ?? []" />
+        <RevenueChart role="img" :aria-label="chartDescription" :points="summary?.points ?? []" />
       </div>
       <aside class="payment-panel">
         <header class="panel-header">
@@ -129,7 +139,7 @@ watch(
 <style scoped>
 .revenue-dashboard {
   height: 100%;
-  gap: 12px;
+  gap: 14px;
 }
 
 .revenue-toolbar__range {
@@ -137,7 +147,7 @@ watch(
   align-items: center;
   gap: 7px;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .revenue-toolbar__range > svg {
@@ -150,13 +160,10 @@ watch(
 
 .revenue-metrics {
   display: grid;
-  min-height: 104px;
-  flex: 0 0 104px;
+  min-height: 110px;
+  flex: 0 0 110px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
+  gap: 12px;
 }
 
 .revenue-metric {
@@ -165,13 +172,13 @@ watch(
   grid-template-rows: auto auto auto;
   align-content: center;
   column-gap: 9px;
-  padding: 14px 16px;
-  border-right: 1px solid var(--line);
+  padding: 15px 16px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg, 18px);
   color: var(--blue);
-}
-
-.revenue-metric:last-child {
-  border-right: 0;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
 }
 
 .revenue-metric > svg {
@@ -181,24 +188,27 @@ watch(
 
 .revenue-metric span {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .revenue-metric strong {
   margin-top: 2px;
   color: var(--ink-strong);
-  font-size: 20px;
+  font-size: 22px;
 }
 
 .revenue-metric small {
   margin-top: 2px;
-  color: #9aa39f;
-  font-size: 9px;
+  color: var(--ink-muted);
+  font-size: 10px;
 }
 
 .revenue-metric--primary {
   color: var(--brand);
-  background: #f5f8f4;
+  border-color: color-mix(in srgb, var(--brand) 22%, var(--line));
+  background:
+    radial-gradient(circle at 100% 0%, rgba(45, 104, 84, 0.12), transparent 42%),
+    color-mix(in srgb, var(--brand-soft) 40%, var(--surface));
 }
 
 .revenue-metric--pending {
@@ -209,44 +219,46 @@ watch(
   display: grid;
   min-height: 0;
   flex: 1;
-  grid-template-columns: minmax(0, 1fr) 270px;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 14px;
 }
 
 .chart-panel,
 .payment-panel {
   display: grid;
   min-height: 0;
-  grid-template-rows: 54px minmax(0, 1fr);
+  grid-template-rows: 60px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg, 18px);
   background: var(--surface);
+  box-shadow: var(--shadow-soft);
 }
 
 .panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 15px;
+  padding: 0 17px;
   border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-soft) 82%, transparent);
 }
 
 .panel-header h2 {
   margin-top: 1px;
   color: var(--ink-strong);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .panel-header > span {
   color: var(--ink-muted);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .payment-list {
   min-height: 0;
   overflow-y: auto;
-  padding: 14px;
+  padding: 16px;
 }
 
 .payment-row {
@@ -262,16 +274,16 @@ watch(
 
 .payment-row__label strong {
   color: var(--ink-strong);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .payment-row__label span {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .payment-row__track {
-  height: 5px;
+  height: 7px;
   overflow: hidden;
   border-radius: 2px;
   background: #edf0ec;
@@ -296,6 +308,25 @@ watch(
   display: grid;
   place-items: center;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
+}
+
+@media (max-width: 1180px) {
+  .revenue-metrics {
+    gap: 9px;
+  }
+
+  .revenue-metric {
+    padding-inline: 12px;
+  }
+
+  .revenue-metric strong {
+    font-size: 19px;
+  }
+
+  .revenue-body {
+    grid-template-columns: minmax(0, 1fr) 230px;
+    gap: 10px;
+  }
 }
 </style>

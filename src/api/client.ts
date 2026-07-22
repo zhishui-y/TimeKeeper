@@ -11,7 +11,6 @@ import type {
   RevenueSummary,
   VaultStatus,
 } from "../types/domain";
-import { mockApi } from "./mockClient";
 import type { ApiClient } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -92,7 +91,49 @@ const nativeApi: ApiClient = {
   },
 };
 
-export const api: ApiClient = isTauri ? nativeApi : mockApi;
+let mockApiPromise: Promise<ApiClient> | undefined;
+
+function loadMockApi(): Promise<ApiClient> {
+  if (!mockApiPromise) {
+    mockApiPromise = import("./mockClient").then(
+      ({ mockApi }) => mockApi,
+      (cause) => {
+        mockApiPromise = undefined;
+        throw cause;
+      },
+    );
+  }
+  return mockApiPromise;
+}
+
+function createLazyApiClient<T extends object>(shape: T, loader: () => Promise<T>): T {
+  const methodCache = new Map<PropertyKey, (...args: unknown[]) => Promise<unknown>>();
+
+  return new Proxy(shape, {
+    get(target, property, receiver) {
+      const targetValue = Reflect.get(target, property, receiver) as unknown;
+      if (typeof targetValue !== "function") return targetValue;
+
+      let lazyMethod = methodCache.get(property);
+      if (!lazyMethod) {
+        lazyMethod = (...args: unknown[]) =>
+          loader().then((client) => {
+            const implementation = Reflect.get(client, property) as unknown;
+            if (typeof implementation !== "function") {
+              throw new TypeError(`API method ${String(property)} is not available`);
+            }
+            return Reflect.apply(implementation, client, args) as unknown;
+          });
+        methodCache.set(property, lazyMethod);
+      }
+      return lazyMethod;
+    },
+  });
+}
+
+const lazyMockApi = createLazyApiClient(nativeApi, loadMockApi);
+
+export const api: ApiClient = isTauri ? nativeApi : lazyMockApi;
 
 export function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;

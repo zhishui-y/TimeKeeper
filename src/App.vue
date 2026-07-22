@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, shallowRef, watch } from "vue";
+import { computed, defineAsyncComponent, onMounted, onUnmounted, shallowRef, watch } from "vue";
 import { RouterView, useRoute, useRouter } from "vue-router";
 import { api, errorMessage } from "./api/client";
 import AppToast from "./components/common/AppToast.vue";
-import AppointmentDrawer from "./components/appointments/AppointmentDrawer.vue";
 import AppHeader from "./components/layout/AppHeader.vue";
 import AppSidebar from "./components/layout/AppSidebar.vue";
 import VaultGate from "./components/security/VaultGate.vue";
@@ -12,13 +11,24 @@ import { useVault } from "./composables/useVault";
 import { useUiStore } from "./stores/ui";
 import type { AppointmentInput } from "./types/domain";
 
+const AppointmentDrawer = defineAsyncComponent(
+  () => import("./components/appointments/AppointmentDrawer.vue"),
+);
+
 const route = useRoute();
 const router = useRouter();
 const ui = useUiStore();
-const { items: accounts, load: loadAccounts } = useAccounts();
+const {
+  items: accounts,
+  loading: accountsLoading,
+  error: accountsError,
+  load: loadAccounts,
+} = useAccounts({ immediate: false });
 const vault = useVault();
 const vaultReady = shallowRef(false);
 const savingAppointment = shallowRef(false);
+const appointmentDrawerLoaded = shallowRef(false);
+const loadedAccountRevision = shallowRef<number | null>(null);
 let vaultTimer: ReturnType<typeof globalThis.setInterval> | undefined;
 
 const pageTitle = computed(() => String(route.meta.title ?? "时约管家"));
@@ -71,10 +81,19 @@ async function loadAppointmentDefaults(): Promise<void> {
   }
 }
 
-watch(
-  () => ui.accountRevision,
-  () => void loadAccounts(),
-);
+async function ensureAppointmentAccounts(): Promise<void> {
+  const revision = ui.accountRevision;
+  if (loadedAccountRevision.value === revision) return;
+  await loadAccounts();
+  if (!accountsError.value) loadedAccountRevision.value = revision;
+}
+
+watch([() => ui.appointmentDrawerOpen, () => ui.accountRevision], ([open]) => {
+  if (open) {
+    appointmentDrawerLoaded.value = true;
+    void ensureAppointmentAccounts();
+  }
+});
 
 onMounted(async () => {
   await Promise.all([vault.load(), loadAppointmentDefaults()]);
@@ -98,16 +117,22 @@ onUnmounted(() => {
         @open-notification-settings="router.push({ name: 'settings' })"
       />
       <main class="app-content">
-        <RouterView />
+        <RouterView v-slot="{ Component, route: viewRoute }">
+          <Transition name="page" mode="out-in">
+            <component :is="Component" :key="viewRoute.name" />
+          </Transition>
+        </RouterView>
       </main>
     </div>
 
     <AppointmentDrawer
+      v-if="appointmentDrawerLoaded"
       :open="ui.appointmentDrawerOpen"
       :appointment="ui.activeAppointment"
       :requested-date="ui.requestedDate"
       :requested-start-time="ui.requestedStartTime"
       :accounts="accounts"
+      :accounts-loading="accountsLoading"
       :default-reminder-minutes="ui.appointmentDefaultReminderMinutes"
       :saving="savingAppointment"
       @close="ui.closeAppointmentDrawer"
@@ -131,10 +156,12 @@ onUnmounted(() => {
 
 <style scoped>
 .app-shell {
+  position: relative;
   display: flex;
   width: 100%;
   height: 100%;
-  background: #eef1ed;
+  isolation: isolate;
+  background: var(--canvas-deep);
 }
 
 .app-main {
@@ -142,16 +169,37 @@ onUnmounted(() => {
   min-width: 0;
   flex: 1;
   flex-direction: column;
-  background: var(--surface);
+  background: var(--canvas);
 }
 
 .app-content {
+  position: relative;
   min-width: 0;
   min-height: 0;
   flex: 1;
   overflow: auto;
-  padding: 20px 24px 24px;
-  background: #fbfcfa;
+  padding: 22px 26px 26px;
+  background:
+    radial-gradient(circle at 92% 0%, rgba(181, 82, 62, 0.045), transparent 27%),
+    radial-gradient(circle at 5% 100%, rgba(45, 104, 84, 0.055), transparent 32%),
+    linear-gradient(145deg, #f5f4ed 0%, #efefe7 100%);
+}
+
+.page-enter-active,
+.page-leave-active {
+  transition:
+    opacity 170ms ease,
+    transform 170ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
 .toast-enter-active,
@@ -165,5 +213,18 @@ onUnmounted(() => {
 .toast-leave-to {
   opacity: 0;
   transform: translateY(8px);
+}
+
+@media (max-width: 1180px) {
+  .app-content {
+    padding: 18px 20px 20px;
+  }
+}
+
+@media (max-height: 760px) {
+  .app-content {
+    padding-top: 16px;
+    padding-bottom: 18px;
+  }
 }
 </style>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { LockKeyhole, Plus, Search, ShieldCheck, UnlockKeyhole } from "@lucide/vue";
-import { onMounted, shallowRef } from "vue";
+import { onBeforeUnmount, onMounted, shallowRef } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAccounts } from "../../composables/useAccounts";
 import { useVault } from "../../composables/useVault";
@@ -119,6 +119,11 @@ async function lockVault(): Promise<void> {
 }
 
 onMounted(() => void loadVault());
+
+onBeforeUnmount(() => {
+  revealTimers.forEach((timer) => globalThis.clearTimeout(timer));
+  revealTimers.clear();
+});
 </script>
 
 <template>
@@ -214,32 +219,61 @@ onMounted(() => void loadVault());
 <style scoped>
 .accounts-workspace {
   height: 100%;
-  gap: 10px;
+  gap: 12px;
 }
 
 .vault-strip {
+  position: relative;
   display: flex;
-  min-height: 54px;
-  flex: 0 0 54px;
+  min-height: 62px;
+  flex: 0 0 62px;
   align-items: center;
   justify-content: space-between;
-  padding: 0 13px;
-  border: 1px solid #bfd5c8;
-  border-radius: var(--radius);
+  padding: 0 16px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--brand) 24%, var(--line));
+  border-radius: var(--radius-lg, 14px);
   color: var(--brand-strong);
-  background: var(--brand-soft);
+  background:
+    linear-gradient(110deg, color-mix(in srgb, var(--brand-soft) 84%, white), transparent 72%),
+    var(--surface);
+  box-shadow: var(--shadow-sm, 0 8px 24px rgba(31, 49, 42, 0.06));
+}
+
+.vault-strip::after {
+  position: absolute;
+  top: -42px;
+  right: 18%;
+  width: 132px;
+  height: 132px;
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 50%;
+  content: "";
+  pointer-events: none;
 }
 
 .vault-strip.is-locked {
-  border-color: #e1caa0;
+  border-color: color-mix(in srgb, var(--amber) 30%, var(--line));
   color: #815414;
-  background: var(--amber-soft);
+  background:
+    linear-gradient(110deg, color-mix(in srgb, var(--amber-soft) 86%, white), transparent 72%),
+    var(--surface);
 }
 
 .vault-strip__state {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 11px;
+}
+
+.vault-strip__state > svg {
+  box-sizing: content-box;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, white 72%, transparent);
 }
 
 .vault-strip__state div {
@@ -249,12 +283,13 @@ onMounted(() => void loadVault());
 }
 
 .vault-strip__state strong {
-  font-size: 11px;
+  font-size: 12px;
+  letter-spacing: 0.01em;
 }
 
 .vault-strip__state span {
-  font-size: 9px;
-  opacity: 0.76;
+  font-size: 10px;
+  opacity: 0.72;
 }
 
 .vault-strip__unlock {
@@ -274,12 +309,21 @@ onMounted(() => void loadVault());
   gap: 9px;
 }
 
+.accounts-workspace > .page-toolbar {
+  min-height: 54px;
+  padding: 7px 9px 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg, 14px);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: var(--shadow-xs, 0 3px 14px rgba(31, 49, 42, 0.04));
+}
+
 .review-filter {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .review-filter input {
@@ -288,10 +332,25 @@ onMounted(() => void loadVault());
 
 .account-summary {
   display: flex;
-  min-height: 22px;
+  min-height: 20px;
+  padding: 0 4px;
   align-items: center;
   gap: 14px;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 11px;
+}
+
+@media (max-width: 1180px) {
+  .vault-strip {
+    padding-inline: 13px;
+  }
+
+  .vault-strip__state span {
+    display: none;
+  }
+
+  .account-filters .search-field {
+    width: 210px;
+  }
 }
 </style>

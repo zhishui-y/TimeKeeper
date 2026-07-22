@@ -79,37 +79,40 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
 
 <style scoped>
 .week-schedule {
+  display: grid;
   min-height: 0;
+  grid-template-rows: 58px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg, var(--radius));
   background: var(--surface);
+  box-shadow: var(--shadow-sm, var(--shadow-soft));
 }
 
 .week-schedule__header {
   display: flex;
-  height: 56px;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 18px;
   border-bottom: 1px solid var(--line);
+  background: linear-gradient(90deg, var(--surface-soft), var(--surface));
 }
 
 .week-schedule__header h2 {
   margin-top: 2px;
   color: var(--ink-strong);
-  font-size: 14px;
+  font-size: 16px;
+  line-height: 1.2;
 }
 
 .week-schedule__hint {
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .week-grid {
   display: grid;
-  height: calc(100% - 56px);
-  min-height: 128px;
+  min-height: 0;
   grid-template-columns: repeat(7, minmax(0, 1fr));
 }
 
@@ -119,11 +122,12 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
   flex-direction: column;
   padding: 0;
   border: 0;
-  border-right: 1px solid #e8ebe7;
+  border-right: 1px solid var(--line);
   color: inherit;
   background: transparent;
   text-align: left;
   cursor: pointer;
+  transition: background-color 140ms ease;
 }
 
 .week-day:last-child {
@@ -131,101 +135,125 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
 }
 
 .week-day:hover {
-  background: #fbfcfa;
+  background: var(--surface-soft);
 }
 
 .week-day.is-today {
-  background: #f5f8f4;
+  background: linear-gradient(
+    180deg,
+    var(--brand-soft),
+    color-mix(in srgb, var(--surface) 90%, var(--brand-soft))
+  );
 }
 
 .week-day__heading {
   display: flex;
-  height: 42px;
+  height: 44px;
+  flex: 0 0 44px;
+  width: 100%;
   align-items: center;
   justify-content: space-between;
-  padding: 0 9px;
-  width: 100%;
+  padding: 0 10px;
   border: 0;
-  border-bottom: 1px solid #edf0ec;
+  border-bottom: 1px solid var(--line);
   color: inherit;
   background: transparent;
   cursor: pointer;
 }
 
 .week-day__heading span {
-  color: var(--ink-muted);
-  font-size: 11px;
-}
-
-.week-day__heading strong {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  border-radius: 50%;
-  color: var(--ink-strong);
-  font-family: "Bahnschrift", sans-serif;
+  color: var(--ink);
   font-size: 12px;
   font-weight: 650;
 }
 
+.week-day__heading strong {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--ink-strong);
+  font-family: "Bahnschrift", var(--font-sans);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .is-today .week-day__heading strong {
-  color: #fff;
+  color: #fffaf0;
   background: var(--brand);
+  box-shadow: 0 5px 12px color-mix(in srgb, var(--brand) 24%, transparent);
 }
 
 .week-day__track {
   display: flex;
   min-width: 0;
+  min-height: 0 !important;
   flex: 1;
   flex-direction: column;
-  gap: 5px;
-  padding: 8px 7px;
+  gap: 6px;
+  overflow: hidden;
+  padding: 9px 8px;
 }
 
 .schedule-chip {
   display: flex;
   width: 100%;
   min-width: 0;
-  height: 31px;
+  height: 34px;
+  flex: 0 0 34px;
   align-items: center;
-  gap: 5px;
-  padding: 0 6px;
+  gap: 6px;
+  padding: 0 8px;
   overflow: hidden;
-  border: 1px solid #c2d6ca;
+  border: 1px solid var(--brand-border, var(--line-strong));
   border-left: 3px solid var(--brand);
-  border-radius: 3px;
+  border-radius: 8px;
   color: var(--brand-strong);
   background: var(--brand-soft);
+  box-shadow: var(--shadow-control, none);
   cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.schedule-chip:hover {
+  border-color: var(--brand);
+  box-shadow: 0 5px 12px color-mix(in srgb, var(--brand) 12%, transparent);
+  transform: translateY(-1px);
 }
 
 .schedule-chip--entertainment {
-  border-color: #c8d7e0;
+  border-color: var(--blue-border, var(--line-strong));
   border-left-color: var(--blue);
-  color: #3f6278;
+  color: var(--blue);
   background: var(--blue-soft);
 }
 
 .schedule-chip.is-cancelled {
   border-color: var(--line);
-  border-left-color: #a0a9a5;
-  color: #7f8885;
-  background: #f1f3f0;
+  border-left-color: var(--ink-faint, var(--ink-muted));
+  color: var(--ink-muted);
+  background: var(--neutral-soft, var(--surface-soft));
+  box-shadow: none;
   text-decoration: line-through;
 }
 
 .schedule-chip__time {
   flex: 0 0 auto;
-  font-family: "Bahnschrift", sans-serif;
-  font-size: 10px;
+  font-family: "Bahnschrift", var(--font-sans);
+  font-size: 11px;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
 
 .schedule-chip strong {
   min-width: 0;
   overflow: hidden;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -235,12 +263,14 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
   align-self: center;
   margin-top: 2px;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 650;
 }
 
 .week-day__empty {
   margin: auto;
-  color: #74807b;
+  color: var(--ink-muted);
+  font-weight: 500;
 }
 
 .week-day__more--compact {
@@ -250,11 +280,12 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
 @media (max-height: 760px) {
   .week-day__track {
     gap: 4px;
-    padding-block: 6px;
+    padding-block: 7px;
   }
 
   .schedule-chip {
-    height: 30px;
+    height: 32px;
+    flex-basis: 32px;
   }
 
   .schedule-chip:nth-of-type(n + 3),
@@ -264,6 +295,25 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
 
   .week-day__more--compact {
     display: inline;
+  }
+}
+
+@media (max-width: 1180px) {
+  .week-schedule__header {
+    padding-inline: 15px;
+  }
+
+  .week-day__heading {
+    padding-inline: 8px;
+  }
+
+  .week-day__track {
+    padding-inline: 6px;
+  }
+
+  .schedule-chip {
+    gap: 5px;
+    padding-inline: 6px;
   }
 }
 </style>

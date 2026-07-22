@@ -32,60 +32,94 @@ const icon = computed(() => {
 .toast {
   position: fixed;
   z-index: 80;
-  right: 24px;
-  bottom: 22px;
+  right: 26px;
+  bottom: 24px;
   display: grid;
-  width: min(420px, calc(100vw - 48px));
-  min-height: 46px;
-  grid-template-columns: 18px 1fr 28px;
+  width: min(420px, calc(100vw - 52px));
+  min-height: 52px;
+  grid-template-columns: 20px minmax(0, 1fr) 30px;
   align-items: center;
-  gap: 9px;
-  padding: 8px 9px 8px 13px;
+  gap: 10px;
+  padding: 9px 9px 9px 16px;
+  overflow: hidden;
   border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
+  border-radius: 14px;
   color: var(--ink);
-  background: #fff;
+  background: rgba(255, 253, 248, 0.96);
   box-shadow: var(--shadow);
   font-size: 12px;
-  animation: toast-in 180ms ease-out;
+  line-height: 1.5;
+  backdrop-filter: blur(14px);
+}
+
+.toast::before {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--blue);
+  content: "";
+}
+
+.toast > svg {
+  color: var(--blue);
 }
 
 .toast--success {
-  border-color: #b7d3c3;
-  color: var(--brand-strong);
+  border-color: var(--brand-border);
+}
+
+.toast--success::before {
+  background: var(--brand);
+}
+
+.toast--success > svg {
+  color: var(--brand);
 }
 
 .toast--warning {
-  border-color: #e3c999;
-  color: #835313;
+  border-color: var(--amber-border);
+}
+
+.toast--warning::before {
+  background: var(--amber);
+}
+
+.toast--warning > svg {
+  color: var(--amber);
 }
 
 .toast--danger {
-  border-color: #e2b7ae;
-  color: #943c2c;
+  border-color: #dfb8ae;
+}
+
+.toast--danger::before {
+  background: var(--danger);
+}
+
+.toast--danger > svg {
+  color: var(--danger);
 }
 
 .toast__close {
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   place-items: center;
   border: 0;
-  border-radius: 4px;
-  color: currentColor;
+  border-radius: 9px;
+  color: var(--ink-muted);
   background: transparent;
   cursor: pointer;
-  opacity: 0.7;
+  transition:
+    color 140ms ease,
+    background-color 140ms ease;
 }
 
-@keyframes toast-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.toast__close:hover {
+  color: var(--ink-strong);
+  background: var(--surface-soft);
 }
 </style>

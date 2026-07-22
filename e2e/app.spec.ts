@@ -16,7 +16,7 @@ async function createBusinessAppointment(
   draft: BusinessAppointmentDraft,
 ): Promise<void> {
   await page.getByRole("button", { name: "新建预约" }).click();
-  const drawer = page.getByRole("complementary", { name: "预约编辑" });
+  const drawer = page.getByRole("dialog", { name: /新建预约|编辑预约/ });
   await expect(drawer).toBeVisible();
   await drawer.getByLabel("日期 *").fill(serviceDate);
   await drawer.getByLabel("开始时间").fill(draft.startTime);
@@ -67,6 +67,17 @@ test("核心页面在桌面窗口中可访问且没有横向溢出", async ({ pa
   });
   expect(weekContentIsClipped).toBe(false);
 
+  const lastTodayAppointment = page.locator(".today-list .appointment-row").last();
+  if (await lastTodayAppointment.count()) {
+    await lastTodayAppointment.scrollIntoViewIfNeeded();
+    const lastRowIsVisible = await lastTodayAppointment.evaluate((row) => {
+      const body = row.closest<HTMLElement>(".today-list__body");
+      if (!body) return false;
+      return row.getBoundingClientRect().bottom <= body.getBoundingClientRect().bottom + 0.5;
+    });
+    expect(lastRowIsVisible).toBe(true);
+  }
+
   const routes = [
     ["排班日历", "排班日历"],
     ["预约记录", "预约记录"],
@@ -78,6 +89,22 @@ test("核心页面在桌面窗口中可访问且没有横向溢出", async ({ pa
   for (const [linkName, headingName] of routes) {
     await page.getByRole("link", { name: linkName }).click();
     await expect(page.getByRole("heading", { name: headingName, level: 1 })).toBeVisible();
+    if (linkName === "预约记录") {
+      await expect(page.getByLabel("关联账号")).toBeVisible();
+    }
+    if (linkName === "数据与设置") {
+      const backup = page.locator(".settings-section--backup");
+      const notifications = page.locator(".settings-section--notifications");
+      await expect(backup).toBeVisible();
+      await expect(notifications).toBeVisible();
+      const [backupBox, notificationsBox] = await Promise.all([
+        backup.boundingBox(),
+        notifications.boundingBox(),
+      ]);
+      expect(backupBox).not.toBeNull();
+      expect(notificationsBox).not.toBeNull();
+      expect(backupBox!.y + backupBox!.height).toBeLessThanOrEqual(notificationsBox!.y);
+    }
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -90,6 +117,26 @@ test("核心页面在桌面窗口中可访问且没有横向溢出", async ({ pa
   await expect(page.getByRole("button", { name: "从备份恢复" })).toBeVisible();
 
   expect(consoleErrors).toEqual([]);
+});
+
+test("预约抽屉圈定键盘焦点并可用 Escape 关闭", async ({ page }) => {
+  await page.goto("/");
+  const trigger = page.getByRole("button", { name: "新建预约", exact: true });
+  await trigger.click();
+
+  const drawer = page.getByRole("dialog", { name: "新建预约" });
+  await expect(drawer).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => Boolean(document.querySelector<HTMLElement>("#app")?.inert)))
+    .toBe(true);
+  expect(await drawer.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+
+  for (let index = 0; index < 5; index += 1) await page.keyboard.press("Tab");
+  expect(await drawer.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+
+  await page.keyboard.press("Escape");
+  await expect(drawer).toBeHidden();
+  await expect(trigger).toBeFocused();
 });
 
 test("娱乐预约不会显示账单字段", async ({ page }) => {
@@ -147,7 +194,7 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
   await expect(targetRow).toContainText("待结算");
 
   await targetRow.getByRole("button", { name: "编辑结算" }).click();
-  const settlementDrawer = page.getByRole("complementary", { name: "预约编辑" });
+  const settlementDrawer = page.getByRole("dialog", { name: "编辑预约" });
   await settlementDrawer.getByLabel("结算状态").selectOption("settled");
   await settlementDrawer.getByLabel("收款方式").fill("微信");
   await settlementDrawer.getByRole("button", { name: "保存预约" }).click();
