@@ -33,6 +33,8 @@ export interface ApiClient {
   updateAccountProfile(id: string, input: AccountProfileInput): Promise<AccountProfile>;
   deleteAccountProfile(id: string): Promise<void>;
   deleteAccountProfiles(ids: string[]): Promise<number>;
+  reorderAccountProfiles(ids: string[]): Promise<void>;
+  copyAccountName(id: string): Promise<void>;
 
   vaultStatus(): Promise<VaultStatus>;
   initializeVault(password: string): Promise<VaultStatus>;

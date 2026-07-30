@@ -27,6 +27,8 @@ do not block writes.
 - `update_account_profile(id, input) -> AccountProfile`
 - `delete_account_profile(id) -> void`
 - `delete_account_profiles(ids) -> number`
+- `reorder_account_profiles(ids) -> void`
+- `copy_account_name(id) -> void`
 - `vault_status() -> VaultStatus`
 - `initialize_vault(password) -> VaultStatus`
 - `unlock_vault(password) -> VaultStatus`

@@ -437,6 +437,15 @@ where
         .map_err(|error| error.to_string())
 }
 
+pub(crate) async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
+    run_blocking_vault_operation(move || {
+        Clipboard::new()
+            .and_then(|mut clipboard| clipboard.set_text(text))
+            .map_err(|error| VaultError::Clipboard(error.to_string()))
+    })
+    .await
+}
+
 #[tauri::command]
 pub fn lock_vault(state: State<'_, VaultState>) -> Result<VaultStatus, String> {
     state.lock().map_err(|error| error.to_string())

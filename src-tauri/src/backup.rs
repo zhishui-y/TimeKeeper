@@ -52,7 +52,7 @@ struct RequiredColumn {
     primary_key: i64,
 }
 
-const ACCOUNT_PROFILE_COLUMNS: [RequiredColumn; 15] = [
+const ACCOUNT_PROFILE_COLUMNS: [RequiredColumn; 16] = [
     required_column("id", "TEXT", true, None, 1),
     required_column("contact_name", "TEXT", false, None, 0),
     required_column("server", "TEXT", false, None, 0),
@@ -68,6 +68,7 @@ const ACCOUNT_PROFILE_COLUMNS: [RequiredColumn; 15] = [
     required_column("import_fingerprint", "TEXT", false, None, 0),
     required_column("created_at", "TEXT", true, None, 0),
     required_column("updated_at", "TEXT", true, None, 0),
+    required_column("sort_order", "INTEGER", true, Some("0"), 0),
 ];
 
 const APPOINTMENT_COLUMNS: [RequiredColumn; 19] = [
@@ -1090,6 +1091,7 @@ async fn validate_database_constraints(
             "check(length(trim(account_name))>0)",
             "check(current_scoreisnullorcurrent_score>=0)",
             "check(highest_scoreisnullorhighest_score>=0)",
+            "check(sort_order>=0)",
         ],
     )
     .await?;
@@ -1296,9 +1298,11 @@ async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(),
             BackupError::InvalidBackup(format!("账号档案记录无法读取：{error}"))
         })?;
         let needs_review: i64 = row.try_get("needs_review").map_err(database_schema_error)?;
+        let sort_order: i64 = row.try_get("sort_order").map_err(database_schema_error)?;
         if profile.id.trim().is_empty()
             || profile.account_name.trim().is_empty()
             || !matches!(needs_review, 0 | 1)
+            || sort_order < 0
             || profile.current_score.is_some_and(|value| value < 0)
             || profile.highest_score.is_some_and(|value| value < 0)
         {

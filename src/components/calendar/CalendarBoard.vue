@@ -4,11 +4,13 @@ import dayGridPlugin from "@fullcalendar/daygrid";
 import interactionPlugin from "@fullcalendar/interaction";
 import timeGridPlugin from "@fullcalendar/timegrid";
 import zhCnLocale from "@fullcalendar/core/locales/zh-cn";
-import type { CalendarOptions, EventInput } from "@fullcalendar/core";
+import type { CalendarOptions, EventApi, EventInput } from "@fullcalendar/core";
 import { CalendarDays, ChevronLeft, ChevronRight } from "@lucide/vue";
+import { format } from "date-fns";
 import { computed, shallowRef, useTemplateRef } from "vue";
 import type { Appointment } from "../../types/domain";
-import { formatCurrency } from "../../utils/formatters";
+import { calendarAppointmentCounts, calendarEventClassNames } from "../../utils/calendar";
+import CalendarEventCard from "./CalendarEventCard.vue";
 
 interface ReschedulePayload {
   appointment: Appointment;
@@ -31,6 +33,7 @@ const emit = defineEmits<{
 const calendarRef = useTemplateRef<InstanceType<typeof FullCalendar>>("calendar");
 const currentTitle = shallowRef("");
 const activeView = shallowRef("timeGridWeek");
+const appointmentCounts = computed(() => calendarAppointmentCounts(props.appointments));
 
 const events = computed<EventInput[]>(() =>
   props.appointments.map((appointment) => ({
@@ -41,28 +44,21 @@ const events = computed<EventInput[]>(() =>
     allDay: !appointment.startsAt,
     editable: appointment.serviceStatus !== "cancelled",
     durationEditable: Boolean(appointment.startsAt),
-    classNames: [
-      `appointment-event--${appointment.mode}`,
-      `appointment-event--${appointment.serviceStatus}`,
-    ],
+    classNames: calendarEventClassNames(appointment),
     extendedProps: { appointment },
   })),
 );
 
-function renderEventContent(appointment: Appointment) {
-  const root = globalThis.document.createElement("div");
-  root.className = "fc-event-inner";
-  const contact = globalThis.document.createElement("strong");
-  contact.textContent = appointment.contactName;
-  const content = globalThis.document.createElement("small");
-  content.textContent = appointment.content || "未填写内容";
-  root.append(contact, content);
-  if (appointment.mode === "business" && appointment.amountMinor) {
-    const amount = globalThis.document.createElement("span");
-    amount.textContent = formatCurrency(appointment.amountMinor);
-    root.append(amount);
-  }
-  return { domNodes: [root] };
+function isCompactTimeGrid(viewType: string): boolean {
+  return viewType === "timeGridDay" || viewType === "timeGridWeek";
+}
+
+function appointmentFromEvent(event: EventApi): Appointment {
+  return event.extendedProps.appointment as Appointment;
+}
+
+function appointmentCountForDate(date: Date): number {
+  return appointmentCounts.value.get(format(date, "yyyy-MM-dd")) ?? 0;
 }
 
 const calendarOptions = computed<CalendarOptions>(() => ({
@@ -73,11 +69,17 @@ const calendarOptions = computed<CalendarOptions>(() => ({
   headerToolbar: false,
   allDayText: "待定",
   allDaySlot: true,
+  views: {
+    timeGridDay: { dayMaxEvents: 1 },
+    timeGridWeek: { dayMaxEvents: 1 },
+  },
   nowIndicator: true,
   editable: true,
   selectable: true,
   selectMirror: true,
   eventDurationEditable: true,
+  eventMinHeight: 15,
+  eventShortHeight: 36,
   slotMinTime: "08:00:00",
   slotMaxTime: "26:00:00",
   scrollTime: "12:00:00",
@@ -85,10 +87,6 @@ const calendarOptions = computed<CalendarOptions>(() => ({
   expandRows: true,
   height: "100%",
   events: events.value,
-  eventContent(info) {
-    const appointment = info.event.extendedProps.appointment as Appointment;
-    return renderEventContent(appointment);
-  },
   datesSet(info) {
     currentTitle.value = info.view.title;
     activeView.value = info.view.type;
@@ -191,7 +189,29 @@ function move(direction: "prev" | "next" | "today"): void {
       </div>
     </header>
     <div class="calendar-board__canvas">
-      <FullCalendar ref="calendar" :options="calendarOptions" />
+      <FullCalendar ref="calendar" :options="calendarOptions">
+        <template #eventContent="content">
+          <CalendarEventCard
+            :appointment="appointmentFromEvent(content.event)"
+            :compact="isCompactTimeGrid(content.view.type)"
+            :all-day="content.event.allDay"
+            :time-text="content.timeText"
+          />
+        </template>
+        <template #dayHeaderContent="header">
+          <span
+            v-if="isCompactTimeGrid(header.view.type)"
+            class="calendar-day-heading"
+            :aria-label="`${header.text}，${appointmentCountForDate(header.date)}场预约`"
+          >
+            <span class="calendar-day-heading__date">{{ header.text }}</span>
+            <small class="calendar-day-heading__count">
+              {{ appointmentCountForDate(header.date) }}场
+            </small>
+          </span>
+          <span v-else>{{ header.text }}</span>
+        </template>
+      </FullCalendar>
     </div>
   </section>
 </template>
@@ -275,7 +295,35 @@ function move(direction: "prev" | "next" | "today"): void {
 }
 
 .calendar-board__canvas :deep(.fc-col-header-cell-cushion) {
+  width: 100%;
   padding: 7px 5px;
+}
+
+.calendar-day-heading {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.calendar-day-heading__date {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-day-heading__count {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--brand-border) 78%, transparent);
+  border-radius: 999px;
+  color: var(--brand-strong);
+  background: color-mix(in srgb, var(--brand-soft) 72%, var(--surface));
+  font-family: "Bahnschrift", var(--font-sans);
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 1;
 }
 
 .calendar-board__canvas :deep(.fc-timegrid-slot-label) {
@@ -286,7 +334,7 @@ function move(direction: "prev" | "next" | "today"): void {
 }
 
 .calendar-board__canvas :deep(.fc-timegrid-slot) {
-  height: 25px;
+  height: 18px;
 }
 
 .calendar-board__canvas :deep(.fc-timegrid-axis-cushion),
@@ -303,11 +351,11 @@ function move(direction: "prev" | "next" | "today"): void {
 }
 
 .calendar-board__canvas :deep(.fc-event) {
-  border: 1px solid var(--brand-border, var(--line-strong));
-  border-left: 3px solid var(--brand);
+  border: 1px solid var(--event-border, var(--brand-border));
+  border-left: 3px solid var(--mode-accent, var(--brand));
   border-radius: 7px;
-  color: var(--brand-strong);
-  background: var(--brand-soft);
+  color: var(--event-ink, var(--brand-strong));
+  background: var(--event-background, var(--brand-soft));
   box-shadow: var(--shadow-control, none);
   cursor: pointer;
   transition:
@@ -317,8 +365,9 @@ function move(direction: "prev" | "next" | "today"): void {
 }
 
 .calendar-board__canvas :deep(.fc-event:hover) {
-  border-color: var(--brand);
-  box-shadow: 0 6px 14px color-mix(in srgb, var(--brand) 14%, transparent);
+  border-color: var(--event-accent, var(--brand));
+  border-left-color: var(--mode-accent, var(--brand));
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--event-accent, var(--brand)) 14%, transparent);
   filter: saturate(1.04);
 }
 
@@ -326,57 +375,57 @@ function move(direction: "prev" | "next" | "today"): void {
   color: inherit;
 }
 
-.calendar-board__canvas :deep(.appointment-event--entertainment) {
-  border-color: var(--blue-border, var(--line-strong));
-  border-left-color: var(--blue);
-  color: var(--blue);
-  background: var(--blue-soft);
+.calendar-board__canvas :deep(.appointment-event--scheduled) {
+  --event-accent: var(--blue);
+  --event-background: var(--blue-soft);
+  --event-border: var(--blue-border);
+  --event-ink: #365d70;
+}
+
+.calendar-board__canvas :deep(.appointment-event--in_progress) {
+  --event-accent: var(--amber);
+  --event-background: var(--amber-soft);
+  --event-border: var(--amber-border);
+  --event-ink: #815414;
+}
+
+.calendar-board__canvas :deep(.appointment-event--completed) {
+  --event-accent: var(--brand);
+  --event-background: var(--brand-soft);
+  --event-border: var(--brand-border);
+  --event-ink: var(--brand-strong);
 }
 
 .calendar-board__canvas :deep(.appointment-event--cancelled) {
-  border-color: var(--line);
-  border-left-color: var(--ink-faint, var(--ink-muted));
-  color: var(--ink-muted);
-  background: var(--neutral-soft, var(--surface-soft));
+  --event-accent: var(--ink-muted);
+  --event-background: var(--neutral-soft);
+  --event-border: var(--line);
+  --event-ink: var(--ink-muted);
   box-shadow: none;
   opacity: 0.76;
 }
 
-.calendar-board__canvas :deep(.fc-event-inner) {
-  display: flex;
-  min-width: 0;
-  height: 100%;
-  flex-direction: column;
-  gap: 2px;
-  padding: 3px 5px;
-  overflow: hidden;
+.calendar-board__canvas :deep(.appointment-event--business) {
+  --mode-accent: var(--brand);
 }
 
-.calendar-board__canvas :deep(.fc-event-inner strong),
-.calendar-board__canvas :deep(.fc-event-inner small),
-.calendar-board__canvas :deep(.fc-event-inner span) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.calendar-board__canvas :deep(.appointment-event--entertainment) {
+  --mode-accent: var(--blue);
 }
 
-.calendar-board__canvas :deep(.fc-event-inner strong) {
-  font-size: 11px;
-  font-weight: 750;
-  line-height: 1.2;
+.calendar-board__canvas :deep(.appointment-event--cancelled .calendar-event-card__contact) {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
 }
 
-.calendar-board__canvas :deep(.fc-event-inner small) {
-  font-size: 10px;
-  line-height: 1.2;
-  opacity: 0.9;
+.calendar-board__canvas :deep(.appointment-event--unsettled .fc-event-settlement) {
+  color: #815414;
+  background: color-mix(in srgb, var(--amber-soft) 82%, var(--surface));
 }
 
-.calendar-board__canvas :deep(.fc-event-inner span) {
-  margin-top: auto;
-  font-family: "Bahnschrift", var(--font-sans);
-  font-size: 10px;
-  font-weight: 650;
+.calendar-board__canvas :deep(.appointment-event--settled .fc-event-settlement) {
+  color: var(--brand-strong);
+  background: color-mix(in srgb, var(--brand-soft) 84%, var(--surface));
 }
 
 .calendar-board__canvas :deep(.fc-day-today) {
@@ -391,8 +440,35 @@ function move(direction: "prev" | "next" | "today"): void {
   font-weight: 700;
 }
 
-.calendar-board__canvas :deep(.fc-daygrid-day-frame) {
+.calendar-board__canvas :deep(.fc-daygrid .fc-daygrid-day-frame) {
   min-height: 82px;
+}
+
+.calendar-board__canvas :deep(.fc-timegrid .fc-daygrid-day-frame) {
+  min-height: 34px;
+}
+
+.calendar-board__canvas :deep(.fc-timegrid .fc-daygrid-day-events) {
+  min-height: 26px;
+  margin-bottom: 2px;
+}
+
+.calendar-board__canvas :deep(.fc-timegrid .fc-daygrid-event-harness) {
+  margin-top: 2px;
+}
+
+.calendar-board__canvas :deep(.fc-timegrid .fc-daygrid-event) {
+  width: max-content;
+  max-width: calc(100% - 4px);
+  min-height: 22px;
+  margin-inline: 2px;
+}
+
+.calendar-board__canvas :deep(.fc-timegrid .fc-daygrid-more-link) {
+  margin: 1px 3px 0;
+  color: var(--brand-strong);
+  font-size: 9px;
+  font-weight: 750;
 }
 
 @media (max-width: 1180px) {
@@ -417,6 +493,15 @@ function move(direction: "prev" | "next" | "today"): void {
     padding-inline: 9px;
     padding-bottom: 9px;
   }
+
+  .calendar-day-heading {
+    gap: 4px;
+  }
+
+  .calendar-day-heading__count {
+    padding-inline: 4px;
+    font-size: 8px;
+  }
 }
 
 @media (max-height: 760px) {
@@ -429,7 +514,13 @@ function move(direction: "prev" | "next" | "today"): void {
   }
 
   .calendar-board__canvas :deep(.fc-timegrid-slot) {
-    height: 24px;
+    height: 12px;
+    font-size: 9px;
+    line-height: 1;
+  }
+
+  .calendar-board__canvas :deep(.fc-timegrid .fc-daygrid-day-frame) {
+    min-height: 32px;
   }
 }
 </style>

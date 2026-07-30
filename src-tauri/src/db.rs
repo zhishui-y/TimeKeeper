@@ -76,7 +76,7 @@ pub async fn initialize_database(data_dir: impl AsRef<Path>) -> Result<Database,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::Row;
+    use sqlx::{Connection, Row};
 
     fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
         tokio::runtime::Builder::new_current_thread()
@@ -101,6 +101,65 @@ mod tests {
 
             assert!(tables.iter().any(|name| name == "appointments"));
             assert!(tables.iter().any(|name| name == "account_profiles"));
+            let profile_columns = sqlx::query_scalar::<_, String>(
+                "SELECT name FROM pragma_table_info('account_profiles') ORDER BY cid",
+            )
+            .fetch_all(database.pool())
+            .await
+            .unwrap();
+            assert!(profile_columns.iter().any(|name| name == "sort_order"));
+        });
+    }
+
+    #[test]
+    fn sort_order_migration_preserves_the_previous_default_order() {
+        run_async(async {
+            let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:")
+                .await
+                .unwrap();
+            sqlx::raw_sql(include_str!("../migrations/0001_initial.sql"))
+                .execute(&mut connection)
+                .await
+                .unwrap();
+            for (id, account_name, needs_review, updated_at) in [
+                ("account-a", "A", 0_i64, "2026-07-28T00:00:00Z"),
+                ("account-b", "B", 1_i64, "2026-07-20T00:00:00Z"),
+                ("account-c", "C", 0_i64, "2026-07-29T00:00:00Z"),
+            ] {
+                sqlx::query(
+                    "INSERT INTO account_profiles (
+                        id, account_name, needs_review, created_at, updated_at
+                     ) VALUES (?, ?, ?, ?, ?)",
+                )
+                .bind(id)
+                .bind(account_name)
+                .bind(needs_review)
+                .bind(updated_at)
+                .bind(updated_at)
+                .execute(&mut connection)
+                .await
+                .unwrap();
+            }
+
+            sqlx::raw_sql(include_str!(
+                "../migrations/0002_account_profile_sort_order.sql"
+            ))
+            .execute(&mut connection)
+            .await
+            .unwrap();
+            let ordered = sqlx::query_scalar::<_, String>(
+                "SELECT id FROM account_profiles ORDER BY sort_order",
+            )
+            .fetch_all(&mut connection)
+            .await
+            .unwrap();
+            assert_eq!(ordered, ["account-b", "account-c", "account-a"]);
+            assert!(
+                sqlx::query("UPDATE account_profiles SET sort_order = -1 WHERE id = 'account-a'")
+                    .execute(&mut connection)
+                    .await
+                    .is_err()
+            );
         });
     }
 }

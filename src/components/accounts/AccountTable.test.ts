@@ -46,6 +46,10 @@ describe("AccountTable", () => {
         revealedPasswords: {},
         vaultUnlocked: true,
         selectedIds: [],
+        sortKey: null,
+        sortDirection: "asc",
+        reorderEnabled: true,
+        reorderDisabledReason: "",
       },
     });
 
@@ -67,9 +71,67 @@ describe("AccountTable", () => {
         revealedPasswords: {},
         vaultUnlocked: false,
         selectedIds: [],
+        sortKey: null,
+        sortDirection: "asc",
+        reorderEnabled: true,
+        reorderDisabledReason: "",
       },
     });
 
     expect(wrapper.get('button[aria-label="删除账号"]').attributes("disabled")).toBeDefined();
+  });
+
+  it("emits sortable header selections and exposes the active direction", async () => {
+    const wrapper = mount(AccountTable, {
+      props: {
+        profiles,
+        revealedPasswords: {},
+        vaultUnlocked: true,
+        selectedIds: [],
+        sortKey: "currentScore",
+        sortDirection: "desc",
+        reorderEnabled: false,
+        reorderDisabledReason: "恢复默认排序后可拖动",
+      },
+    });
+
+    expect(
+      wrapper
+        .get('th[aria-sort="descending"] [data-sort-key="currentScore"]')
+        .attributes("data-sort-key"),
+    ).toBe("currentScore");
+    await wrapper.get('[data-sort-key="contactName"]').trigger("click");
+    expect(wrapper.emitted("sort")).toEqual([["contactName"]]);
+  });
+
+  it("emits account copy and row drop actions", async () => {
+    const wrapper = mount(AccountTable, {
+      props: {
+        profiles,
+        revealedPasswords: {},
+        vaultUnlocked: true,
+        selectedIds: [],
+        sortKey: null,
+        sortDirection: "asc",
+        reorderEnabled: true,
+        reorderDisabledReason: "",
+      },
+    });
+    const dataTransfer = {
+      effectAllowed: "",
+      dropEffect: "",
+      setData: () => undefined,
+    };
+
+    await wrapper.get('button[aria-label="复制账号 账号一"]').trigger("click");
+    expect(wrapper.emitted("copyAccount")).toEqual([[profiles[0]]]);
+
+    await wrapper
+      .get('button[aria-label="拖动账号 账号一 调整顺序"]')
+      .trigger("dragstart", { dataTransfer });
+    const rows = wrapper.findAll("tbody tr");
+    await rows[1]?.trigger("dragover", { clientY: -1, dataTransfer });
+    await rows[1]?.trigger("drop", { clientY: -1, dataTransfer });
+    expect(wrapper.emitted("reorder")).toEqual([["account-1", "account-2", "before"]]);
   });
 });

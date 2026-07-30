@@ -38,6 +38,8 @@ const nativeApi: ApiClient = {
     invoke<AccountProfile>("update_account_profile", { id, input }),
   deleteAccountProfile: (id) => invoke<void>("delete_account_profile", { id }),
   deleteAccountProfiles: (ids) => invoke<number>("delete_account_profiles", { ids }),
+  reorderAccountProfiles: (ids) => invoke<void>("reorder_account_profiles", { ids }),
+  copyAccountName: (id) => invoke<void>("copy_account_name", { id }),
 
   vaultStatus: () => invoke<VaultStatus>("vault_status"),
   initializeVault: (password) => invoke<VaultStatus>("initialize_vault", { password }),

@@ -145,6 +145,8 @@ pub fn run() {
             accounts::update_account_profile,
             accounts::delete_account_profile,
             accounts::delete_account_profiles,
+            accounts::reorder_account_profiles,
+            accounts::copy_account_name,
             reports::get_dashboard_summary,
             reports::get_revenue_summary,
             importer::preview_excel_import,

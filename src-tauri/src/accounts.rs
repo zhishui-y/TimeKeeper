@@ -8,7 +8,7 @@ use crate::{
     db::{Database, ImportWriteResult},
     importer::LegacyAccountProfile,
     models::{AccountProfile, AccountProfileInput},
-    vault::{VaultState, run_blocking_vault_operation},
+    vault::{VaultState, copy_text_to_clipboard, run_blocking_vault_operation},
 };
 
 fn optional_text(value: Option<String>) -> Option<String> {
@@ -123,7 +123,7 @@ pub(crate) async fn list_account_profiles_impl(
             .push(" AND needs_review = ")
             .push_bind(if needs_review { 1_i64 } else { 0_i64 });
     }
-    builder.push(" ORDER BY needs_review DESC, updated_at DESC, account_name COLLATE NOCASE");
+    builder.push(" ORDER BY sort_order ASC, account_name COLLATE NOCASE");
 
     builder
         .build()
@@ -228,8 +228,12 @@ async fn insert_account_profile(
         "INSERT INTO account_profiles (
             id, contact_name, server, character_name, specialization, gear_score,
             account_name, current_score, highest_score, score_updated_at, notes,
-            needs_review, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            needs_review, sort_order, created_at, updated_at
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM account_profiles),
+            ?, ?
+        )",
     )
     .bind(&id)
     .bind(input.contact_name)
@@ -419,6 +423,68 @@ pub async fn delete_account_profiles<R: Runtime>(
 ) -> Result<usize, String> {
     let _operation_guard = backup.lock_data_operation().await;
     delete_account_profiles_with_vault(database.inner(), &app, &ids).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn reorder_account_profiles(
+    database: State<'_, Database>,
+    backup: State<'_, BackupState>,
+    ids: Vec<String>,
+) -> Result<(), String> {
+    let _operation_guard = backup.lock_data_operation().await;
+    reorder_account_profiles_impl(database.inner(), &ids).await
+}
+
+pub(crate) async fn reorder_account_profiles_impl(
+    database: &Database,
+    ids: &[String],
+) -> Result<(), String> {
+    let normalized = ids
+        .iter()
+        .map(|id| id.trim().to_owned())
+        .collect::<Vec<_>>();
+    if normalized.iter().any(String::is_empty) {
+        return Err("账号排序包含空白 ID".into());
+    }
+    let unique = normalized
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    if unique.len() != normalized.len() {
+        return Err("账号排序包含重复 ID".into());
+    }
+
+    let existing = sqlx::query_scalar::<_, String>("SELECT id FROM account_profiles ORDER BY id")
+        .fetch_all(database.pool())
+        .await
+        .map_err(db_error)?;
+    if existing.len() != normalized.len() || existing.iter().any(|id| !unique.contains(id.as_str()))
+    {
+        return Err("账号排序必须包含当前全部账号档案".into());
+    }
+
+    let mut transaction = database.pool().begin().await.map_err(db_error)?;
+    for (position, id) in normalized.iter().enumerate() {
+        sqlx::query("UPDATE account_profiles SET sort_order = ? WHERE id = ?")
+            .bind(position as i64)
+            .bind(id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(db_error)?;
+    }
+    transaction.commit().await.map_err(db_error)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn copy_account_name(database: State<'_, Database>, id: String) -> Result<(), String> {
+    let account_name =
+        sqlx::query_scalar::<_, String>("SELECT account_name FROM account_profiles WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(database.pool())
+            .await
+            .map_err(db_error)?
+            .ok_or_else(|| format!("账号档案不存在: {id}"))?;
+    copy_text_to_clipboard(account_name).await
 }
 
 #[cfg(test)]
@@ -664,8 +730,12 @@ pub(crate) async fn insert_imported_account_profile(
         "INSERT INTO account_profiles (
             id, contact_name, server, character_name, specialization, gear_score,
             account_name, current_score, highest_score, score_updated_at, notes,
-            needs_review, import_fingerprint, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            needs_review, import_fingerprint, sort_order, created_at, updated_at
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM account_profiles),
+            ?, ?
+        )",
     )
     .bind(&id)
     .bind(profile.contact_name.as_deref())
@@ -825,6 +895,45 @@ mod tests {
                     .unwrap(),
                 0
             );
+        });
+    }
+
+    #[test]
+    fn persists_complete_manual_account_profile_order() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let first = create_account_profile_impl(&database, input("manual-order-a"))
+                .await
+                .unwrap();
+            let second = create_account_profile_impl(&database, input("manual-order-b"))
+                .await
+                .unwrap();
+            let third = create_account_profile_impl(&database, input("manual-order-c"))
+                .await
+                .unwrap();
+
+            reorder_account_profiles_impl(
+                &database,
+                &[third.id.clone(), first.id.clone(), second.id.clone()],
+            )
+            .await
+            .unwrap();
+            let reordered = list_account_profiles_impl(&database, None, None)
+                .await
+                .unwrap();
+            assert_eq!(
+                reordered
+                    .iter()
+                    .map(|profile| profile.id.as_str())
+                    .collect::<Vec<_>>(),
+                [third.id.as_str(), first.id.as_str(), second.id.as_str()]
+            );
+
+            let error =
+                reorder_account_profiles_impl(&database, &[third.id.clone(), first.id.clone()])
+                    .await
+                    .unwrap_err();
+            assert!(error.contains("全部账号档案"));
         });
     }
 

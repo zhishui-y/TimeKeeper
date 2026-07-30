@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { Appointment } from "../../types/domain";
-import { formatTime } from "../../utils/formatters";
+import { visibleSettlementStatus } from "../../utils/calendar";
+import {
+  formatTime,
+  formatTimeRange,
+  serviceStatusLabels,
+  settlementStatusLabels,
+} from "../../utils/formatters";
 
 interface DaySchedule {
   date: string;
@@ -21,6 +27,19 @@ const emit = defineEmits<{
 }>();
 
 const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointments.length), 1));
+
+function appointmentTitle(appointment: Appointment): string {
+  const details = [
+    formatTimeRange(appointment.startsAt, appointment.endsAt),
+    appointment.contactName,
+    appointment.content || "未填写内容",
+    serviceStatusLabels[appointment.serviceStatus],
+  ];
+  if (visibleSettlementStatus(appointment)) {
+    details.push(settlementStatusLabels[appointment.settlementStatus]);
+  }
+  return details.join(" · ");
+}
 </script>
 
 <template>
@@ -55,14 +74,25 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
             class="schedule-chip"
             :class="[
               `schedule-chip--${appointment.mode}`,
-              { 'is-cancelled': appointment.serviceStatus === 'cancelled' },
+              `schedule-chip--${appointment.serviceStatus}`,
+              `schedule-chip--${appointment.settlementStatus}`,
             ]"
             type="button"
-            :title="`${appointment.contactName} · ${appointment.content || '未填写内容'}`"
+            :title="appointmentTitle(appointment)"
+            :aria-label="appointmentTitle(appointment)"
             @click.stop="emit('edit', appointment)"
           >
             <span class="schedule-chip__time">{{ formatTime(appointment.startsAt) }}</span>
             <strong>{{ appointment.contactName }}</strong>
+            <span
+              v-if="visibleSettlementStatus(appointment)"
+              class="schedule-chip__settlement"
+              :class="`is-${appointment.settlementStatus}`"
+              :title="settlementStatusLabels[appointment.settlementStatus]"
+              :aria-label="settlementStatusLabels[appointment.settlementStatus]"
+            >
+              {{ appointment.settlementStatus === "settled" ? "已" : "待" }}
+            </span>
           </button>
           <span v-if="day.appointments.length > 3" class="week-day__more week-day__more--regular">
             +{{ day.appointments.length - 3 }} 条
@@ -197,6 +227,11 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
 }
 
 .schedule-chip {
+  --event-accent: var(--brand);
+  --event-background: var(--brand-soft);
+  --event-border: var(--brand-border);
+  --event-ink: var(--brand-strong);
+  --mode-accent: var(--brand);
   display: flex;
   width: 100%;
   min-width: 0;
@@ -206,11 +241,11 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
   gap: 6px;
   padding: 0 8px;
   overflow: hidden;
-  border: 1px solid var(--brand-border, var(--line-strong));
-  border-left: 3px solid var(--brand);
+  border: 1px solid var(--event-border);
+  border-left: 3px solid var(--mode-accent);
   border-radius: 8px;
-  color: var(--brand-strong);
-  background: var(--brand-soft);
+  color: var(--event-ink);
+  background: var(--event-background);
   box-shadow: var(--shadow-control, none);
   cursor: pointer;
   transition:
@@ -220,25 +255,49 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
 }
 
 .schedule-chip:hover {
-  border-color: var(--brand);
-  box-shadow: 0 5px 12px color-mix(in srgb, var(--brand) 12%, transparent);
+  border-color: var(--event-accent);
+  border-left-color: var(--mode-accent);
+  box-shadow: 0 5px 12px color-mix(in srgb, var(--event-accent) 12%, transparent);
   transform: translateY(-1px);
 }
 
-.schedule-chip--entertainment {
-  border-color: var(--blue-border, var(--line-strong));
-  border-left-color: var(--blue);
-  color: var(--blue);
-  background: var(--blue-soft);
+.schedule-chip--scheduled {
+  --event-accent: var(--blue);
+  --event-background: var(--blue-soft);
+  --event-border: var(--blue-border);
+  --event-ink: #365d70;
 }
 
-.schedule-chip.is-cancelled {
-  border-color: var(--line);
-  border-left-color: var(--ink-faint, var(--ink-muted));
-  color: var(--ink-muted);
-  background: var(--neutral-soft, var(--surface-soft));
+.schedule-chip--in_progress {
+  --event-accent: var(--amber);
+  --event-background: var(--amber-soft);
+  --event-border: var(--amber-border);
+  --event-ink: #815414;
+}
+
+.schedule-chip--completed {
+  --event-accent: var(--brand);
+  --event-background: var(--brand-soft);
+  --event-border: var(--brand-border);
+  --event-ink: var(--brand-strong);
+}
+
+.schedule-chip--cancelled {
+  --event-accent: var(--ink-muted);
+  --event-background: var(--neutral-soft);
+  --event-border: var(--line);
+  --event-ink: var(--ink-muted);
   box-shadow: none;
   text-decoration: line-through;
+  opacity: 0.76;
+}
+
+.schedule-chip--business {
+  --mode-accent: var(--brand);
+}
+
+.schedule-chip--entertainment {
+  --mode-accent: var(--blue);
 }
 
 .schedule-chip__time {
@@ -256,6 +315,33 @@ const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointm
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.schedule-chip__settlement {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin-left: auto;
+  place-items: center;
+  border: 1px dashed currentColor;
+  border-radius: 5px;
+  font-family: "Bahnschrift", var(--font-sans);
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 1;
+  background: color-mix(in srgb, var(--surface) 76%, transparent);
+  text-decoration: none;
+}
+
+.schedule-chip__settlement.is-unsettled {
+  color: #815414;
+  background: color-mix(in srgb, var(--amber-soft) 82%, var(--surface));
+}
+
+.schedule-chip__settlement.is-settled {
+  color: var(--brand-strong);
+  background: color-mix(in srgb, var(--brand-soft) 84%, var(--surface));
 }
 
 .week-day__more,

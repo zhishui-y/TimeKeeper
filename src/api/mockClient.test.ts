@@ -187,6 +187,21 @@ describe("browser mock API", () => {
     await expect(mockApi.deleteAccountProfiles(["unknown-account"])).resolves.toBe(0);
   });
 
+  it("persists a complete manual account order and rejects incomplete input", async () => {
+    const before = await mockApi.listAccountProfiles();
+    const reversedIds = before.map((profile) => profile.id).reverse();
+
+    await expect(mockApi.reorderAccountProfiles(reversedIds)).resolves.toBeUndefined();
+    await expect(mockApi.listAccountProfiles()).resolves.toMatchObject(
+      reversedIds.map((id) => ({ id })),
+    );
+    await expect(mockApi.reorderAccountProfiles(reversedIds.slice(1))).rejects.toThrow(
+      "必须包含当前全部账号档案",
+    );
+
+    await mockApi.reorderAccountProfiles(before.map((profile) => profile.id));
+  });
+
   it("restores the in-memory demo data captured by a backup", async () => {
     const created = await mockApi.createAppointment(
       businessInput("2099-08-03", "10:00", "11:00", "备份恢复回归", 8_800),

@@ -75,10 +75,44 @@ onBeforeUnmount(() => {
 <template>
   <div class="calendar-workspace page-stack">
     <div class="page-toolbar">
-      <div class="calendar-legend">
-        <span><i class="legend-dot legend-dot--business" />业务预约</span>
-        <span><i class="legend-dot legend-dot--entertainment" />娱乐预约</span>
-        <span><Info :size="13" />冲突只提醒，不阻止保存</span>
+      <div class="calendar-legend" aria-label="日历颜色说明">
+        <span class="legend-item--scheduled">
+          <i class="legend-dot" />
+          已预约
+        </span>
+        <span class="legend-item--in-progress">
+          <i class="legend-dot" />
+          进行中
+        </span>
+        <span class="legend-item--completed">
+          <i class="legend-dot" />
+          已完成
+        </span>
+        <span class="legend-item--cancelled">
+          <i class="legend-dot" />
+          已取消
+        </span>
+        <span class="legend-item--unsettled">
+          <i class="legend-settlement-symbol">¥</i>
+          待结算
+        </span>
+        <span class="legend-item--settled">
+          <i class="legend-settlement-symbol">¥</i>
+          已结算
+        </span>
+        <span
+          class="legend-item--mode"
+          title="预约卡片左侧：绿色为业务，蓝色为娱乐"
+          aria-label="左侧色条：绿色代表业务，蓝色代表娱乐"
+        >
+          <i class="legend-bar legend-bar--business" />
+          <i class="legend-bar legend-bar--entertainment" />
+          业务/娱乐色条
+        </span>
+        <span class="legend-item--notice">
+          <Info :size="13" />
+          冲突只提醒，不阻止保存
+        </span>
       </div>
       <button class="button button--compact" type="button" @click="ui.openCreateAppointment()">
         新建预约
@@ -136,7 +170,45 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.calendar-legend span:last-child {
+.calendar-legend .legend-item--scheduled {
+  border-color: var(--blue-border);
+  color: #365d70;
+  background: var(--blue-soft);
+}
+
+.calendar-legend .legend-item--in-progress {
+  border-color: var(--amber-border);
+  color: #815414;
+  background: var(--amber-soft);
+}
+
+.calendar-legend .legend-item--completed {
+  border-color: var(--brand-border);
+  color: var(--brand-strong);
+  background: var(--brand-soft);
+}
+
+.calendar-legend .legend-item--cancelled {
+  color: var(--ink-muted);
+  background: var(--neutral-soft);
+}
+
+.calendar-legend .legend-item--unsettled {
+  border-color: var(--amber-border);
+  border-style: dashed;
+  color: #815414;
+  background: var(--surface);
+}
+
+.calendar-legend .legend-item--settled {
+  border-color: var(--brand-border);
+  border-style: dashed;
+  color: var(--brand-strong);
+  background: var(--surface);
+}
+
+.calendar-legend .legend-item--mode,
+.calendar-legend .legend-item--notice {
   color: var(--ink);
   background: var(--surface-soft);
 }
@@ -146,14 +218,30 @@ onBeforeUnmount(() => {
   height: 8px;
   flex: 0 0 8px;
   border-radius: 3px;
+  background: currentColor;
 }
 
-.legend-dot--business {
+.legend-bar {
+  width: 3px;
+  height: 13px;
+  flex: 0 0 3px;
+  border-radius: 999px;
+}
+
+.legend-bar--business {
   background: var(--brand);
 }
 
-.legend-dot--entertainment {
+.legend-bar--entertainment {
+  margin-left: -3px;
   background: var(--blue);
+}
+
+.legend-settlement-symbol {
+  font-family: "Bahnschrift", var(--font-sans);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 750;
 }
 
 .calendar-workspace__board {
@@ -205,6 +293,10 @@ onBeforeUnmount(() => {
   .calendar-legend span {
     padding-inline: 7px;
     font-size: 11px;
+  }
+
+  .calendar-legend .legend-item--mode {
+    display: none;
   }
 }
 </style>

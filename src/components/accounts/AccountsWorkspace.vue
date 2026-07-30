@@ -1,11 +1,30 @@
 <script setup lang="ts">
-import { LockKeyhole, Plus, Search, ShieldCheck, Trash2, UnlockKeyhole } from "@lucide/vue";
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
+import {
+  LoaderCircle,
+  ListFilter,
+  LockKeyhole,
+  Plus,
+  Search,
+  ShieldCheck,
+  Trash2,
+  UnlockKeyhole,
+} from "@lucide/vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAccounts } from "../../composables/useAccounts";
 import { useVault } from "../../composables/useVault";
 import { useUiStore } from "../../stores/ui";
 import type { AccountProfile, AccountProfileInput } from "../../types/domain";
+import {
+  filterAndSortAccountProfiles,
+  moveAccountProfileId,
+  orderAccountProfilesByIds,
+  uniqueAccountValues,
+  type AccountDropPlacement,
+  type AccountProfileFilters,
+  type AccountProfileSortKey,
+  type SortDirection,
+} from "../../utils/accounts";
 import AccountDrawer from "./AccountDrawer.vue";
 import AccountTable from "./AccountTable.vue";
 
@@ -14,14 +33,64 @@ const { items, loading, error, load } = useAccounts();
 const { status: vaultStatus, load: loadVault, unlock, initialize, lock } = useVault();
 const query = shallowRef("");
 const needsReviewOnly = shallowRef(false);
+const accountFilters = reactive<AccountProfileFilters>({
+  contactName: "",
+  server: "",
+  specialization: "",
+});
+const sortKey = shallowRef<AccountProfileSortKey | null>(null);
+const sortDirection = shallowRef<SortDirection>("asc");
+const manualOrderIds = shallowRef<string[]>([]);
+const savingOrder = shallowRef(false);
 const drawerOpen = shallowRef(false);
 const activeProfile = shallowRef<AccountProfile | null>(null);
 const savingAccount = shallowRef(false);
 const selectedIds = ref<string[]>([]);
 const selectedCount = computed(() => selectedIds.value.length);
+const deletingAccounts = shallowRef(false);
+const batchDeleteFeedback = shallowRef<{
+  message: string;
+  tone: "neutral" | "success" | "warning" | "danger";
+} | null>(null);
 const masterPassword = shallowRef("");
 const revealedPasswords = shallowRef<Record<string, string>>({});
 const revealTimers = new Map<string, ReturnType<typeof globalThis.setTimeout>>();
+const contactOptions = computed(() => uniqueAccountValues(items.value, "contactName"));
+const serverOptions = computed(() => uniqueAccountValues(items.value, "server"));
+const specializationOptions = computed(() => uniqueAccountValues(items.value, "specialization"));
+const manuallyOrderedProfiles = computed(() =>
+  orderAccountProfilesByIds(items.value, manualOrderIds.value),
+);
+const visibleProfiles = computed(() =>
+  filterAndSortAccountProfiles(
+    manuallyOrderedProfiles.value,
+    accountFilters,
+    sortKey.value,
+    sortDirection.value,
+  ),
+);
+const activeFilterCount = computed(() => Object.values(accountFilters).filter(Boolean).length);
+const manualReorderEnabled = computed(() => {
+  return (
+    !savingOrder.value &&
+    !query.value.trim() &&
+    !needsReviewOnly.value &&
+    activeFilterCount.value === 0 &&
+    sortKey.value === null
+  );
+});
+const reorderDisabledReason = computed(() => {
+  if (savingOrder.value) return "正在保存账号顺序";
+  return "清除搜索和筛选并恢复默认排序后可拖动";
+});
+const sortLabels: Record<AccountProfileSortKey, string> = {
+  contactName: "联系人",
+  server: "服务器",
+  specialization: "职业 / 心法",
+  gearScore: "装分",
+  currentScore: "当前分",
+  highestScore: "最高分",
+};
 
 function openCreate(): void {
   activeProfile.value = null;
@@ -36,6 +105,61 @@ function openEdit(profile: AccountProfile): void {
 async function search(): Promise<void> {
   selectedIds.value = [];
   await load(query.value, needsReviewOnly.value ? true : undefined);
+}
+
+function changeSort(nextSortKey: AccountProfileSortKey): void {
+  if (sortKey.value === nextSortKey) {
+    sortDirection.value = sortDirection.value === "asc" ? "desc" : "asc";
+    return;
+  }
+
+  sortKey.value = nextSortKey;
+  sortDirection.value =
+    nextSortKey === "gearScore" || nextSortKey === "currentScore" || nextSortKey === "highestScore"
+      ? "desc"
+      : "asc";
+}
+
+function resetListView(): void {
+  Object.assign(accountFilters, {
+    contactName: "",
+    server: "",
+    specialization: "",
+  });
+  sortKey.value = null;
+  sortDirection.value = "asc";
+}
+
+async function reorderProfiles(
+  sourceId: string,
+  targetId: string,
+  placement: AccountDropPlacement,
+): Promise<void> {
+  if (!manualReorderEnabled.value) return;
+  const previousOrder = [...manualOrderIds.value];
+  const nextOrder = moveAccountProfileId(previousOrder, sourceId, targetId, placement);
+  if (nextOrder.every((id, index) => id === previousOrder[index])) return;
+
+  manualOrderIds.value = nextOrder;
+  savingOrder.value = true;
+  try {
+    await api.reorderAccountProfiles(nextOrder);
+    ui.notify("账号顺序已保存", "success");
+  } catch (cause) {
+    manualOrderIds.value = previousOrder;
+    ui.notify(errorMessage(cause), "danger");
+  } finally {
+    savingOrder.value = false;
+  }
+}
+
+async function copyAccount(profile: AccountProfile): Promise<void> {
+  try {
+    await api.copyAccountName(profile.id);
+    ui.notify(`账号 ${profile.accountName} 已复制`, "success");
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  }
 }
 
 async function save(input: AccountProfileInput): Promise<void> {
@@ -107,12 +231,17 @@ async function remove(profile: AccountProfile): Promise<void> {
 }
 
 async function removeBatch(): Promise<void> {
-  if (selectedCount.value === 0 || !vaultStatus.value.unlocked) return;
+  if (selectedCount.value === 0 || !vaultStatus.value.unlocked || deletingAccounts.value) return;
   if (!globalThis.confirm(`确定永久删除选中的 ${selectedCount.value} 个账号档案及其密码吗？`)) {
     return;
   }
 
   const ids = [...selectedIds.value];
+  deletingAccounts.value = true;
+  batchDeleteFeedback.value = {
+    message: `正在永久删除 ${ids.length} 个账号档案，请稍候…`,
+    tone: "neutral",
+  };
   try {
     const deletedCount = await api.deleteAccountProfiles(ids);
     for (const id of ids) {
@@ -120,17 +249,24 @@ async function removeBatch(): Promise<void> {
       if (profile) hide(profile);
     }
     selectedIds.value = [];
-    await search();
+    await load(query.value, needsReviewOnly.value ? true : undefined);
     ui.markAccountsChanged();
     if (deletedCount > 0) {
-      ui.notify(`已永久删除 ${deletedCount} 个账号档案`, "success");
+      const message = `已永久删除 ${deletedCount} 个账号档案`;
+      batchDeleteFeedback.value = { message, tone: "success" };
+      ui.notify(message, "success");
     } else {
-      ui.notify("未找到可删除的账号档案", "warning");
+      const message = "未找到可删除的账号档案";
+      batchDeleteFeedback.value = { message, tone: "warning" };
+      ui.notify(message, "warning");
     }
   } catch (cause) {
-    await search();
-    ui.markAccountsChanged();
-    ui.notify(errorMessage(cause), "danger");
+    const message = errorMessage(cause);
+    await load(query.value, needsReviewOnly.value ? true : undefined);
+    batchDeleteFeedback.value = { message, tone: "danger" };
+    ui.notify(message, "danger");
+  } finally {
+    deletingAccounts.value = false;
   }
 }
 
@@ -156,10 +292,45 @@ onMounted(() => void loadVault());
 watch(
   () => items.value,
   (currentItems) => {
+    manualOrderIds.value = currentItems.map((item) => item.id);
     const validIds = new Set(currentItems.map((item) => item.id));
     const next = selectedIds.value.filter((id) => validIds.has(id));
     if (next.length !== selectedIds.value.length) {
       selectedIds.value = next;
+    }
+    if (
+      accountFilters.contactName &&
+      !currentItems.some((item) => item.contactName === accountFilters.contactName)
+    ) {
+      accountFilters.contactName = "";
+    }
+    if (
+      accountFilters.server &&
+      !currentItems.some((item) => item.server === accountFilters.server)
+    ) {
+      accountFilters.server = "";
+    }
+    if (
+      accountFilters.specialization &&
+      !currentItems.some((item) => item.specialization === accountFilters.specialization)
+    ) {
+      accountFilters.specialization = "";
+    }
+  },
+);
+
+watch(
+  () => [accountFilters.contactName, accountFilters.server, accountFilters.specialization],
+  () => {
+    selectedIds.value = [];
+  },
+);
+
+watch(
+  () => selectedIds.value,
+  (ids) => {
+    if (ids.length > 0 && !deletingAccounts.value) {
+      batchDeleteFeedback.value = null;
     }
   },
 );
@@ -231,17 +402,22 @@ onBeforeUnmount(() => {
         <button
           class="button button--ghost"
           type="button"
-          :disabled="selectedCount === 0 || !vaultStatus.unlocked"
+          :disabled="selectedCount === 0 || !vaultStatus.unlocked || deletingAccounts"
+          :aria-busy="deletingAccounts"
           :title="
             !vaultStatus.unlocked
               ? '删除账号前需要解锁密码库'
-              : selectedCount === 0
-                ? '请先选择账号'
-                : '永久删除选中的账号'
+              : deletingAccounts
+                ? '正在删除选中的账号'
+                : selectedCount === 0
+                  ? '请先选择账号'
+                  : '永久删除选中的账号'
           "
           @click="removeBatch"
         >
-          <Trash2 :size="15" />批量删除
+          <LoaderCircle v-if="deletingAccounts" class="account-actions__spinner" :size="15" />
+          <Trash2 v-else :size="15" />
+          {{ deletingAccounts ? "正在删除…" : "批量删除" }}
         </button>
         <button
           class="button button--primary"
@@ -253,23 +429,98 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
+    <div class="account-filter-strip" aria-label="账号筛选">
+      <span class="account-filter-strip__title">
+        <ListFilter :size="14" />
+        筛选
+      </span>
+      <label class="account-filter-control">
+        <span>联系人</span>
+        <select v-model="accountFilters.contactName" class="select" aria-label="按联系人筛选账号">
+          <option value="">全部</option>
+          <option v-for="contact in contactOptions" :key="contact" :value="contact">
+            {{ contact }}
+          </option>
+        </select>
+      </label>
+      <label class="account-filter-control">
+        <span>服务器</span>
+        <select v-model="accountFilters.server" class="select" aria-label="按服务器筛选账号">
+          <option value="">全部</option>
+          <option v-for="server in serverOptions" :key="server" :value="server">
+            {{ server }}
+          </option>
+        </select>
+      </label>
+      <label class="account-filter-control">
+        <span>职业 / 心法</span>
+        <select
+          v-model="accountFilters.specialization"
+          class="select"
+          aria-label="按职业或心法筛选账号"
+        >
+          <option value="">全部</option>
+          <option
+            v-for="specialization in specializationOptions"
+            :key="specialization"
+            :value="specialization"
+          >
+            {{ specialization }}
+          </option>
+        </select>
+      </label>
+      <span class="account-filter-strip__sort">
+        {{
+          sortKey
+            ? `已按${sortLabels[sortKey]}${sortDirection === "asc" ? "升序" : "降序"}`
+            : manualReorderEnabled
+              ? "拖动左侧手柄调整默认顺序"
+              : reorderDisabledReason
+        }}
+      </span>
+      <button
+        v-if="activeFilterCount > 0 || sortKey"
+        class="button button--ghost button--compact"
+        type="button"
+        @click="resetListView"
+      >
+        重置
+      </button>
+    </div>
     <div class="account-summary">
-      <span>共 {{ items.length }} 个账号</span>
+      <span v-if="visibleProfiles.length === items.length">共 {{ items.length }} 个账号</span>
+      <span v-else>显示 {{ visibleProfiles.length }} / 共 {{ items.length }} 个账号</span>
       <span v-if="selectedCount > 0">{{ selectedCount }} 个已选中</span>
       <span v-else>{{ items.filter((item) => item.needsReview).length }} 个待完善</span>
+      <span
+        v-if="batchDeleteFeedback"
+        class="account-summary__feedback"
+        :class="`is-${batchDeleteFeedback.tone}`"
+        role="status"
+        aria-live="polite"
+      >
+        {{ batchDeleteFeedback.message }}
+      </span>
     </div>
     <div v-if="loading" class="loading-line" />
     <div v-if="error" class="error-banner">{{ error }}</div>
     <AccountTable
-      :profiles="items"
+      :profiles="visibleProfiles"
       :revealed-passwords="revealedPasswords"
       :vault-unlocked="vaultStatus.unlocked"
+      :sort-key="sortKey"
+      :sort-direction="sortDirection"
+      :reorder-enabled="manualReorderEnabled"
+      :reorder-disabled-reason="reorderDisabledReason"
       v-model:selected-ids="selectedIds"
       @edit="openEdit"
       @reveal="reveal"
       @hide="hide"
       @copy="copy"
+      @copy-account="copyAccount"
       @delete="remove"
+      @sort="changeSort"
+      @reorder="reorderProfiles"
     />
     <AccountDrawer
       :open="drawerOpen"
@@ -380,6 +631,55 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
+.account-actions__spinner {
+  animation: account-action-spin 900ms linear infinite;
+}
+
+.account-filter-strip {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 94%, var(--surface-soft));
+}
+
+.account-filter-strip__title {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--brand-strong);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.account-filter-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.account-filter-control .select {
+  width: 118px;
+  height: 30px;
+  padding-inline: 8px 24px;
+  font-size: 11px;
+}
+
+.account-filter-strip__sort {
+  margin-left: auto;
+  color: var(--ink-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .accounts-workspace > .page-toolbar {
   min-height: 54px;
   padding: 7px 9px 7px 11px;
@@ -411,6 +711,30 @@ onBeforeUnmount(() => {
   font-size: 11px;
 }
 
+.account-summary__feedback {
+  margin-left: auto;
+  color: var(--brand-strong);
+  font-weight: 650;
+}
+
+.account-summary__feedback.is-success {
+  color: var(--brand);
+}
+
+.account-summary__feedback.is-warning {
+  color: #9a6214;
+}
+
+.account-summary__feedback.is-danger {
+  color: var(--danger);
+}
+
+@keyframes account-action-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 1180px) {
   .vault-strip {
     padding-inline: 13px;
@@ -422,6 +746,22 @@ onBeforeUnmount(() => {
 
   .account-filters .search-field {
     width: 210px;
+  }
+
+  .account-filter-strip {
+    gap: 7px;
+  }
+
+  .account-filter-control {
+    gap: 3px;
+  }
+
+  .account-filter-control .select {
+    width: 104px;
+  }
+
+  .account-filter-strip__sort {
+    display: none;
   }
 }
 </style>

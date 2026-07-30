@@ -18,7 +18,13 @@ import { demoAccounts, demoAppointments, demoPasswords } from "./mockData";
 import type { ApiClient } from "./types";
 
 let appointments = structuredClone(demoAppointments);
-let accounts = structuredClone(demoAccounts);
+let accounts = structuredClone(demoAccounts).sort((a, b) => {
+  return (
+    Number(b.needsReview) - Number(a.needsReview) ||
+    b.updatedAt.localeCompare(a.updatedAt) ||
+    a.accountName.localeCompare(b.accountName)
+  );
+});
 const passwords = new Map(demoPasswords);
 let vault: VaultStatus = { initialized: true, unlocked: true, autoLockMinutes: 15 };
 let vaultPassword: string | null = null;
@@ -305,8 +311,7 @@ export const mockApi: ApiClient = {
           return [item.accountName, item.contactName, item.server, item.characterName].some(
             (value) => value?.toLocaleLowerCase().includes(normalized),
           );
-        })
-        .sort((a, b) => Number(b.needsReview) - Number(a.needsReview)),
+        }),
     );
   },
   async getAccountProfile(id) {
@@ -362,6 +367,24 @@ export const mockApi: ApiClient = {
   },
   async deleteAccountProfiles(ids) {
     return deleteAccountProfilesByIds(ids);
+  },
+  async reorderAccountProfiles(ids) {
+    const normalized = ids.map((id) => id.trim());
+    if (normalized.some((id) => !id)) throw new Error("账号排序包含空白 ID");
+    if (new Set(normalized).size !== normalized.length) throw new Error("账号排序包含重复 ID");
+    if (
+      normalized.length !== accounts.length ||
+      normalized.some((id) => !accounts.some((account) => account.id === id))
+    ) {
+      throw new Error("账号排序必须包含当前全部账号档案");
+    }
+    const byId = new Map(accounts.map((account) => [account.id, account]));
+    accounts = normalized.map((id) => byId.get(id)!);
+  },
+  async copyAccountName(id) {
+    const profile = getAccountOrThrow(id);
+    if (!globalThis.navigator?.clipboard) throw new Error("当前环境无法访问剪贴板");
+    await globalThis.navigator.clipboard.writeText(profile.accountName);
   },
 
   async vaultStatus() {
