@@ -62,29 +62,55 @@
 
 ## Verification
 
-前端基础检查：
+采用渐进式验证。验证强度由修改阶段、影响范围和风险共同决定；不要把全量命令当作每次小修改后的固定动作。
+
+### 迭代阶段
+
+- 每轮保持小范围修改，优先运行能覆盖当前改动的最窄检查或相关测试。
+- 前端优先运行受影响组件、composable 或 utility 的相关单元测试；涉及类型或构建边界时再运行类型检查或构建。
+- Rust 优先运行受影响 module 的相关测试；涉及公共 DTO、command、feature 或条件编译时再扩大到 check 或 clippy。
+- 纯文档、注释、文案或不影响布局的局部样式修改，不要求运行前后端全量测试；检查 diff 和受影响页面即可。
+- 某项检查已经通过，且后续修改没有影响它所覆盖的范围时，不要重复运行。
+- 局部检查出现跨模块失败、无法解释的回归或影响范围扩大时，再升级验证范围。
+
+### 交付阶段
+
+完成一项可交付成果后，对本次受影响的技术栈统一执行一次交付检查，不要在每个小补丁后重复执行。
+
+前端交付检查：
 
 ```powershell
 pnpm format:check
 pnpm lint
 pnpm typecheck
-pnpm test
 pnpm build
 ```
 
-Rust 基础检查：
+- 另行运行本次改动直接相关的前端单元测试；只有影响范围广、无法可靠筛选或进入全量回归阶段时才运行完整 `pnpm test`。
+
+Rust 交付检查：
 
 ```powershell
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo check --manifest-path src-tauri/Cargo.toml --all-targets
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+```
+
+- 另行运行本次改动直接相关的 Rust 测试；普通局部修改不要求每次运行完整 release 测试。
+- 只修改前端时不运行 Rust 检查，只修改 Rust 时不运行前端检查；跨越前后端契约时两侧都检查。
+
+### 全量与高风险回归
+
+- 发布前、跨模块重构、依赖或构建配置变更、SQLite migration、保险库、备份恢复、Excel 导入等高风险修改，运行相关技术栈的完整测试套件。
+- 前端全量测试使用 `pnpm test`。
+- Rust 全量 release 测试使用：
+
+```powershell
 cargo test --release --manifest-path src-tauri/Cargo.toml
 ```
 
-- 修改前端时至少运行格式、lint、类型检查、相关单元测试和构建。
-- 修改 Rust 时至少运行格式、check、clippy 和相关测试。
 - 修改保险库时必须使用临时保险库运行真实初始化、锁定和解锁回归；不要用正式保险库做测试。
-- 修改用户界面或交互时使用 Playwright 检查 `1440x900`、`1280x720` 和 `1100x700`，确认无截断、重叠或布局跳动。
+- 修改用户界面或交互时，在功能稳定后使用 Playwright 检查受影响页面。涉及响应式布局、全局壳层、弹窗、抽屉或导航时检查 `1440x900`、`1280x720` 和 `1100x700`；纯文案、颜色或不影响布局的交互修改可只检查一个代表性视口。
 - Windows 通知和安装行为只能在安装后的应用中作最终验收；开发模式结果不能替代安装版验收。
 - 开发启动命令为 `pnpm tauri dev`。启动前先检查是否已有开发服务，避免重复占用端口或启动多个桌面进程。
 
