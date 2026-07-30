@@ -401,35 +401,231 @@ pub async fn delete_account_profile<R: Runtime>(
     id: String,
 ) -> Result<(), String> {
     let _operation_guard = backup.lock_data_operation().await;
-    delete_account_profile_impl(database.inner(), &id).await?;
-
-    let worker_app = app.clone();
-    let secret_id = id.clone();
-    run_blocking_vault_operation(move || {
-        worker_app
-            .state::<VaultState>()
-            .remove_secret(&secret_id)
-            .map(|_| ())
-    })
-    .await
-    .map_err(|error| {
-        format!("账号元数据已删除，但清理保险库密码失败（可能留下不可见的孤儿秘密）：{error}")
-    })
+    let deleted =
+        delete_account_profiles_with_vault(database.inner(), &app, std::slice::from_ref(&id))
+            .await?;
+    if deleted == 0 {
+        return Err(format!("账号档案不存在: {id}"));
+    }
+    Ok(())
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub async fn delete_account_profiles<R: Runtime>(
+    database: State<'_, Database>,
+    backup: State<'_, BackupState>,
+    app: AppHandle<R>,
+    ids: Vec<String>,
+) -> Result<usize, String> {
+    let _operation_guard = backup.lock_data_operation().await;
+    delete_account_profiles_with_vault(database.inner(), &app, &ids).await
+}
+
+#[cfg(test)]
 pub(crate) async fn delete_account_profile_impl(
     database: &Database,
     id: &str,
 ) -> Result<(), String> {
-    let result = sqlx::query("DELETE FROM account_profiles WHERE id = ?")
-        .bind(id)
-        .execute(database.pool())
-        .await
-        .map_err(db_error)?;
-    if result.rows_affected() == 0 {
+    if delete_account_profiles_impl(database, &[id.to_owned()]).await? == 0 {
         return Err(format!("账号档案不存在: {id}"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) async fn delete_account_profiles_impl(
+    database: &Database,
+    ids: &[String],
+) -> Result<usize, String> {
+    let ids = normalize_account_ids(ids);
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    let mut transaction = database.pool().begin().await.map_err(db_error)?;
+    let deleted_ids = match delete_account_profiles_in_transaction(&mut transaction, &ids).await {
+        Ok(deleted_ids) => deleted_ids,
+        Err(error) => {
+            return Err(
+                rollback_transaction(transaction, error, "回滚未提交的账号批量删除失败").await,
+            );
+        }
+    };
+    transaction.commit().await.map_err(db_error)?;
+    Ok(deleted_ids.len())
+}
+
+fn normalize_account_ids(ids: &[String]) -> Vec<String> {
+    let mut ids: Vec<String> = ids
+        .iter()
+        .filter_map(|id| {
+            let id = id.trim();
+            (!id.is_empty()).then_some(id.to_owned())
+        })
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+async fn delete_account_profiles_in_transaction(
+    transaction: &mut Transaction<'_, Sqlite>,
+    ids: &[String],
+) -> Result<Vec<String>, String> {
+    let mut select_builder =
+        QueryBuilder::<Sqlite>::new("SELECT id FROM account_profiles WHERE id IN (");
+    {
+        let mut separated = select_builder.separated(", ");
+        for id in ids {
+            separated.push_bind(id);
+        }
+    }
+    select_builder.push(")");
+    let rows = select_builder
+        .build()
+        .fetch_all(&mut **transaction)
+        .await
+        .map_err(db_error)?;
+
+    let mut existing_ids = rows
+        .iter()
+        .map(|row| row.try_get::<String, _>("id").map_err(db_error))
+        .collect::<Result<Vec<_>, _>>()?;
+    if existing_ids.is_empty() {
+        return Ok(existing_ids);
+    }
+    existing_ids.sort_unstable();
+
+    let mut delete_builder =
+        QueryBuilder::<Sqlite>::new("DELETE FROM account_profiles WHERE id IN (");
+    {
+        let mut separated = delete_builder.separated(", ");
+        for id in &existing_ids {
+            separated.push_bind(id);
+        }
+    }
+    delete_builder.push(")");
+    let result = delete_builder
+        .build()
+        .execute(&mut **transaction)
+        .await
+        .map_err(db_error)?;
+    if result.rows_affected() as usize != existing_ids.len() {
+        return Err("账号批量删除数量与预期不一致，操作已取消".into());
+    }
+    Ok(existing_ids)
+}
+
+async fn remove_account_secrets<R: Runtime>(
+    app: &AppHandle<R>,
+    ids: &[String],
+) -> Result<Vec<(String, String)>, String> {
+    let worker_app = app.clone();
+    let ids = ids.to_vec();
+    run_blocking_vault_operation(move || {
+        let vault = worker_app.state::<VaultState>();
+        let mut removed = Vec::new();
+
+        for id in ids {
+            match vault.remove_secret(&id) {
+                Ok(Some(password)) => removed.push((id, password)),
+                Ok(None) => {}
+                Err(error) => {
+                    let primary_error = error.to_string();
+                    let mut rollback_errors = Vec::new();
+                    for (removed_id, password) in removed.drain(..).rev() {
+                        if let Err(rollback_error) = vault.set_secret(&removed_id, password) {
+                            rollback_errors.push(rollback_error.to_string());
+                        }
+                    }
+                    let message = if rollback_errors.is_empty() {
+                        format!("清理账号密码失败，已恢复此前清理的密码：{primary_error}")
+                    } else {
+                        format!(
+                            "清理账号密码失败，且恢复此前密码时发生错误：{primary_error}；{}",
+                            rollback_errors.join("；")
+                        )
+                    };
+                    return Err(crate::vault::VaultError::Operation(message));
+                }
+            }
+        }
+
+        Ok(removed)
+    })
+    .await
+}
+
+async fn restore_account_secrets<R: Runtime>(
+    app: &AppHandle<R>,
+    secrets: Vec<(String, String)>,
+) -> Result<(), String> {
+    if secrets.is_empty() {
+        return Ok(());
+    }
+
+    let worker_app = app.clone();
+    run_blocking_vault_operation(move || {
+        let vault = worker_app.state::<VaultState>();
+        let mut errors = Vec::new();
+        for (id, password) in secrets {
+            if let Err(error) = vault.set_secret(&id, password) {
+                errors.push(error.to_string());
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(crate::vault::VaultError::Operation(errors.join("；")))
+        }
+    })
+    .await
+}
+
+async fn delete_account_profiles_with_vault<R: Runtime>(
+    database: &Database,
+    app: &AppHandle<R>,
+    ids: &[String],
+) -> Result<usize, String> {
+    let ids = normalize_account_ids(ids);
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    let mut transaction = database.pool().begin().await.map_err(db_error)?;
+    let deleted_ids = match delete_account_profiles_in_transaction(&mut transaction, &ids).await {
+        Ok(deleted_ids) => deleted_ids,
+        Err(error) => {
+            return Err(
+                rollback_transaction(transaction, error, "回滚未提交的账号批量删除失败").await,
+            );
+        }
+    };
+    if deleted_ids.is_empty() {
+        transaction.rollback().await.map_err(db_error)?;
+        return Ok(0);
+    }
+
+    let removed_secrets = match remove_account_secrets(app, &deleted_ids).await {
+        Ok(secrets) => secrets,
+        Err(error) => {
+            return Err(
+                rollback_transaction(transaction, error, "回滚未提交的账号批量删除失败").await,
+            );
+        }
+    };
+
+    if let Err(error) = transaction.commit().await {
+        let primary_error = format!("提交账号批量删除失败：{error}");
+        return match restore_account_secrets(app, removed_secrets).await {
+            Ok(()) => Err(format!("{primary_error}；已恢复保险库中的账号密码")),
+            Err(restore_error) => Err(format!(
+                "{primary_error}；恢复保险库中的账号密码也失败：{restore_error}"
+            )),
+        };
+    }
+
+    Ok(deleted_ids.len())
 }
 
 pub(crate) async fn insert_imported_account_profile(
@@ -574,6 +770,60 @@ mod tests {
                 get_account_profile_impl(&database, &created.id)
                     .await
                     .is_err()
+            );
+        });
+    }
+
+    #[test]
+    fn supports_batch_account_profile_deletion() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let first = create_account_profile_impl(&database, input("batch-account-a"))
+                .await
+                .unwrap();
+            let second = create_account_profile_impl(&database, input("batch-account-b"))
+                .await
+                .unwrap();
+            let remaining = create_account_profile_impl(&database, input("batch-account-c"))
+                .await
+                .unwrap();
+
+            let deleted = delete_account_profiles_impl(
+                &database,
+                &[
+                    first.id.clone(),
+                    second.id.clone(),
+                    first.id.clone(),
+                    "  ".into(),
+                    "unknown-account".into(),
+                ],
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(deleted, 2);
+            assert!(
+                get_account_profile_impl(&database, &first.id)
+                    .await
+                    .is_err()
+            );
+            assert!(
+                get_account_profile_impl(&database, &second.id)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                get_account_profile_impl(&database, &remaining.id)
+                    .await
+                    .unwrap()
+                    .account_name,
+                "batch-account-c"
+            );
+            assert_eq!(
+                delete_account_profiles_impl(&database, &["unknown-account".into()])
+                    .await
+                    .unwrap(),
+                0
             );
         });
     }

@@ -713,6 +713,57 @@ pub(crate) async fn delete_appointment_impl(database: &Database, id: &str) -> Re
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn delete_appointments(
+    database: State<'_, Database>,
+    notifications: State<'_, NotificationState>,
+    backup: State<'_, BackupState>,
+    ids: Vec<String>,
+) -> Result<usize, String> {
+    let _operation_guard = backup.lock_data_operation().await;
+    let deleted = delete_appointments_impl(database.inner(), &ids).await?;
+    for id in ids {
+        let _ = cancel_appointment_notification(notifications.inner(), &id);
+    }
+    Ok(deleted)
+}
+
+pub(crate) async fn delete_appointments_impl(
+    database: &Database,
+    ids: &[String],
+) -> Result<usize, String> {
+    let mut unique_ids: Vec<String> = ids
+        .iter()
+        .filter_map(|id| {
+            let id = id.trim();
+            (!id.is_empty()).then_some(id.to_owned())
+        })
+        .collect();
+
+    if unique_ids.is_empty() {
+        return Ok(0);
+    }
+
+    unique_ids.sort_unstable();
+    unique_ids.dedup();
+
+    let mut builder = QueryBuilder::<Sqlite>::new("DELETE FROM appointments WHERE id IN (");
+    for (index, id) in unique_ids.iter().enumerate() {
+        if index > 0 {
+            builder.push(", ");
+        }
+        builder.push_bind(id);
+    }
+    builder.push(")");
+
+    let result = builder
+        .build()
+        .execute(database.pool())
+        .await
+        .map_err(db_error)?;
+    Ok(result.rows_affected() as usize)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn set_appointment_service_status<R: Runtime>(
     app: AppHandle<R>,
     database: State<'_, Database>,
@@ -1109,6 +1160,68 @@ mod tests {
                     .await
                     .is_err()
             );
+        });
+    }
+
+    #[test]
+    fn supports_batch_appointment_deletion() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let first =
+                create_appointment_impl(&database, business_input("2026-07-20", "10:00", "11:00"))
+                    .await
+                    .unwrap();
+            let second =
+                create_appointment_impl(&database, business_input("2026-07-20", "11:30", "12:30"))
+                    .await
+                    .unwrap();
+            let third =
+                create_appointment_impl(&database, business_input("2026-07-20", "13:00", "14:00"))
+                    .await
+                    .unwrap();
+
+            let deleted = delete_appointments_impl(
+                &database,
+                &[
+                    first.appointment.id.clone(),
+                    second.appointment.id.clone(),
+                    third.appointment.id.clone(),
+                ],
+            )
+            .await
+            .unwrap();
+            assert_eq!(deleted, 3);
+            assert!(
+                get_appointment_impl(&database, &first.appointment.id)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                list_appointments_impl(
+                    &database,
+                    AppointmentFilters {
+                        from: Some("2026-07-20".into()),
+                        to: Some("2026-07-20".into()),
+                        ..Default::default()
+                    }
+                )
+                .await
+                .unwrap()
+                .len(),
+                0,
+            );
+        });
+    }
+
+    #[test]
+    fn deleting_unknown_appointments_keeps_idempotence() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let unknown =
+                delete_appointments_impl(&database, &["unknown-appointment-id".to_string()])
+                    .await
+                    .unwrap();
+            assert_eq!(unknown, 0);
         });
     }
 }

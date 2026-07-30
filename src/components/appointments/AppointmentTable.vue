@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Ban, CopyPlus, Pencil, Trash2 } from "@lucide/vue";
+import { Ban, Pencil, Trash2, CopyPlus } from "@lucide/vue";
 import type { Appointment } from "../../types/domain";
 import {
   formatCompactDate,
@@ -7,11 +7,14 @@ import {
   formatTimeRange,
   modeLabels,
 } from "../../utils/formatters";
+import { useTemplateRef } from "vue";
+import { computed, watch } from "vue";
 import StatusBadge from "../common/StatusBadge.vue";
 
-defineProps<{
+const props = defineProps<{
   appointments: readonly Appointment[];
 }>();
+const selectedIds = defineModel<string[]>("selectedIds", { required: true });
 
 const emit = defineEmits<{
   edit: [appointment: Appointment];
@@ -19,6 +22,45 @@ const emit = defineEmits<{
   cancel: [appointment: Appointment];
   delete: [appointment: Appointment];
 }>();
+
+const allSelectRef = useTemplateRef("all-select");
+
+const selectedIdSet = computed(() => new Set(selectedIds.value));
+
+const selectedCount = computed(() => selectedIds.value.length);
+const allChecked = computed(
+  () =>
+    props.appointments.length > 0 &&
+    props.appointments.every((appointment) => selectedIdSet.value.has(appointment.id)),
+);
+const indeterminate = computed(() => selectedCount.value > 0 && !allChecked.value);
+
+watch(indeterminate, (value) => {
+  if (allSelectRef.value) {
+    allSelectRef.value.indeterminate = value;
+  }
+});
+
+function isChecked(event: unknown): boolean {
+  const target = (event as { target?: { checked?: boolean } } | null)?.target;
+  return target?.checked ?? false;
+}
+
+function toggleAll(event: unknown): void {
+  selectedIds.value = isChecked(event)
+    ? props.appointments.map((appointment) => appointment.id)
+    : [];
+}
+
+function toggleOne(appointmentId: string, event: unknown): void {
+  const next = new Set(selectedIds.value);
+  if (isChecked(event)) {
+    next.add(appointmentId);
+  } else {
+    next.delete(appointmentId);
+  }
+  selectedIds.value = [...next];
+}
 </script>
 
 <template>
@@ -26,6 +68,7 @@ const emit = defineEmits<{
     <div v-if="appointments.length" class="table-scroll">
       <table class="data-table">
         <colgroup>
+          <col style="width: 44px" />
           <col style="width: 60px" />
           <col style="width: 88px" />
           <col style="width: 72px" />
@@ -39,6 +82,17 @@ const emit = defineEmits<{
         </colgroup>
         <thead>
           <tr>
+            <th>
+              <input
+                id="all-select"
+                ref="all-select"
+                type="checkbox"
+                :checked="allChecked"
+                aria-label="全选当前页面预约"
+                @change="toggleAll"
+                @click.stop
+              />
+            </th>
             <th>日期</th>
             <th>时间</th>
             <th>联系人</th>
@@ -53,6 +107,14 @@ const emit = defineEmits<{
         </thead>
         <tbody>
           <tr v-for="appointment in appointments" :key="appointment.id">
+            <td>
+              <input
+                type="checkbox"
+                :checked="selectedIdSet.has(appointment.id)"
+                aria-label="选择该预约"
+                @change="toggleOne(appointment.id, $event)"
+              />
+            </td>
             <td class="mono-number">{{ formatCompactDate(appointment.serviceDate) }}</td>
             <td class="mono-number">
               {{ formatTimeRange(appointment.startsAt, appointment.endsAt) }}

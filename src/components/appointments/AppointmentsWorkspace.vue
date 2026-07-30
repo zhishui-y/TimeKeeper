@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Plus } from "@lucide/vue";
-import { watch } from "vue";
+import { Plus, Trash2 } from "@lucide/vue";
+import { computed, ref, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAccounts } from "../../composables/useAccounts";
 import { useAppointments } from "../../composables/useAppointments";
@@ -12,14 +12,18 @@ import AppointmentTable from "./AppointmentTable.vue";
 const ui = useUiStore();
 const { filters, items, loading, error, load } = useAppointments();
 const { items: accounts } = useAccounts();
+const selectedIds = ref<string[]>([]);
+const selectedCount = computed(() => selectedIds.value.length);
 
 async function applyFilters(next: AppointmentFilters): Promise<void> {
+  selectedIds.value = [];
   Object.keys(filters).forEach((key) => delete filters[key as keyof AppointmentFilters]);
   Object.assign(filters, next);
   await load();
 }
 
 async function resetFilters(): Promise<void> {
+  selectedIds.value = [];
   Object.keys(filters).forEach((key) => delete filters[key as keyof AppointmentFilters]);
   await load();
 }
@@ -51,6 +55,7 @@ async function remove(appointment: Appointment): Promise<void> {
   if (!globalThis.confirm(`确定永久删除 ${appointment.contactName} 的这条预约吗？`)) return;
   try {
     await api.deleteAppointment(appointment.id);
+    selectedIds.value = selectedIds.value.filter((id) => id !== appointment.id);
     ui.markDataChanged();
     await load();
     ui.notify("预约已永久删除", "success");
@@ -59,9 +64,41 @@ async function remove(appointment: Appointment): Promise<void> {
   }
 }
 
+async function removeBatch(): Promise<void> {
+  if (selectedCount.value === 0) return;
+  if (!globalThis.confirm(`确定永久删除选中的 ${selectedCount.value} 条预约吗？`)) return;
+  try {
+    const deletedCount = await api.deleteAppointments(selectedIds.value);
+    selectedIds.value = [];
+    ui.markDataChanged();
+    await load();
+    if (deletedCount > 0) {
+      ui.notify(`已永久删除 ${deletedCount} 条预约`, "success");
+    } else {
+      ui.notify("未找到可删除的预约", "warning");
+    }
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  }
+}
+
+watch(
+  () => items.value,
+  (currentItems) => {
+    const validIds = new Set(currentItems.map((item) => item.id));
+    const next = selectedIds.value.filter((id) => validIds.has(id));
+    if (next.length !== selectedIds.value.length) {
+      selectedIds.value = next;
+    }
+  },
+);
+
 watch(
   () => ui.dataRevision,
-  () => void load(),
+  () => {
+    selectedIds.value = [];
+    void load();
+  },
 );
 </script>
 
@@ -74,6 +111,15 @@ watch(
         @apply="applyFilters"
         @reset="resetFilters"
       />
+      <button
+        class="button button--ghost"
+        type="button"
+        @click="removeBatch"
+        :disabled="selectedCount === 0"
+      >
+        <Trash2 :size="15" />
+        批量删除
+      </button>
       <button class="button button--primary" type="button" @click="ui.openCreateAppointment()">
         <Plus :size="15" />
         新建
@@ -81,12 +127,14 @@ watch(
     </div>
     <div class="result-line">
       <span>共 {{ items.length }} 条记录</span>
-      <span>取消记录默认保留，可筛选后回顾</span>
+      <span v-if="selectedCount > 0">{{ selectedCount }} 条已选中</span>
+      <span v-else>取消记录默认保留，可筛选后回顾</span>
     </div>
     <div v-if="loading" class="loading-line" />
     <div v-if="error" class="error-banner">{{ error }}</div>
     <AppointmentTable
       :appointments="items"
+      v-model:selected-ids="selectedIds"
       @edit="ui.openEditAppointment"
       @duplicate="duplicate"
       @cancel="cancel"

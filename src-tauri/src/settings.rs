@@ -39,9 +39,9 @@ impl AppSettings {
         if self.default_reminder_minutes > 7 * 24 * 60 {
             return Err(SettingsError::Validation("默认提醒时间不能超过7天".into()));
         }
-        if !(1..=24 * 60).contains(&self.auto_lock_minutes) {
+        if self.auto_lock_minutes > 24 * 60 {
             return Err(SettingsError::Validation(
-                "自动锁定时间必须在1到1440分钟之间".into(),
+                "自动锁定时间必须为0（不自动锁定）或1到1440分钟".into(),
             ));
         }
         if !(1..=365).contains(&self.backup_retention) {
@@ -250,15 +250,39 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsafe_ranges() {
-        let invalid = AppSettings {
+    fn accepts_disabled_auto_lock_and_rejects_unsafe_ranges() {
+        let disabled = AppSettings {
             auto_lock_minutes: 0,
+            ..AppSettings::default()
+        };
+        disabled.validate().unwrap();
+
+        let invalid = AppSettings {
+            auto_lock_minutes: 1441,
             ..AppSettings::default()
         };
         assert!(matches!(
             invalid.validate(),
             Err(SettingsError::Validation(_))
         ));
+    }
+
+    #[test]
+    fn persists_disabled_auto_lock() {
+        let dir = test_dir("disabled-auto-lock");
+        let state = SettingsState::load(&dir).unwrap();
+        let disabled = AppSettings {
+            auto_lock_minutes: 0,
+            ..AppSettings::default()
+        };
+
+        state.update_from_frontend(disabled.clone()).unwrap();
+
+        assert_eq!(
+            SettingsState::load(&dir).unwrap().snapshot().unwrap(),
+            disabled
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

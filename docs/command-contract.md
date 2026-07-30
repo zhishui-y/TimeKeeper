@@ -11,6 +11,7 @@ All command payloads and responses use camelCase JSON. Rust DTOs use
 - `update_appointment(id, input) -> AppointmentMutationResult`
 - `duplicate_appointment(id, serviceDate?) -> AppointmentMutationResult`
 - `delete_appointment(id) -> void`
+- `delete_appointments(ids) -> number`
 - `set_appointment_service_status(id, status) -> Appointment`
 - `settle_appointment(id, amountMinor, paymentMethod?) -> Appointment`
 
@@ -25,9 +26,11 @@ do not block writes.
 - `create_account_profile(input) -> AccountProfile`
 - `update_account_profile(id, input) -> AccountProfile`
 - `delete_account_profile(id) -> void`
+- `delete_account_profiles(ids) -> number`
 - `vault_status() -> VaultStatus`
 - `initialize_vault(password) -> VaultStatus`
 - `unlock_vault(password) -> VaultStatus`
+- `change_vault_password(currentPassword, newPassword) -> VaultStatus`
 - `lock_vault() -> VaultStatus`
 - `reveal_account_password(id) -> string`
 - `copy_account_password(id) -> void`
@@ -35,6 +38,12 @@ do not block writes.
 Passwords never appear in account list/detail responses. Password writes and
 SQLite profile writes use compensating rollback so a failed operation cannot
 leave a visible profile without its secret.
+
+Changing the master password requires an unlocked vault and the current
+password. Rust re-encrypts and verifies the complete Stronghold snapshot before
+replacing the in-memory session. Existing backup files retain the master
+password that was active when each backup was created. New master passwords
+must contain at least 4 Unicode characters; 8 or more are recommended.
 
 ## Reports, import, backup, and settings
 
@@ -46,6 +55,10 @@ leave a visible profile without its secret.
 - `restore_backup(path) -> void` (successful restore requests app restart)
 - `get_settings() -> AppSettings`
 - `update_settings(settings) -> AppSettings`
+
+`AppSettings.autoLockMinutes` accepts `0` to disable idle auto-lock, or a value
+from `1` through `1440` minutes. Manual lock and locking caused by closing the
+application remain available when idle auto-lock is disabled.
 
 Excel preview tokens are in-memory, expire after 30 minutes, and contain parsed
 secret values only on the Rust side. A repeated import is skipped using stable

@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { Copy, Eye, EyeOff, Pencil, Trash2, TriangleAlert } from "@lucide/vue";
+import { computed, useTemplateRef, watch } from "vue";
 import type { AccountProfile } from "../../types/domain";
 import { formatShortDate } from "../../utils/formatters";
 
-defineProps<{
+const props = defineProps<{
   profiles: readonly AccountProfile[];
   revealedPasswords: Readonly<Record<string, string>>;
   vaultUnlocked: boolean;
 }>();
+const selectedIds = defineModel<string[]>("selectedIds", { required: true });
 
 const emit = defineEmits<{
   edit: [profile: AccountProfile];
@@ -16,6 +18,40 @@ const emit = defineEmits<{
   copy: [profile: AccountProfile];
   delete: [profile: AccountProfile];
 }>();
+
+const allSelectRef = useTemplateRef("all-select");
+const selectedIdSet = computed(() => new Set(selectedIds.value));
+const allChecked = computed(
+  () =>
+    props.profiles.length > 0 &&
+    props.profiles.every((profile) => selectedIdSet.value.has(profile.id)),
+);
+const indeterminate = computed(() => selectedIds.value.length > 0 && !allChecked.value);
+
+watch(indeterminate, (value) => {
+  if (allSelectRef.value) {
+    allSelectRef.value.indeterminate = value;
+  }
+});
+
+function isChecked(event: unknown): boolean {
+  const target = (event as { target?: { checked?: boolean } } | null)?.target;
+  return target?.checked ?? false;
+}
+
+function toggleAll(event: unknown): void {
+  selectedIds.value = isChecked(event) ? props.profiles.map((profile) => profile.id) : [];
+}
+
+function toggleOne(profileId: string, event: unknown): void {
+  const next = new Set(selectedIds.value);
+  if (isChecked(event)) {
+    next.add(profileId);
+  } else {
+    next.delete(profileId);
+  }
+  selectedIds.value = [...next];
+}
 </script>
 
 <template>
@@ -23,6 +59,7 @@ const emit = defineEmits<{
     <div v-if="profiles.length" class="table-scroll">
       <table class="data-table">
         <colgroup>
+          <col style="width: 44px" />
           <col style="width: 90px" />
           <col style="width: 86px" />
           <col style="width: 86px" />
@@ -37,6 +74,16 @@ const emit = defineEmits<{
         </colgroup>
         <thead>
           <tr>
+            <th>
+              <input
+                ref="all-select"
+                type="checkbox"
+                :checked="allChecked"
+                aria-label="全选当前列表账号"
+                @change="toggleAll"
+                @click.stop
+              />
+            </th>
             <th>联系人</th>
             <th>服务器</th>
             <th>角色名</th>
@@ -54,9 +101,23 @@ const emit = defineEmits<{
           <tr
             v-for="profile in profiles"
             :key="profile.id"
-            v-memo="[profile, revealedPasswords[profile.id], vaultUnlocked]"
+            v-memo="[
+              profile,
+              revealedPasswords[profile.id],
+              vaultUnlocked,
+              selectedIdSet.has(profile.id),
+            ]"
             :class="{ 'needs-review': profile.needsReview }"
           >
+            <td>
+              <input
+                type="checkbox"
+                :checked="selectedIdSet.has(profile.id)"
+                :aria-label="`选择账号 ${profile.accountName}`"
+                @change="toggleOne(profile.id, $event)"
+                @click.stop
+              />
+            </td>
             <td>
               <div class="contact-cell">
                 <TriangleAlert v-if="profile.needsReview" :size="13" />
@@ -117,7 +178,8 @@ const emit = defineEmits<{
                 <button
                   class="icon-button action-danger"
                   type="button"
-                  title="删除"
+                  :disabled="!vaultUnlocked"
+                  :title="vaultUnlocked ? '删除' : '删除账号前需要解锁密码库'"
                   aria-label="删除账号"
                   @click="emit('delete', profile)"
                 >
@@ -139,7 +201,7 @@ const emit = defineEmits<{
 }
 
 .account-table .data-table {
-  min-width: 990px;
+  min-width: 1034px;
 }
 
 .needs-review {

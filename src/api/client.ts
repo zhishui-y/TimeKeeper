@@ -24,6 +24,7 @@ const nativeApi: ApiClient = {
   duplicateAppointment: (id, serviceDate) =>
     invoke<AppointmentMutationResult>("duplicate_appointment", { id, serviceDate }),
   deleteAppointment: (id) => invoke<void>("delete_appointment", { id }),
+  deleteAppointments: (ids) => invoke<number>("delete_appointments", { ids }),
   setAppointmentServiceStatus: (id, status) =>
     invoke<Appointment>("set_appointment_service_status", { id, status }),
   settleAppointment: (id, amountMinor, paymentMethod) =>
@@ -36,10 +37,13 @@ const nativeApi: ApiClient = {
   updateAccountProfile: (id, input) =>
     invoke<AccountProfile>("update_account_profile", { id, input }),
   deleteAccountProfile: (id) => invoke<void>("delete_account_profile", { id }),
+  deleteAccountProfiles: (ids) => invoke<number>("delete_account_profiles", { ids }),
 
   vaultStatus: () => invoke<VaultStatus>("vault_status"),
   initializeVault: (password) => invoke<VaultStatus>("initialize_vault", { password }),
   unlockVault: (password) => invoke<VaultStatus>("unlock_vault", { password }),
+  changeVaultPassword: (currentPassword, newPassword) =>
+    invoke<VaultStatus>("change_vault_password", { currentPassword, newPassword }),
   lockVault: () => invoke<VaultStatus>("lock_vault"),
   revealAccountPassword: (id) => invoke<string>("reveal_account_password", { id }),
   copyAccountPassword: (id) => invoke<void>("copy_account_password", { id }),

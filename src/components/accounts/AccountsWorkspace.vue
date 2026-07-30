@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { LockKeyhole, Plus, Search, ShieldCheck, UnlockKeyhole } from "@lucide/vue";
-import { onBeforeUnmount, onMounted, shallowRef } from "vue";
+import { LockKeyhole, Plus, Search, ShieldCheck, Trash2, UnlockKeyhole } from "@lucide/vue";
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAccounts } from "../../composables/useAccounts";
 import { useVault } from "../../composables/useVault";
@@ -17,6 +17,8 @@ const needsReviewOnly = shallowRef(false);
 const drawerOpen = shallowRef(false);
 const activeProfile = shallowRef<AccountProfile | null>(null);
 const savingAccount = shallowRef(false);
+const selectedIds = ref<string[]>([]);
+const selectedCount = computed(() => selectedIds.value.length);
 const masterPassword = shallowRef("");
 const revealedPasswords = shallowRef<Record<string, string>>({});
 const revealTimers = new Map<string, ReturnType<typeof globalThis.setTimeout>>();
@@ -32,6 +34,7 @@ function openEdit(profile: AccountProfile): void {
 }
 
 async function search(): Promise<void> {
+  selectedIds.value = [];
   await load(query.value, needsReviewOnly.value ? true : undefined);
 }
 
@@ -88,12 +91,42 @@ async function copy(profile: AccountProfile): Promise<void> {
 }
 
 async function remove(profile: AccountProfile): Promise<void> {
-  if (!globalThis.confirm(`确定删除账号 ${profile.accountName} 吗？`)) return;
+  if (!globalThis.confirm(`确定永久删除账号 ${profile.accountName} 及其密码吗？`)) return;
   try {
     await api.deleteAccountProfile(profile.id);
+    selectedIds.value = selectedIds.value.filter((id) => id !== profile.id);
+    hide(profile);
     await search();
     ui.markAccountsChanged();
     ui.notify("账号档案已删除", "success");
+  } catch (cause) {
+    await search();
+    ui.markAccountsChanged();
+    ui.notify(errorMessage(cause), "danger");
+  }
+}
+
+async function removeBatch(): Promise<void> {
+  if (selectedCount.value === 0 || !vaultStatus.value.unlocked) return;
+  if (!globalThis.confirm(`确定永久删除选中的 ${selectedCount.value} 个账号档案及其密码吗？`)) {
+    return;
+  }
+
+  const ids = [...selectedIds.value];
+  try {
+    const deletedCount = await api.deleteAccountProfiles(ids);
+    for (const id of ids) {
+      const profile = items.value.find((item) => item.id === id);
+      if (profile) hide(profile);
+    }
+    selectedIds.value = [];
+    await search();
+    ui.markAccountsChanged();
+    if (deletedCount > 0) {
+      ui.notify(`已永久删除 ${deletedCount} 个账号档案`, "success");
+    } else {
+      ui.notify("未找到可删除的账号档案", "warning");
+    }
   } catch (cause) {
     await search();
     ui.markAccountsChanged();
@@ -120,6 +153,17 @@ async function lockVault(): Promise<void> {
 
 onMounted(() => void loadVault());
 
+watch(
+  () => items.value,
+  (currentItems) => {
+    const validIds = new Set(currentItems.map((item) => item.id));
+    const next = selectedIds.value.filter((id) => validIds.has(id));
+    if (next.length !== selectedIds.value.length) {
+      selectedIds.value = next;
+    }
+  },
+);
+
 onBeforeUnmount(() => {
   revealTimers.forEach((timer) => globalThis.clearTimeout(timer));
   revealTimers.clear();
@@ -142,7 +186,9 @@ onBeforeUnmount(() => {
           }}</strong>
           <span>{{
             vaultStatus.unlocked
-              ? `${vaultStatus.autoLockMinutes}分钟无操作后自动锁定`
+              ? vaultStatus.autoLockMinutes === 0
+                ? "已关闭自动锁定"
+                : `${vaultStatus.autoLockMinutes}分钟无操作后自动锁定`
               : "账号密码需要解锁后查看或修改"
           }}</span>
         </div>
@@ -181,18 +227,36 @@ onBeforeUnmount(() => {
         </label>
         <button class="button button--compact" type="submit">查询</button>
       </form>
-      <button
-        class="button button--primary"
-        type="button"
-        :disabled="!vaultStatus.unlocked"
-        @click="openCreate"
-      >
-        <Plus :size="15" />新建账号
-      </button>
+      <div class="account-actions">
+        <button
+          class="button button--ghost"
+          type="button"
+          :disabled="selectedCount === 0 || !vaultStatus.unlocked"
+          :title="
+            !vaultStatus.unlocked
+              ? '删除账号前需要解锁密码库'
+              : selectedCount === 0
+                ? '请先选择账号'
+                : '永久删除选中的账号'
+          "
+          @click="removeBatch"
+        >
+          <Trash2 :size="15" />批量删除
+        </button>
+        <button
+          class="button button--primary"
+          type="button"
+          :disabled="!vaultStatus.unlocked"
+          @click="openCreate"
+        >
+          <Plus :size="15" />新建账号
+        </button>
+      </div>
     </div>
     <div class="account-summary">
       <span>共 {{ items.length }} 个账号</span>
-      <span>{{ items.filter((item) => item.needsReview).length }} 个待完善</span>
+      <span v-if="selectedCount > 0">{{ selectedCount }} 个已选中</span>
+      <span v-else>{{ items.filter((item) => item.needsReview).length }} 个待完善</span>
     </div>
     <div v-if="loading" class="loading-line" />
     <div v-if="error" class="error-banner">{{ error }}</div>
@@ -200,6 +264,7 @@ onBeforeUnmount(() => {
       :profiles="items"
       :revealed-passwords="revealedPasswords"
       :vault-unlocked="vaultStatus.unlocked"
+      v-model:selected-ids="selectedIds"
       @edit="openEdit"
       @reveal="reveal"
       @hide="hide"
@@ -307,6 +372,12 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 9px;
+}
+
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .accounts-workspace > .page-toolbar {

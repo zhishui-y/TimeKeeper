@@ -9,6 +9,27 @@ const uninitializedStatus = {
 };
 
 describe("VaultGate", () => {
+  it("accepts four-character master passwords but rejects shorter values", async () => {
+    const wrapper = mount(VaultGate, {
+      props: {
+        status: uninitializedStatus,
+        loading: false,
+        ready: true,
+      },
+    });
+
+    await wrapper.get('input[aria-label="主密码"]').setValue("123");
+    await wrapper.get('input[aria-label="再次输入主密码"]').setValue("123");
+    await wrapper.get("form").trigger("submit");
+    expect(wrapper.text()).toContain("至少需要4个字符");
+    expect(wrapper.emitted("submit")).toBeUndefined();
+
+    await wrapper.get('input[aria-label="主密码"]').setValue("1234");
+    await wrapper.get('input[aria-label="再次输入主密码"]').setValue("1234");
+    await wrapper.get("form").trigger("submit");
+    expect(wrapper.emitted("submit")).toEqual([["1234"]]);
+  });
+
   it("requires the initial master password to be entered twice", async () => {
     const wrapper = mount(VaultGate, {
       props: {

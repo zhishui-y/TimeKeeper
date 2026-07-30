@@ -23,6 +23,7 @@ export interface ApiClient {
   updateAppointment(id: string, input: AppointmentInput): Promise<AppointmentMutationResult>;
   duplicateAppointment(id: string, serviceDate?: string): Promise<AppointmentMutationResult>;
   deleteAppointment(id: string): Promise<void>;
+  deleteAppointments(ids: string[]): Promise<number>;
   setAppointmentServiceStatus(id: string, status: ServiceStatus): Promise<Appointment>;
   settleAppointment(id: string, amountMinor: number, paymentMethod?: string): Promise<Appointment>;
 
@@ -31,10 +32,12 @@ export interface ApiClient {
   createAccountProfile(input: AccountProfileInput): Promise<AccountProfile>;
   updateAccountProfile(id: string, input: AccountProfileInput): Promise<AccountProfile>;
   deleteAccountProfile(id: string): Promise<void>;
+  deleteAccountProfiles(ids: string[]): Promise<number>;
 
   vaultStatus(): Promise<VaultStatus>;
   initializeVault(password: string): Promise<VaultStatus>;
   unlockVault(password: string): Promise<VaultStatus>;
+  changeVaultPassword(currentPassword: string, newPassword: string): Promise<VaultStatus>;
   lockVault(): Promise<VaultStatus>;
   revealAccountPassword(id: string): Promise<string>;
   copyAccountPassword(id: string): Promise<void>;

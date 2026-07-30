@@ -12,6 +12,7 @@ import type {
   ServiceStatus,
   VaultStatus,
 } from "../types/domain";
+import { MIN_MASTER_PASSWORD_CHARACTERS, isMasterPasswordLongEnough } from "../utils/security";
 import { combineDateTime } from "../utils/appointment";
 import { demoAccounts, demoAppointments, demoPasswords } from "./mockData";
 import type { ApiClient } from "./types";
@@ -20,6 +21,7 @@ let appointments = structuredClone(demoAppointments);
 let accounts = structuredClone(demoAccounts);
 const passwords = new Map(demoPasswords);
 let vault: VaultStatus = { initialized: true, unlocked: true, autoLockMinutes: 15 };
+let vaultPassword: string | null = null;
 let settings: AppSettings = {
   defaultReminderMinutes: 30,
   autoLockMinutes: 15,
@@ -33,6 +35,7 @@ interface MockBackupSnapshot {
   passwords: Array<[string, string]>;
   settings: AppSettings;
   vault: Omit<VaultStatus, "unlocked">;
+  vaultPassword: string | null;
 }
 
 let backupSnapshot: MockBackupSnapshot | null = null;
@@ -184,16 +187,44 @@ function requireVault(): void {
   if (!vault.unlocked) throw new Error("密码库已锁定，请先解锁");
 }
 
+function getPasswordOrThrow(id: string): string {
+  const password = passwords.get(id);
+  if (password === undefined) throw new Error("该账号尚未保存密码");
+  return password;
+}
+
 function getAppointmentOrThrow(id: string): Appointment {
   const item = appointments.find((appointment) => appointment.id === id);
   if (!item) throw new Error("预约不存在或已被删除");
   return item;
 }
 
+function deleteAppointmentsByIds(ids: readonly string[]): number {
+  const targets = new Set(ids.map((id) => id.trim()).filter(Boolean));
+  const before = appointments.length;
+  appointments = appointments.filter((item) => !targets.has(item.id));
+  return before - appointments.length;
+}
+
 function getAccountOrThrow(id: string): AccountProfile {
   const item = accounts.find((account) => account.id === id);
   if (!item) throw new Error("账号档案不存在或已被删除");
   return item;
+}
+
+function deleteAccountProfilesByIds(ids: readonly string[]): number {
+  const targets = new Set(ids.map((id) => id.trim()).filter(Boolean));
+  const existingIds = new Set(
+    accounts.filter((account) => targets.has(account.id)).map((account) => account.id),
+  );
+  accounts = accounts.filter((account) => !existingIds.has(account.id));
+  appointments = appointments.map((appointment) =>
+    appointment.accountProfileId && existingIds.has(appointment.accountProfileId)
+      ? { ...appointment, accountProfileId: null }
+      : appointment,
+  );
+  existingIds.forEach((id) => passwords.delete(id));
+  return existingIds.size;
 }
 
 export const mockApi: ApiClient = {
@@ -241,8 +272,11 @@ export const mockApi: ApiClient = {
       notes: source.notes,
     });
   },
+  async deleteAppointments(ids) {
+    return deleteAppointmentsByIds(ids);
+  },
   async deleteAppointment(id) {
-    appointments = appointments.filter((item) => item.id !== id);
+    deleteAppointmentsByIds([id]);
   },
   async setAppointmentServiceStatus(id, status: ServiceStatus) {
     const item = getAppointmentOrThrow(id);
@@ -324,24 +358,43 @@ export const mockApi: ApiClient = {
   },
   async deleteAccountProfile(id) {
     getAccountOrThrow(id);
-    accounts = accounts.filter((item) => item.id !== id);
-    appointments = appointments.map((item) =>
-      item.accountProfileId === id ? { ...item, accountProfileId: null } : item,
-    );
-    passwords.delete(id);
+    deleteAccountProfilesByIds([id]);
+  },
+  async deleteAccountProfiles(ids) {
+    return deleteAccountProfilesByIds(ids);
   },
 
   async vaultStatus() {
     return structuredClone(vault);
   },
   async initializeVault(password) {
-    if (!password.trim()) throw new Error("主密码不能为空");
+    if (!isMasterPasswordLongEnough(password)) {
+      throw new Error(`主密码至少需要${MIN_MASTER_PASSWORD_CHARACTERS}个字符`);
+    }
+    vaultPassword = password;
     vault = { initialized: true, unlocked: true, autoLockMinutes: settings.autoLockMinutes };
     return structuredClone(vault);
   },
   async unlockVault(password) {
-    if (!password.trim()) throw new Error("请输入主密码");
+    if (!password) throw new Error("主密码不能为空");
+    if (vaultPassword !== null && password !== vaultPassword) {
+      throw new Error("主密码错误或保险库已经损坏");
+    }
+    vaultPassword ??= password;
     vault = { ...vault, unlocked: true };
+    return structuredClone(vault);
+  },
+  async changeVaultPassword(currentPassword, newPassword) {
+    requireVault();
+    if (!currentPassword) throw new Error("主密码不能为空");
+    if (!isMasterPasswordLongEnough(newPassword)) {
+      throw new Error(`主密码至少需要${MIN_MASTER_PASSWORD_CHARACTERS}个字符`);
+    }
+    if (newPassword === currentPassword) throw new Error("新主密码不能与当前主密码相同");
+    if (vaultPassword !== null && currentPassword !== vaultPassword) {
+      throw new Error("当前主密码不正确");
+    }
+    vaultPassword = newPassword;
     return structuredClone(vault);
   },
   async lockVault() {
@@ -350,11 +403,11 @@ export const mockApi: ApiClient = {
   },
   async revealAccountPassword(id) {
     requireVault();
-    return passwords.get(id) ?? "";
+    return getPasswordOrThrow(id);
   },
   async copyAccountPassword(id) {
     requireVault();
-    const password = passwords.get(id) ?? "";
+    const password = getPasswordOrThrow(id);
     if (navigator.clipboard) {
       await navigator.clipboard.writeText(password);
       window.setTimeout(
@@ -491,6 +544,7 @@ export const mockApi: ApiClient = {
         initialized: vault.initialized,
         autoLockMinutes: vault.autoLockMinutes,
       },
+      vaultPassword,
     };
     lastBackupPath = path;
     return {
@@ -509,6 +563,7 @@ export const mockApi: ApiClient = {
     for (const [id, password] of backupSnapshot.passwords) passwords.set(id, password);
     settings = structuredClone(backupSnapshot.settings);
     vault = { ...structuredClone(backupSnapshot.vault), unlocked: false };
+    vaultPassword = backupSnapshot.vaultPassword;
   },
   async getSettings() {
     return structuredClone(settings);

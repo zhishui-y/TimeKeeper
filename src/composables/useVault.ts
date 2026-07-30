@@ -9,7 +9,7 @@ const status = shallowRef<VaultStatus>({
 });
 const loading = shallowRef(false);
 const error = shallowRef<string | null>(null);
-type VaultOperation = "load" | "initialize" | "unlock" | "lock";
+type VaultOperation = "load" | "initialize" | "unlock" | "change-password" | "lock";
 
 interface InFlightVaultRequest {
   operation: VaultOperation;
@@ -66,6 +66,8 @@ export function useVault() {
   const initialize = (password: string) =>
     run("initialize", password, () => api.initializeVault(password));
   const unlock = (password: string) => run("unlock", password, () => api.unlockVault(password));
+  const changePassword = (currentPassword: string, newPassword: string) =>
+    run("change-password", undefined, () => api.changeVaultPassword(currentPassword, newPassword));
   const lock = () => run("lock", undefined, () => api.lockVault());
 
   return {
@@ -75,6 +77,7 @@ export function useVault() {
     load,
     initialize,
     unlock,
+    changePassword,
     lock,
   };
 }

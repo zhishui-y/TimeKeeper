@@ -6,14 +6,12 @@ import {
   FileSearch,
   FileSpreadsheet,
   HardDriveDownload,
-  LockKeyhole,
   Save,
   ShieldCheck,
   Upload,
 } from "@lucide/vue";
-import { onMounted, reactive, shallowRef, watch } from "vue";
+import { computed, onMounted, reactive, shallowRef, watch } from "vue";
 import { api, errorMessage, isTauri } from "../../api/client";
-import { useVault } from "../../composables/useVault";
 import { useUiStore } from "../../stores/ui";
 import type {
   AppSettings,
@@ -23,6 +21,11 @@ import type {
 } from "../../types/domain";
 import type { AppNotificationPermission } from "../../api/types";
 import { formatFileSize } from "../../utils/formatters";
+import OperationProgress from "./OperationProgress.vue";
+import VaultSettingsPanel from "./VaultSettingsPanel.vue";
+
+type ImportOperation = "preview" | "commit";
+type BackupOperation = "export" | "restore";
 
 const ui = useUiStore();
 const settings = reactive<AppSettings>({
@@ -36,12 +39,44 @@ const importPath = shallowRef("");
 const baseYear = shallowRef(new Date().getFullYear());
 const importPreview = shallowRef<ExcelImportPreview | null>(null);
 const importResult = shallowRef<ExcelImportResult | null>(null);
-const importBusy = shallowRef(false);
-const backupBusy = shallowRef(false);
+const importOperation = shallowRef<ImportOperation | null>(null);
+const backupOperation = shallowRef<BackupOperation | null>(null);
 const lastBackup = shallowRef<BackupResult | null>(null);
 const notificationPermission = shallowRef<AppNotificationPermission>("default");
-const vaultPassword = shallowRef("");
-const { status: vaultStatus, load: loadVault, unlock, initialize, lock } = useVault();
+const vaultPanel = shallowRef<InstanceType<typeof VaultSettingsPanel> | null>(null);
+
+const importBusy = computed(() => importOperation.value !== null);
+const backupBusy = computed(() => backupOperation.value !== null);
+const importProgress = computed(() => {
+  if (importOperation.value === "preview") {
+    return {
+      title: "正在生成导入预览",
+      detail: "正在读取并解析 Excel 工作表，完成前请保持应用开启。",
+    };
+  }
+  if (importOperation.value === "commit") {
+    return {
+      title: "正在导入账本数据",
+      detail: "正在写入预约、账号档案与加密密码，并检查重复记录。",
+    };
+  }
+  return null;
+});
+const backupProgress = computed(() => {
+  if (backupOperation.value === "export") {
+    return {
+      title: "正在导出完整备份",
+      detail: "正在快照数据库，并打包设置与本地加密密码库。",
+    };
+  }
+  if (backupOperation.value === "restore") {
+    return {
+      title: "正在校验并准备恢复",
+      detail: "正在验证备份内容并保存当前版本，完成后应用将自动重启。",
+    };
+  }
+  return null;
+});
 
 async function loadSettings(): Promise<void> {
   loadingSettings.value = true;
@@ -59,7 +94,7 @@ async function saveSettings(): Promise<void> {
   try {
     Object.assign(settings, await api.updateSettings({ ...settings }));
     ui.setAppointmentDefaultReminderMinutes(settings.defaultReminderMinutes);
-    await loadVault();
+    await vaultPanel.value?.refresh();
     ui.notify("设置已保存", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
@@ -79,7 +114,8 @@ async function previewImport(): Promise<void> {
     ui.notify("请先选择 Excel 账本", "warning");
     return;
   }
-  importBusy.value = true;
+  importOperation.value = "preview";
+  importPreview.value = null;
   importResult.value = null;
   const path = importPath.value;
   const year = baseYear.value;
@@ -91,15 +127,16 @@ async function previewImport(): Promise<void> {
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
   } finally {
-    importBusy.value = false;
+    importOperation.value = null;
   }
 }
 
 async function commitImport(): Promise<void> {
   if (!importPreview.value) return;
-  importBusy.value = true;
+  const previewToken = importPreview.value.previewToken;
+  importOperation.value = "commit";
   try {
-    importResult.value = await api.commitExcelImport(importPreview.value.previewToken);
+    importResult.value = await api.commitExcelImport(previewToken);
     importPreview.value = null;
     ui.markDataChanged();
     ui.markAccountsChanged();
@@ -107,7 +144,7 @@ async function commitImport(): Promise<void> {
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
   } finally {
-    importBusy.value = false;
+    importOperation.value = null;
   }
 }
 
@@ -126,14 +163,14 @@ async function requestNotifications(): Promise<void> {
 async function createBackup(): Promise<void> {
   const destination = await api.selectBackupDestination();
   if (!destination) return;
-  backupBusy.value = true;
+  backupOperation.value = "export";
   try {
     lastBackup.value = await api.createBackup(destination);
     ui.notify("完整备份已创建", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
   } finally {
-    backupBusy.value = false;
+    backupOperation.value = null;
   }
 }
 
@@ -141,12 +178,12 @@ async function restoreBackup(): Promise<void> {
   const path = await api.selectBackupFile();
   if (!path) return;
   if (!globalThis.confirm("恢复备份会先保存当前数据，成功后应用将重启。是否继续？")) return;
-  backupBusy.value = true;
+  backupOperation.value = "restore";
   try {
     await api.restoreBackup(path);
     if (!isTauri) {
       ui.markDataChanged();
-      await Promise.all([loadSettings(), loadVault()]);
+      await Promise.all([loadSettings(), vaultPanel.value?.refresh()]);
     }
     ui.notify(
       isTauri ? "备份已恢复，正在重启应用" : "演示模式：备份校验与恢复流程已完成",
@@ -155,24 +192,8 @@ async function restoreBackup(): Promise<void> {
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
   } finally {
-    backupBusy.value = false;
+    backupOperation.value = null;
   }
-}
-
-async function submitVault(): Promise<void> {
-  const result = vaultStatus.value.initialized
-    ? await unlock(vaultPassword.value)
-    : await initialize(vaultPassword.value);
-  if (result) {
-    vaultPassword.value = "";
-    ui.notify("密码库已解锁", "success");
-  }
-}
-
-async function lockVault(): Promise<void> {
-  const result = await lock();
-  if (!result) return;
-  ui.notify("密码库已锁定", "success");
 }
 
 watch(baseYear, () => {
@@ -180,7 +201,7 @@ watch(baseYear, () => {
 });
 
 onMounted(() => {
-  void Promise.all([loadSettings(), loadVault()]);
+  void loadSettings();
 });
 </script>
 
@@ -217,6 +238,7 @@ onMounted(() => {
                 type="number"
                 min="2000"
                 max="2100"
+                :disabled="importBusy"
               />
             </label>
             <button
@@ -225,9 +247,15 @@ onMounted(() => {
               :disabled="!importPath || importBusy"
               @click="previewImport"
             >
-              <FileSearch :size="15" />生成预览
+              <FileSearch :size="15" />{{ importOperation === "preview" ? "正在生成" : "生成预览" }}
             </button>
           </div>
+
+          <OperationProgress
+            v-if="importProgress"
+            :title="importProgress.title"
+            :detail="importProgress.detail"
+          />
 
           <div v-if="importPreview" class="import-preview">
             <div class="import-preview__title">
@@ -269,7 +297,9 @@ onMounted(() => {
               :disabled="importBusy"
               @click="commitImport"
             >
-              <CheckCircle2 :size="15" />确认导入
+              <CheckCircle2 :size="15" />{{
+                importOperation === "commit" ? "正在导入" : "确认导入"
+              }}
             </button>
           </div>
 
@@ -329,47 +359,11 @@ onMounted(() => {
             <p>密码只在本地加密存储，忘记主密码后无法恢复。</p>
           </div>
         </header>
-        <div class="settings-section__body settings-form">
-          <div class="inline-status">
-            <span :class="{ 'is-success': vaultStatus.unlocked }">
-              {{
-                vaultStatus.unlocked ? "已解锁" : vaultStatus.initialized ? "已锁定" : "未初始化"
-              }}
-            </span>
-            <button
-              v-if="vaultStatus.unlocked"
-              class="button button--compact"
-              type="button"
-              @click="lockVault"
-            >
-              <LockKeyhole :size="14" />立即锁定
-            </button>
-          </div>
-          <form v-if="!vaultStatus.unlocked" class="vault-form" @submit.prevent="submitVault">
-            <input
-              v-model="vaultPassword"
-              class="input"
-              type="password"
-              :autocomplete="vaultStatus.initialized ? 'current-password' : 'new-password'"
-              :placeholder="vaultStatus.initialized ? '输入主密码' : '设置主密码'"
-            />
-            <button class="button button--primary button--compact" type="submit">
-              {{ vaultStatus.initialized ? "解锁" : "初始化" }}
-            </button>
-          </form>
-          <label class="field">
-            <span class="field__label">无操作自动锁定</span>
-            <div class="unit-input">
-              <input
-                v-model.number="settings.autoLockMinutes"
-                class="input mono-number"
-                type="number"
-                min="1"
-                max="120"
-              />
-              <span>分钟</span>
-            </div>
-          </label>
+        <div class="settings-section__body">
+          <VaultSettingsPanel
+            ref="vaultPanel"
+            v-model:auto-lock-minutes="settings.autoLockMinutes"
+          />
         </div>
       </section>
 
@@ -397,12 +391,19 @@ onMounted(() => {
           </label>
           <div class="backup-actions">
             <button class="button" type="button" :disabled="backupBusy" @click="createBackup">
-              <HardDriveDownload :size="15" />导出完整备份
+              <HardDriveDownload :size="15" />{{
+                backupOperation === "export" ? "正在导出" : "导出完整备份"
+              }}
             </button>
             <button class="button" type="button" :disabled="backupBusy" @click="restoreBackup">
-              <Upload :size="15" />从备份恢复
+              <Upload :size="15" />{{ backupOperation === "restore" ? "正在恢复" : "从备份恢复" }}
             </button>
           </div>
+          <OperationProgress
+            v-if="backupProgress"
+            :title="backupProgress.title"
+            :detail="backupProgress.detail"
+          />
           <div v-if="lastBackup" class="backup-result">
             <strong class="truncate">{{ lastBackup.path }}</strong>
             <span>{{ formatFileSize(lastBackup.sizeBytes) }}</span>
@@ -480,13 +481,6 @@ onMounted(() => {
 .settings-section--vault {
   grid-column: 1 / -1;
   grid-row: 3;
-}
-
-.settings-section--vault .settings-form {
-  display: grid;
-  grid-template-columns: minmax(190px, 0.8fr) minmax(260px, 1.2fr) minmax(180px, 0.8fr);
-  align-items: end;
-  gap: 18px;
 }
 
 .settings-section__header {
@@ -698,15 +692,9 @@ onMounted(() => {
   color: var(--brand);
 }
 
-.vault-form,
 .backup-actions {
   display: flex;
   gap: 7px;
-}
-
-.vault-form .input {
-  min-width: 0;
-  flex: 1;
 }
 
 .backup-result {
@@ -765,11 +753,6 @@ onMounted(() => {
 
   .settings-section__body {
     padding: 14px;
-  }
-
-  .settings-section--vault .settings-form {
-    grid-template-columns: minmax(160px, 0.7fr) minmax(230px, 1.15fr) minmax(170px, 0.75fr);
-    gap: 12px;
   }
 }
 </style>

@@ -2,6 +2,11 @@
 import { KeyRound, LockKeyhole, ShieldCheck } from "@lucide/vue";
 import { computed, shallowRef } from "vue";
 import type { VaultStatus } from "../../types/domain";
+import {
+  MIN_MASTER_PASSWORD_CHARACTERS,
+  RECOMMENDED_MASTER_PASSWORD_CHARACTERS,
+  isMasterPasswordLongEnough,
+} from "../../utils/security";
 
 const props = defineProps<{
   status: VaultStatus;
@@ -26,8 +31,8 @@ const description = computed(() =>
 
 function submit(): void {
   localError.value = "";
-  if (!props.status.initialized && password.value.length < 8) {
-    localError.value = "主密码至少需要8个字符";
+  if (!props.status.initialized && !isMasterPasswordLongEnough(password.value)) {
+    localError.value = `主密码至少需要${MIN_MASTER_PASSWORD_CHARACTERS}个字符`;
     return;
   }
   if (!props.status.initialized && password.value !== passwordConfirmation.value) {
@@ -76,7 +81,12 @@ function submit(): void {
                 :autocomplete="status.initialized ? 'current-password' : 'new-password'"
                 autofocus
                 :disabled="loading"
-                :placeholder="status.initialized ? '输入主密码' : '至少8个字符'"
+                :minlength="status.initialized ? undefined : MIN_MASTER_PASSWORD_CHARACTERS"
+                :placeholder="
+                  status.initialized
+                    ? '输入主密码'
+                    : `至少${MIN_MASTER_PASSWORD_CHARACTERS}个字符，建议${RECOMMENDED_MASTER_PASSWORD_CHARACTERS}位以上`
+                "
               />
             </div>
           </label>

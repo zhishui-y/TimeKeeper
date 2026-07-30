@@ -159,6 +159,34 @@ describe("browser mock API", () => {
     expect(edited.accountSnapshot).toEqual(unlinked.accountSnapshot);
   });
 
+  it("batch deletes account profiles, passwords, and live appointment links", async () => {
+    await mockApi.unlockVault("test-password");
+    const suffix = Date.now();
+    const first = await mockApi.createAccountProfile({
+      accountName: `batch-account-a-${suffix}`,
+      password: "batch-secret-a",
+    });
+    const second = await mockApi.createAccountProfile({
+      accountName: `batch-account-b-${suffix}`,
+      password: "batch-secret-b",
+    });
+    const linked = await mockApi.createAppointment({
+      ...businessInput("2099-08-07", "10:00", "11:00", "批量账号删除", 6_600),
+      accountProfileId: first.id,
+    });
+
+    await expect(
+      mockApi.deleteAccountProfiles([first.id, second.id, first.id, " ", "unknown-account"]),
+    ).resolves.toBe(2);
+    await expect(mockApi.getAccountProfile(first.id)).rejects.toThrow("账号档案不存在");
+    await expect(mockApi.getAccountProfile(second.id)).rejects.toThrow("账号档案不存在");
+    await expect(mockApi.revealAccountPassword(first.id)).rejects.toThrow("尚未保存密码");
+    await expect(mockApi.getAppointment(linked.appointment.id)).resolves.toMatchObject({
+      accountProfileId: null,
+    });
+    await expect(mockApi.deleteAccountProfiles(["unknown-account"])).resolves.toBe(0);
+  });
+
   it("restores the in-memory demo data captured by a backup", async () => {
     const created = await mockApi.createAppointment(
       businessInput("2099-08-03", "10:00", "11:00", "备份恢复回归", 8_800),

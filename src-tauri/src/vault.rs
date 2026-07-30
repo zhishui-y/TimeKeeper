@@ -9,6 +9,7 @@ use std::{
 };
 
 use arboard::Clipboard;
+use iota_stronghold::{KeyProvider, SnapshotPath};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, Runtime, State};
@@ -17,6 +18,7 @@ use tauri_plugin_stronghold::{
     stronghold::{Error as StrongholdError, Stronghold},
 };
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::{backup, backup::BackupState, settings::SettingsState};
 
@@ -26,6 +28,7 @@ const CLIENT_ID: &[u8] = b"timekeeper-accounts-v1";
 const VERIFIER_KEY: &[u8] = b"timekeeper:vault-verifier";
 const VERIFIER_VALUE: &[u8] = b"timekeeper-vault-v1";
 const PASSWORD_KEY_PREFIX: &str = "account-password:";
+const MIN_MASTER_PASSWORD_CHARACTERS: usize = 4;
 const DEFAULT_AUTO_LOCK_MINUTES: u32 = 15;
 const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(30);
 // Stronghold v3 的密文头和最小封装长度可在无主密码时检查；密文真实性仍只能在解锁时验证。
@@ -42,7 +45,7 @@ pub struct VaultStatus {
 
 #[derive(Debug, Error)]
 pub enum VaultError {
-    #[error("主密码至少需要8个字符")]
+    #[error("主密码至少需要4个字符")]
     WeakPassword,
     #[error("主密码不能为空")]
     EmptyPassword,
@@ -54,6 +57,10 @@ pub enum VaultError {
     Locked,
     #[error("主密码错误或保险库已经损坏")]
     UnlockFailed,
+    #[error("当前主密码不正确")]
+    CurrentPasswordIncorrect,
+    #[error("新主密码不能与当前主密码相同")]
+    SamePassword,
     #[error("保险库盐文件丢失或损坏")]
     InvalidSalt,
     #[error("Stronghold 快照文件格式无效")]
@@ -66,7 +73,7 @@ pub enum VaultError {
     InvalidPasswordEncoding,
     #[error("保险库状态不可用")]
     StatePoisoned,
-    #[error("自动锁定时间必须在1到1440分钟之间")]
+    #[error("自动锁定时间必须为0（不自动锁定）或1到1440分钟")]
     InvalidAutoLock,
     #[error("保险库操作失败：{0}")]
     Stronghold(#[from] StrongholdError),
@@ -81,7 +88,7 @@ pub enum VaultError {
 struct VaultSession {
     stronghold: Option<Stronghold>,
     last_activity: Option<Instant>,
-    auto_lock_after: Duration,
+    auto_lock_after: Option<Duration>,
 }
 
 pub struct VaultState {
@@ -100,7 +107,9 @@ impl VaultState {
             session: Mutex::new(VaultSession {
                 stronghold: None,
                 last_activity: None,
-                auto_lock_after: Duration::from_secs(u64::from(DEFAULT_AUTO_LOCK_MINUTES) * 60),
+                auto_lock_after: Some(Duration::from_secs(
+                    u64::from(DEFAULT_AUTO_LOCK_MINUTES) * 60,
+                )),
             }),
         })
     }
@@ -109,7 +118,7 @@ impl VaultState {
         if self.snapshot_path.exists() {
             return Err(VaultError::AlreadyInitialized);
         }
-        if password.chars().count() < 8 {
+        if password.chars().count() < MIN_MASTER_PASSWORD_CHARACTERS {
             return Err(VaultError::WeakPassword);
         }
 
@@ -139,21 +148,93 @@ impl VaultState {
         }
 
         let key = derive_key(password, &self.salt_path, true)?;
-        let stronghold =
-            Stronghold::new(&self.snapshot_path, key).map_err(|_| VaultError::UnlockFailed)?;
-        let client = stronghold
-            .load_client(CLIENT_ID)
+        let stronghold = load_verified_stronghold(&self.snapshot_path, key)
             .map_err(|_| VaultError::UnlockFailed)?;
-        let verifier = client
-            .store()
-            .get(VERIFIER_KEY)
-            .map_err(|_| VaultError::UnlockFailed)?;
-        if verifier.as_deref() != Some(VERIFIER_VALUE) {
-            return Err(VaultError::UnlockFailed);
-        }
 
         let mut session = self.lock_session()?;
         session.stronghold = Some(stronghold);
+        session.last_activity = Some(Instant::now());
+        Ok(status_from_session(true, &session))
+    }
+
+    pub fn change_password(
+        &self,
+        current_password: String,
+        new_password: String,
+    ) -> Result<VaultStatus, VaultError> {
+        if current_password.is_empty() {
+            return Err(VaultError::EmptyPassword);
+        }
+        if new_password.chars().count() < MIN_MASTER_PASSWORD_CHARACTERS {
+            return Err(VaultError::WeakPassword);
+        }
+        if current_password == new_password {
+            return Err(VaultError::SamePassword);
+        }
+
+        let mut session = self.active_session()?;
+        let current_key = derive_key(current_password, &self.salt_path, true)?;
+        load_verified_stronghold(&self.snapshot_path, current_key)
+            .map_err(|_| VaultError::CurrentPasswordIncorrect)?;
+
+        let new_key = derive_key(new_password, &self.salt_path, true)?;
+        let new_key_provider =
+            KeyProvider::try_from(Zeroizing::new(new_key.clone())).map_err(operation_error)?;
+        let candidate_dir = self.snapshot_path.parent().ok_or_else(|| {
+            VaultError::Operation("保险库路径缺少父目录，无法创建换密候选文件".into())
+        })?;
+        let candidate_dir =
+            candidate_dir.join(format!(".vault-rekey-{}", uuid::Uuid::now_v7().simple()));
+        std::fs::create_dir_all(&candidate_dir)?;
+        let candidate_path = candidate_dir.join(VAULT_FILE_NAME);
+
+        let candidate_result: Result<(), VaultError> = (|| {
+            let active = session.stronghold.as_ref().ok_or(VaultError::Locked)?;
+            active
+                .inner()
+                .commit_with_keyprovider(
+                    &SnapshotPath::from_path(&candidate_path),
+                    &new_key_provider,
+                )
+                .map_err(operation_error)?;
+            let candidate = load_verified_stronghold(&candidate_path, new_key.clone())
+                .map_err(operation_error)?;
+            drop(candidate);
+            Ok(())
+        })();
+        let cleanup_result = std::fs::remove_dir_all(&candidate_dir);
+        candidate_result?;
+        cleanup_result?;
+
+        let replacement = {
+            let active = session.stronghold.as_ref().ok_or(VaultError::Locked)?;
+            active
+                .inner()
+                .commit_with_keyprovider(
+                    &SnapshotPath::from_path(&self.snapshot_path),
+                    &new_key_provider,
+                )
+                .map_err(operation_error)?;
+
+            match load_verified_stronghold(&self.snapshot_path, new_key) {
+                Ok(replacement) => replacement,
+                Err(reload_error) => {
+                    let rollback_result = active.save();
+                    if let Err(rollback_error) = rollback_result {
+                        session.stronghold = None;
+                        session.last_activity = None;
+                        return Err(VaultError::Operation(format!(
+                            "修改主密码后无法重新加载保险库，且恢复原密码失败：{reload_error}；{rollback_error}"
+                        )));
+                    }
+                    return Err(VaultError::Operation(format!(
+                        "修改主密码后无法重新加载保险库，已恢复原密码：{reload_error}"
+                    )));
+                }
+            }
+        };
+
+        session.stronghold = Some(replacement);
         session.last_activity = Some(Instant::now());
         Ok(status_from_session(true, &session))
     }
@@ -172,11 +253,12 @@ impl VaultState {
     }
 
     pub fn set_auto_lock_minutes(&self, minutes: u32) -> Result<(), VaultError> {
-        if !(1..=24 * 60).contains(&minutes) {
+        if minutes > 24 * 60 {
             return Err(VaultError::InvalidAutoLock);
         }
         let mut session = self.lock_session()?;
-        session.auto_lock_after = Duration::from_secs(u64::from(minutes) * 60);
+        session.auto_lock_after =
+            (minutes > 0).then(|| Duration::from_secs(u64::from(minutes) * 60));
         enforce_idle_lock(&mut session);
         Ok(())
     }
@@ -263,7 +345,7 @@ impl VaultState {
 
     #[cfg(test)]
     fn set_auto_lock_duration(&self, duration: Duration) {
-        self.session.lock().unwrap().auto_lock_after = duration;
+        self.session.lock().unwrap().auto_lock_after = Some(duration);
     }
 }
 
@@ -314,13 +396,34 @@ pub async fn initialize_vault<R: Runtime>(
 pub async fn unlock_vault<R: Runtime>(
     password: String,
     app: AppHandle<R>,
+    backup: State<'_, BackupState>,
 ) -> Result<VaultStatus, String> {
+    let backup = backup.inner().clone();
+    let _operation_guard = backup.lock_data_operation().await;
     let worker_app = app.clone();
     let status =
         run_blocking_vault_operation(move || worker_app.state::<VaultState>().unlock(password))
             .await?;
     schedule_daily_backup(&app);
     Ok(status)
+}
+
+#[tauri::command]
+pub async fn change_vault_password<R: Runtime>(
+    current_password: String,
+    new_password: String,
+    app: AppHandle<R>,
+    backup: State<'_, BackupState>,
+) -> Result<VaultStatus, String> {
+    let backup = backup.inner().clone();
+    let _operation_guard = backup.lock_data_operation().await;
+    let worker_app = app.clone();
+    run_blocking_vault_operation(move || {
+        worker_app
+            .state::<VaultState>()
+            .change_password(current_password, new_password)
+    })
+    .await
 }
 
 pub(crate) async fn run_blocking_vault_operation<T, F>(operation: F) -> Result<T, String>
@@ -487,13 +590,29 @@ fn operation_error(error: impl Display) -> VaultError {
     VaultError::Operation(error.to_string())
 }
 
+fn load_verified_stronghold(
+    snapshot_path: &Path,
+    key: Vec<u8>,
+) -> Result<Stronghold, StrongholdError> {
+    let stronghold = Stronghold::new(snapshot_path, key)?;
+    let client = stronghold.load_client(CLIENT_ID)?;
+    let verifier = client.store().get(VERIFIER_KEY)?;
+    if verifier.as_deref() != Some(VERIFIER_VALUE) {
+        return Err(StrongholdError::StrongholdNotInitialized);
+    }
+    Ok(stronghold)
+}
+
 fn enforce_idle_lock(session: &mut VaultSession) {
     if session.stronghold.is_none() {
         return;
     }
+    let Some(auto_lock_after) = session.auto_lock_after else {
+        return;
+    };
     if session
         .last_activity
-        .is_some_and(|last| last.elapsed() >= session.auto_lock_after)
+        .is_some_and(|last| last.elapsed() >= auto_lock_after)
     {
         session.stronghold = None;
         session.last_activity = None;
@@ -504,7 +623,9 @@ fn status_from_session(initialized: bool, session: &VaultSession) -> VaultStatus
     VaultStatus {
         initialized,
         unlocked: session.stronghold.is_some(),
-        auto_lock_minutes: (session.auto_lock_after.as_secs() / 60) as u32,
+        auto_lock_minutes: session
+            .auto_lock_after
+            .map_or(0, |duration| (duration.as_secs() / 60) as u32),
     }
 }
 
@@ -581,13 +702,124 @@ mod tests {
     }
 
     #[test]
-    fn refuses_short_initial_password() {
+    fn disabled_auto_lock_keeps_the_vault_unlocked() {
+        let dir = test_dir("disabled-auto-lock");
+        let state = VaultState::new(&dir).unwrap();
+        state
+            .initialize("a sufficiently long password".into())
+            .unwrap();
+        state.set_auto_lock_minutes(0).unwrap();
+        state.session.lock().unwrap().last_activity =
+            Some(Instant::now() - Duration::from_secs(24 * 60 * 60));
+
+        assert!(!state.lock_if_idle().unwrap());
+        let status = state.status().unwrap();
+        assert!(status.unlocked);
+        assert_eq!(status.auto_lock_minutes, 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn changes_master_password_without_losing_account_passwords() {
+        let dir = test_dir("change-password");
+        let state = VaultState::new(&dir).unwrap();
+        state.initialize("old password".into()).unwrap();
+        state
+            .set_secret("account-1", "saved account password".into())
+            .unwrap();
+        {
+            let session = state.active_session().unwrap();
+            let stronghold = session.stronghold.as_ref().unwrap();
+            let extra_client = stronghold
+                .create_client(b"timekeeper-extra-client")
+                .unwrap();
+            extra_client
+                .store()
+                .insert(b"extra-key".to_vec(), b"extra-value".to_vec(), None)
+                .unwrap();
+            stronghold.save().unwrap();
+        }
+        let salt_before = std::fs::read(&state.salt_path).unwrap();
+
+        assert!(
+            state
+                .change_password("old password".into(), "1234".into())
+                .unwrap()
+                .unlocked
+        );
+        assert_eq!(std::fs::read(&state.salt_path).unwrap(), salt_before);
+        assert!(std::fs::read_dir(&dir).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".vault-rekey-")
+        }));
+        state.lock().unwrap();
+        assert!(state.unlock("old password".into()).is_err());
+        assert!(state.unlock("1234".into()).unwrap().unlocked);
+        assert_eq!(
+            state.get_secret("account-1").unwrap(),
+            "saved account password"
+        );
+        {
+            let session = state.active_session().unwrap();
+            let stronghold = session.stronghold.as_ref().unwrap();
+            let extra_client = stronghold.load_client(b"timekeeper-extra-client").unwrap();
+            assert_eq!(
+                extra_client.store().get(b"extra-key").unwrap().as_deref(),
+                Some(b"extra-value".as_slice())
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_password_change_keeps_the_existing_password() {
+        let dir = test_dir("change-password-failure");
+        let state = VaultState::new(&dir).unwrap();
+        state.initialize("old password".into()).unwrap();
+        state
+            .set_secret("account-1", "saved account password".into())
+            .unwrap();
+        let snapshot_before = std::fs::read(&state.snapshot_path).unwrap();
+
+        assert!(matches!(
+            state.change_password("wrong password".into(), "new secure password".into()),
+            Err(VaultError::CurrentPasswordIncorrect)
+        ));
+        assert!(matches!(
+            state.change_password("old password".into(), "123".into()),
+            Err(VaultError::WeakPassword)
+        ));
+        assert!(matches!(
+            state.change_password("old password".into(), "old password".into()),
+            Err(VaultError::SamePassword)
+        ));
+        assert_eq!(
+            std::fs::read(&state.snapshot_path).unwrap(),
+            snapshot_before
+        );
+        assert_eq!(
+            state.get_secret("account-1").unwrap(),
+            "saved account password"
+        );
+
+        state.lock().unwrap();
+        assert!(state.unlock("old password".into()).unwrap().unlocked);
+        assert!(state.unlock("new secure password".into()).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn enforces_four_character_initial_password_minimum() {
         let dir = test_dir("weak");
         let state = VaultState::new(&dir).unwrap();
         assert!(matches!(
-            state.initialize("short".into()),
+            state.initialize("123".into()),
             Err(VaultError::WeakPassword)
         ));
+        assert!(state.initialize("1234".into()).unwrap().unlocked);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
