@@ -7,6 +7,7 @@ import AppHeader from "./components/layout/AppHeader.vue";
 import AppSidebar from "./components/layout/AppSidebar.vue";
 import VaultGate from "./components/security/VaultGate.vue";
 import { useAccounts } from "./composables/useAccounts";
+import { useAppointmentStatusAutomation } from "./composables/useAppointmentStatusAutomation";
 import { useVault } from "./composables/useVault";
 import { useUiStore } from "./stores/ui";
 import type { AppointmentInput } from "./types/domain";
@@ -25,6 +26,7 @@ const {
   load: loadAccounts,
 } = useAccounts({ immediate: false });
 const vault = useVault();
+useAppointmentStatusAutomation();
 const vaultReady = shallowRef(false);
 const savingAppointment = shallowRef(false);
 const appointmentDrawerLoaded = shallowRef(false);

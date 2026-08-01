@@ -9,7 +9,10 @@ import RevenueDashboard from "./RevenueDashboard.vue";
 
 const RevenueChartStub = defineComponent({
   name: "RevenueChart",
-  props: ["points", "drillable"],
+  props: {
+    points: { type: Array, default: () => [] },
+    drillable: { type: Boolean, default: false },
+  },
   emits: ["periodSelect"],
   setup(props, { emit }) {
     return () =>
@@ -18,7 +21,7 @@ const RevenueChartStub = defineComponent({
         {
           class: "revenue-chart-stub",
           type: "button",
-          onClick: () => emit("periodSelect", { period: "2026-07-27" }),
+          onClick: () => emit("periodSelect", props.points[0] ?? { period: "2026-07-27" }),
         },
         String(props.drillable),
       );
@@ -27,10 +30,19 @@ const RevenueChartStub = defineComponent({
 
 const RevenuePeriodDetailStub = defineComponent({
   name: "RevenuePeriodDetail",
-  props: ["granularity", "from", "to"],
+  props: ["granularity", "from", "to", "appointments"],
   emits: ["close"],
   setup(props) {
-    return () => h("div", { class: "period-detail-stub" }, `${props.from}—${props.to}`);
+    return () =>
+      h(
+        "div",
+        {
+          class: "period-detail-stub",
+          "data-granularity": props.granularity,
+          "data-appointments": props.appointments.length,
+        },
+        `${props.from}—${props.to}`,
+      );
   },
 });
 
@@ -38,6 +50,62 @@ describe("RevenueDashboard", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("starts on the current Monday-to-Sunday week with daily granularity", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 1, 12, 0, 0));
+    const getRevenueSummary = vi.spyOn(mockApi, "getRevenueSummary");
+    const wrapper = mount(RevenueDashboard, {
+      global: {
+        plugins: [createPinia()],
+        stubs: {
+          RevenueChart: RevenueChartStub,
+          RevenuePeriodDetail: RevenuePeriodDetailStub,
+        },
+      },
+    });
+    await flushPromises();
+
+    const dateInputs = wrapper.findAll<HTMLInputElement>('input[type="date"]');
+    expect(dateInputs.map((input) => input.element.value)).toEqual(["2026-07-27", "2026-08-02"]);
+    expect(getRevenueSummary).toHaveBeenCalledWith("2026-07-27", "2026-08-02", "day");
+    expect(
+      wrapper
+        .findAll("button")
+        .find((button) => button.text() === "按日")
+        ?.classes(),
+    ).toContain("is-active");
+
+    wrapper.unmount();
+  });
+
+  it("opens the selected day's appointments from the daily chart", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 1, 12, 0, 0));
+    const listAppointments = vi.spyOn(mockApi, "listAppointments");
+    const wrapper = mount(RevenueDashboard, {
+      global: {
+        plugins: [createPinia()],
+        stubs: {
+          RevenueChart: RevenueChartStub,
+          RevenuePeriodDetail: RevenuePeriodDetailStub,
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(listAppointments).not.toHaveBeenCalled();
+    expect(wrapper.get(".revenue-chart-stub").text()).toBe("true");
+    await wrapper.get(".revenue-chart-stub").trigger("click");
+    await flushPromises();
+
+    const detail = wrapper.get(".period-detail-stub");
+    expect(detail.attributes("data-granularity")).toBe("day");
+    expect(detail.text()).toBe("2026-07-27—2026-07-27");
+    expect(listAppointments).toHaveBeenCalledWith({ from: "2026-07-27", to: "2026-07-27" });
+
+    wrapper.unmount();
   });
 
   it("opens daily details for a weekly bar without changing the main range or granularity", async () => {
@@ -73,10 +141,9 @@ describe("RevenueDashboard", () => {
     wrapper.unmount();
   });
 
-  it("applies all, previous month, and current month shortcuts without changing granularity", async () => {
+  it("navigates weeks and months continuously without changing granularity", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 1, 12, 0, 0));
-    const expectedAllRange = await mockApi.getRevenueSummary("", "", "week");
     const getRevenueSummary = vi.spyOn(mockApi, "getRevenueSummary");
     const wrapper = mount(RevenueDashboard, {
       global: {
@@ -97,16 +164,61 @@ describe("RevenueDashboard", () => {
     };
     const dateInputs = wrapper.findAll<HTMLInputElement>('input[type="date"]');
 
-    await byText("按周").trigger("click");
-    await byText("上月").trigger("click");
+    await byText("下一周").trigger("click");
     await flushPromises();
-    expect(dateInputs.map((input) => input.element.value)).toEqual(["2026-07-01", "2026-07-31"]);
-    expect(getRevenueSummary).toHaveBeenCalledWith("2026-07-01", "2026-07-31", "week");
+    expect(dateInputs.map((input) => input.element.value)).toEqual(["2026-08-03", "2026-08-09"]);
+    expect(getRevenueSummary).toHaveBeenCalledWith("2026-08-03", "2026-08-09", "day");
+
+    await byText("下一周").trigger("click");
+    await flushPromises();
+    expect(dateInputs.map((input) => input.element.value)).toEqual(["2026-08-10", "2026-08-16"]);
+
+    await byText("按月").trigger("click");
+    await byText("上一周").trigger("click");
+    await flushPromises();
+    expect(dateInputs.map((input) => input.element.value)).toEqual(["2026-08-03", "2026-08-09"]);
+    expect(byText("按月").classes()).toContain("is-active");
+    expect(getRevenueSummary).toHaveBeenCalledWith("2026-08-03", "2026-08-09", "month");
+
+    await byText("月").trigger("click");
+    await flushPromises();
+    expect(dateInputs.map((input) => input.element.value)).toEqual(["2026-08-01", "2026-08-31"]);
+    expect(byText("按月").classes()).toContain("is-active");
+
+    await byText("上一月").trigger("click");
+    await byText("上一月").trigger("click");
+    await flushPromises();
+    expect(dateInputs.map((input) => input.element.value)).toEqual(["2026-06-01", "2026-06-30"]);
 
     await byText("本月").trigger("click");
     await flushPromises();
     expect(dateInputs.map((input) => input.element.value)).toEqual(["2026-08-01", "2026-08-31"]);
-    expect(byText("按周").classes()).toContain("is-active");
+
+    wrapper.unmount();
+  });
+
+  it("preserves granularity for all records and anchors custom navigation to the start date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 1, 12, 0, 0));
+    const expectedAllRange = await mockApi.getRevenueSummary("", "", "day");
+    const getRevenueSummary = vi.spyOn(mockApi, "getRevenueSummary");
+    const wrapper = mount(RevenueDashboard, {
+      global: {
+        plugins: [createPinia()],
+        stubs: {
+          RevenueChart: RevenueChartStub,
+          RevenuePeriodDetail: RevenuePeriodDetailStub,
+        },
+      },
+    });
+    await flushPromises();
+
+    const byText = (text: string) => {
+      const button = wrapper.findAll("button").find((candidate) => candidate.text() === text);
+      if (!button) throw new Error(`未找到按钮：${text}`);
+      return button;
+    };
+    const dateInputs = wrapper.findAll<HTMLInputElement>('input[type="date"]');
 
     await byText("全部").trigger("click");
     await flushPromises();
@@ -115,10 +227,20 @@ describe("RevenueDashboard", () => {
       expectedAllRange.to,
     ]);
     expect(byText("全部").attributes("aria-pressed")).toBe("true");
-    expect(getRevenueSummary).toHaveBeenCalledWith("", "", "week");
+    expect(getRevenueSummary).toHaveBeenCalledWith("", "", "day");
     expect(wrapper.get(".panel-header__meta").text()).toContain(
       `${expectedAllRange.from} — ${expectedAllRange.to}`,
     );
+
+    await dateInputs[0].setValue("2026-03-18");
+    await dateInputs[1].setValue("2026-03-20");
+    await flushPromises();
+    expect(byText("全部").attributes("aria-pressed")).toBe("false");
+
+    await byText("下一周").trigger("click");
+    await flushPromises();
+    expect(dateInputs.map((input) => input.element.value)).toEqual(["2026-03-23", "2026-03-29"]);
+    expect(getRevenueSummary).toHaveBeenCalledWith("2026-03-23", "2026-03-29", "day");
 
     wrapper.unmount();
   });

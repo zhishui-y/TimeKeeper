@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CheckCircle2, CircleDollarSign, Pencil, Play } from "@lucide/vue";
+import { CheckCircle2, CircleDollarSign, Pencil, Play, Trash2 } from "@lucide/vue";
 import type { Appointment, ServiceStatus } from "../../types/domain";
 import { formatCurrency, formatTimeRange } from "../../utils/formatters";
 import StatusBadge from "../common/StatusBadge.vue";
@@ -7,12 +7,15 @@ import StatusBadge from "../common/StatusBadge.vue";
 defineProps<{
   appointments: readonly Appointment[];
   nextAppointmentId?: string | null;
+  kicker: string;
+  heading: string;
 }>();
 
 const emit = defineEmits<{
   edit: [appointment: Appointment];
   settle: [appointment: Appointment];
   changeStatus: [appointment: Appointment, status: ServiceStatus];
+  delete: [appointment: Appointment];
 }>();
 </script>
 
@@ -20,8 +23,8 @@ const emit = defineEmits<{
   <section class="today-list">
     <header class="today-list__header">
       <div>
-        <span class="section-kicker">今日安排</span>
-        <h2>今日预约</h2>
+        <span class="section-kicker">{{ kicker }}</span>
+        <h2>{{ heading }}</h2>
       </div>
       <span>{{ appointments.length }} 场</span>
     </header>
@@ -99,10 +102,19 @@ const emit = defineEmits<{
           >
             <Pencil :size="15" />
           </button>
+          <button
+            class="icon-button appointment-row__delete"
+            type="button"
+            title="删除"
+            aria-label="删除预约"
+            @click="emit('delete', appointment)"
+          >
+            <Trash2 :size="15" />
+          </button>
         </div>
       </article>
     </div>
-    <div v-else class="today-list__empty">今天没有预约</div>
+    <div v-else class="today-list__empty">当日没有预约</div>
   </section>
 </template>
 
@@ -153,7 +165,7 @@ const emit = defineEmits<{
 .appointment-row {
   display: grid;
   min-height: 72px;
-  grid-template-columns: 96px 4px minmax(140px, 1fr) 96px 72px;
+  grid-template-columns: 96px 4px minmax(140px, 1fr) 96px 104px;
   align-items: center;
   gap: 12px;
   padding: 9px 11px 9px 18px;
@@ -274,6 +286,15 @@ const emit = defineEmits<{
   justify-content: flex-end;
 }
 
+.appointment-row__delete {
+  color: var(--danger);
+}
+
+.appointment-row__delete:hover {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--line));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
 .today-list__empty {
   display: grid;
   min-height: 0;
@@ -290,7 +311,7 @@ const emit = defineEmits<{
 
   .appointment-row {
     min-height: 68px;
-    grid-template-columns: 90px 4px minmax(120px, 1fr) 88px 68px;
+    grid-template-columns: 90px 4px minmax(120px, 1fr) 88px 96px;
     gap: 9px;
     padding-inline: 15px 9px;
   }

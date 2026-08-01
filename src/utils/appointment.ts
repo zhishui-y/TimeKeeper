@@ -79,8 +79,26 @@ export function findNextScheduledAppointment(
   now: Date,
 ): Appointment | null {
   const nowTime = now.getTime();
+  const sortedAppointments = sortAppointmentsByStartTime(appointments);
+  const ongoingAppointment = sortedAppointments.find((appointment) => {
+    if (appointment.serviceStatus !== "scheduled" && appointment.serviceStatus !== "in_progress") {
+      return false;
+    }
+    if (typeof appointment.startsAt !== "string") return false;
+
+    const startsAt = parseISO(appointment.startsAt).getTime();
+    if (startsAt > nowTime) return false;
+    if (typeof appointment.endsAt === "string") {
+      return parseISO(appointment.endsAt).getTime() > nowTime;
+    }
+    return appointment.serviceStatus === "in_progress";
+  });
+  if (ongoingAppointment) {
+    return ongoingAppointment.serviceStatus === "scheduled" ? ongoingAppointment : null;
+  }
+
   return (
-    sortAppointmentsByStartTime(appointments).find(
+    sortedAppointments.find(
       (appointment) =>
         appointment.serviceStatus === "scheduled" &&
         typeof appointment.startsAt === "string" &&

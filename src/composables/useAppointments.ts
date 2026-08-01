@@ -2,7 +2,14 @@ import { onMounted, readonly, reactive, shallowRef } from "vue";
 import { api, errorMessage } from "../api/client";
 import type { Appointment, AppointmentFilters } from "../types/domain";
 
-export function useAppointments(initialFilters: AppointmentFilters = {}) {
+interface UseAppointmentsOptions {
+  immediate?: boolean;
+}
+
+export function useAppointments(
+  initialFilters: AppointmentFilters = {},
+  { immediate = true }: UseAppointmentsOptions = {},
+) {
   const filters = reactive<AppointmentFilters>({ ...initialFilters });
   const items = shallowRef<Appointment[]>([]);
   const loading = shallowRef(false);
@@ -51,7 +58,9 @@ export function useAppointments(initialFilters: AppointmentFilters = {}) {
     }
   }
 
-  onMounted(() => void load());
+  onMounted(() => {
+    if (immediate) void load();
+  });
 
   return {
     filters,

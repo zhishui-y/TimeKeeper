@@ -25,6 +25,7 @@ export interface ApiClient {
   duplicateAppointment(id: string, serviceDate?: string): Promise<AppointmentMutationResult>;
   deleteAppointment(id: string): Promise<void>;
   deleteAppointments(ids: string[]): Promise<number>;
+  syncAppointmentServiceStatuses(): Promise<number>;
   setAppointmentServiceStatus(id: string, status: ServiceStatus): Promise<Appointment>;
   settleAppointment(id: string, amountMinor: number, paymentMethod?: string): Promise<Appointment>;
 

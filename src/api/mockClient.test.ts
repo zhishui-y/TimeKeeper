@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { format } from "date-fns";
 import type { AppointmentInput } from "../types/domain";
 import { appointmentToInput } from "../utils/appointment";
@@ -25,6 +25,10 @@ function businessInput(
 }
 
 describe("browser mock API", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("resolves an empty revenue range from first income through today", async () => {
     const summary = await mockApi.getRevenueSummary("", "", "month");
 
@@ -138,6 +142,42 @@ describe("browser mock API", () => {
         amountMinor: null,
       }),
     ).rejects.toThrow("已结算预约必须填写金额");
+  });
+
+  it("automatically starts timed appointments and completes only those with an end time", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2099-08-08T10:00:00+08:00"));
+    const current = await mockApi.createAppointment(
+      businessInput("2099-08-08", "10:00", "11:00", "自动进行", 8_800),
+    );
+    const missed = await mockApi.createAppointment(
+      businessInput("2099-08-08", "08:00", "09:00", "自动完成", 8_800),
+    );
+    const openEnded = await mockApi.createAppointment({
+      ...businessInput("2099-08-08", "10:00", "11:00", "结束待定", 8_800),
+      endTime: null,
+    });
+
+    await expect(mockApi.syncAppointmentServiceStatuses()).resolves.toBeGreaterThanOrEqual(3);
+    await expect(mockApi.getAppointment(current.appointment.id)).resolves.toMatchObject({
+      serviceStatus: "in_progress",
+    });
+    await expect(mockApi.getAppointment(missed.appointment.id)).resolves.toMatchObject({
+      serviceStatus: "completed",
+    });
+    await expect(mockApi.getAppointment(openEnded.appointment.id)).resolves.toMatchObject({
+      serviceStatus: "in_progress",
+    });
+
+    vi.setSystemTime(new Date("2099-08-08T11:00:00+08:00"));
+    await expect(mockApi.syncAppointmentServiceStatuses()).resolves.toBe(1);
+    await expect(mockApi.getAppointment(current.appointment.id)).resolves.toMatchObject({
+      serviceStatus: "completed",
+    });
+    await expect(mockApi.getAppointment(openEnded.appointment.id)).resolves.toMatchObject({
+      serviceStatus: "in_progress",
+    });
+    await expect(mockApi.syncAppointmentServiceStatuses()).resolves.toBe(0);
   });
 
   it("excludes cancelled appointments from dashboard and revenue reports", async () => {

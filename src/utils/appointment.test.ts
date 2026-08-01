@@ -96,6 +96,7 @@ describe("combineDateTime", () => {
         appointment({
           id: "past-scheduled",
           startsAt: "2026-07-20T11:30:00+08:00",
+          endsAt: "2026-07-20T11:45:00+08:00",
         }),
         appointment({ id: "pending", startsAt: null, endsAt: null }),
         appointment({
@@ -107,6 +108,65 @@ describe("combineDateTime", () => {
     );
 
     expect(result?.id).toBe("future-early");
+  });
+
+  it("keeps the current appointment marked while its time slot is ongoing", () => {
+    const result = findNextScheduledAppointment(
+      [
+        appointment({
+          id: "ongoing",
+          startsAt: "2026-07-20T11:30:00+08:00",
+          endsAt: "2026-07-20T12:30:00+08:00",
+        }),
+        appointment({
+          id: "next",
+          startsAt: "2026-07-20T18:00:00+08:00",
+          endsAt: "2026-07-20T19:00:00+08:00",
+        }),
+      ],
+      new Date("2026-07-20T12:00:00+08:00"),
+    );
+
+    expect(result?.id).toBe("ongoing");
+  });
+
+  it("marks the next appointment when the current time slot reaches its end", () => {
+    const appointments = [
+      appointment({
+        id: "ended",
+        startsAt: "2026-07-20T11:30:00+08:00",
+        endsAt: "2026-07-20T12:30:00+08:00",
+      }),
+      appointment({
+        id: "next",
+        startsAt: "2026-07-20T18:00:00+08:00",
+        endsAt: "2026-07-20T19:00:00+08:00",
+      }),
+    ];
+
+    expect(
+      findNextScheduledAppointment(appointments, new Date("2026-07-20T12:29:59+08:00")),
+    ).toMatchObject({ id: "ended" });
+    expect(
+      findNextScheduledAppointment(appointments, new Date("2026-07-20T12:30:00+08:00"))?.id,
+    ).toBe("next");
+  });
+
+  it("keeps an in-progress appointment without an end time active until its status changes", () => {
+    const result = findNextScheduledAppointment(
+      [
+        appointment({
+          id: "ongoing-without-end",
+          startsAt: "2026-07-20T11:30:00+08:00",
+          endsAt: null,
+          serviceStatus: "in_progress",
+        }),
+        appointment({ id: "next", startsAt: "2026-07-20T18:00:00+08:00" }),
+      ],
+      new Date("2026-07-20T12:00:00+08:00"),
+    );
+
+    expect(result).toBeNull();
   });
 
   it("returns null when today has no future scheduled appointment", () => {

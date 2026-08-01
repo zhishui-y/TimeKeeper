@@ -47,6 +47,9 @@ describe("RevenuePeriodDetail", () => {
         summary,
         loading: false,
         error: null,
+        appointments: [],
+        appointmentsLoading: false,
+        appointmentsError: null,
       },
       global: { stubs: { Teleport: true } },
     });

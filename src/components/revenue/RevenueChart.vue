@@ -30,7 +30,7 @@ function updateReducedMotion(): void {
 }
 
 function handleChartClick(event: ECElementEvent): void {
-  if (!props.drillable || event.componentType !== "series" || event.seriesType !== "bar") return;
+  if (!props.drillable || event.componentType !== "series") return;
   const point = props.points[event.dataIndex];
   if (point) emit("periodSelect", point);
 }
@@ -87,6 +87,7 @@ const option = computed(() => ({
     {
       name: "已结收益",
       type: "bar",
+      stack: "revenue",
       cursor: props.drillable ? "pointer" : "default",
       barMaxWidth: 28,
       data: props.points.map((point) => point.settledMinor),
@@ -96,6 +97,7 @@ const option = computed(() => ({
     {
       name: "待结金额",
       type: "bar",
+      stack: "revenue",
       cursor: props.drillable ? "pointer" : "default",
       barMaxWidth: 28,
       data: props.points.map((point) => point.unsettledMinor),
@@ -105,6 +107,7 @@ const option = computed(() => ({
     {
       name: "业务工时",
       type: "line",
+      cursor: props.drillable ? "pointer" : "default",
       yAxisIndex: 1,
       smooth: 0.25,
       symbolSize: 5,

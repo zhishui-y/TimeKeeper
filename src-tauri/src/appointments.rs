@@ -798,6 +798,55 @@ pub(crate) async fn set_appointment_service_status_impl(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn sync_appointment_service_statuses<R: Runtime>(
+    app: AppHandle<R>,
+    database: State<'_, Database>,
+    notifications: State<'_, NotificationState>,
+    backup: State<'_, BackupState>,
+) -> Result<usize, String> {
+    let _operation_guard = backup.lock_data_operation().await;
+    let offset = FixedOffset::east_opt(8 * 60 * 60).ok_or("无法创建东八区时区")?;
+    let now = Utc::now().with_timezone(&offset).naive_local();
+    let changed = sync_appointment_service_statuses_impl(database.inner(), now).await?;
+    for appointment in &changed {
+        sync_notification(&app, notifications.inner(), appointment);
+    }
+    Ok(changed.len())
+}
+
+pub(crate) async fn sync_appointment_service_statuses_impl(
+    database: &Database,
+    now: NaiveDateTime,
+) -> Result<Vec<Appointment>, String> {
+    let local_time = now.format(DATE_TIME_FORMAT).to_string();
+    let rows = sqlx::query(
+        "UPDATE appointments
+         SET service_status = CASE
+               WHEN ends_at IS NOT NULL AND ends_at <= ? THEN 'completed'
+               ELSE 'in_progress'
+             END,
+             updated_at = ?
+         WHERE service_status IN ('scheduled', 'in_progress')
+           AND starts_at IS NOT NULL
+           AND starts_at <= ?
+           AND (
+             service_status = 'scheduled'
+             OR (service_status = 'in_progress' AND ends_at IS NOT NULL AND ends_at <= ?)
+           )
+         RETURNING *",
+    )
+    .bind(&local_time)
+    .bind(Utc::now().to_rfc3339())
+    .bind(&local_time)
+    .bind(&local_time)
+    .fetch_all(database.pool())
+    .await
+    .map_err(db_error)?;
+
+    rows.iter().map(appointment_from_row).collect()
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn settle_appointment(
     database: State<'_, Database>,
     backup: State<'_, BackupState>,
@@ -989,6 +1038,84 @@ mod tests {
         let (start, end) = resolve_time_range("2026-07-13", Some("23:30"), Some("01:00")).unwrap();
         assert_eq!(start.as_deref(), Some("2026-07-13T23:30:00"));
         assert_eq!(end.as_deref(), Some("2026-07-14T01:00:00"));
+    }
+
+    #[test]
+    fn automatically_starts_and_completes_timed_appointments() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let current =
+                create_appointment_impl(&database, business_input("2026-07-13", "10:00", "11:00"))
+                    .await
+                    .unwrap()
+                    .appointment;
+            let missed =
+                create_appointment_impl(&database, business_input("2026-07-13", "08:00", "09:00"))
+                    .await
+                    .unwrap()
+                    .appointment;
+            let mut open_ended_input = business_input("2026-07-13", "10:00", "11:00");
+            open_ended_input.end_time = None;
+            let open_ended = create_appointment_impl(&database, open_ended_input)
+                .await
+                .unwrap()
+                .appointment;
+
+            let at_start =
+                NaiveDateTime::parse_from_str("2026-07-13T10:00:00", DATE_TIME_FORMAT).unwrap();
+            let changed = sync_appointment_service_statuses_impl(&database, at_start)
+                .await
+                .unwrap();
+            assert_eq!(changed.len(), 3);
+            assert_eq!(
+                get_appointment_impl(&database, &current.id)
+                    .await
+                    .unwrap()
+                    .service_status,
+                ServiceStatus::InProgress
+            );
+            assert_eq!(
+                get_appointment_impl(&database, &missed.id)
+                    .await
+                    .unwrap()
+                    .service_status,
+                ServiceStatus::Completed
+            );
+            assert_eq!(
+                get_appointment_impl(&database, &open_ended.id)
+                    .await
+                    .unwrap()
+                    .service_status,
+                ServiceStatus::InProgress
+            );
+
+            let at_end =
+                NaiveDateTime::parse_from_str("2026-07-13T11:00:00", DATE_TIME_FORMAT).unwrap();
+            let changed = sync_appointment_service_statuses_impl(&database, at_end)
+                .await
+                .unwrap();
+            assert_eq!(changed.len(), 1);
+            assert_eq!(
+                get_appointment_impl(&database, &current.id)
+                    .await
+                    .unwrap()
+                    .service_status,
+                ServiceStatus::Completed
+            );
+            assert_eq!(
+                get_appointment_impl(&database, &open_ended.id)
+                    .await
+                    .unwrap()
+                    .service_status,
+                ServiceStatus::InProgress
+            );
+            assert!(
+                sync_appointment_service_statuses_impl(&database, at_end)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        });
     }
 
     #[test]

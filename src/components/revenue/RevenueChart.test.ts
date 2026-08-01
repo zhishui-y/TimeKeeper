@@ -11,6 +11,9 @@ vi.mock("vue-echarts", async () => {
   return {
     default: defineComponent({
       name: "VChart",
+      props: {
+        option: { type: Object, required: true },
+      },
       emits: ["click"],
       setup: () => () => h("div", { class: "v-chart-stub" }),
     }),
@@ -35,6 +38,17 @@ const points: RevenuePoint[] = [
 ];
 
 describe("RevenueChart", () => {
+  it("centers both revenue bars in one stack under the hours line", () => {
+    const wrapper = mount(RevenueChart, { props: { points, drillable: true } });
+    const chartOption = wrapper.findComponent({ name: "VChart" }).props("option") as {
+      series: Array<{ stack?: string }>;
+    };
+
+    expect(chartOption.series[0].stack).toBe("revenue");
+    expect(chartOption.series[1].stack).toBe("revenue");
+    expect(chartOption.series[2].stack).toBeUndefined();
+  });
+
   it("emits the clicked point for a drillable bar", async () => {
     const wrapper = mount(RevenueChart, { props: { points, drillable: true } });
 
@@ -48,15 +62,16 @@ describe("RevenueChart", () => {
     expect(wrapper.emitted("periodSelect")).toEqual([[points[1]]]);
   });
 
-  it("ignores line clicks and clicks while daily drill-down is disabled", async () => {
+  it("emits line clicks and ignores non-series or disabled clicks", async () => {
     const wrapper = mount(RevenueChart, { props: { points, drillable: true } });
     const chart = wrapper.findComponent({ name: "VChart" });
 
     chart.vm.$emit("click", { componentType: "series", seriesType: "line", dataIndex: 0 });
+    chart.vm.$emit("click", { componentType: "legend", dataIndex: 0 });
     await wrapper.setProps({ drillable: false });
     chart.vm.$emit("click", { componentType: "series", seriesType: "bar", dataIndex: 0 });
     await nextTick();
 
-    expect(wrapper.emitted("periodSelect")).toBeUndefined();
+    expect(wrapper.emitted("periodSelect")).toEqual([[points[0]]]);
   });
 });

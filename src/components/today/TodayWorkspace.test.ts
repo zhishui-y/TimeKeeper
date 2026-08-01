@@ -96,6 +96,28 @@ describe("TodayWorkspace", () => {
     wrapper.unmount();
   });
 
+  it("labels an automatically started appointment as in progress", async () => {
+    vi.spyOn(mockApi, "listAppointments").mockResolvedValue([]);
+    vi.spyOn(mockApi, "getDashboardSummary").mockResolvedValue({
+      todaySettledMinor: 0,
+      weekSettledMinor: 0,
+      pendingCount: 0,
+      nextAppointment: appointment({
+        id: "in-progress-next",
+        serviceStatus: "in_progress",
+      }),
+    });
+
+    const wrapper = mount(TodayWorkspace, {
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+
+    expect(wrapper.get(".metric--next strong").text()).toBe("进行中");
+
+    wrapper.unmount();
+  });
+
   it("sorts every day and today's list from early to late with pending times last", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 6, 20, 12, 0, 0));
@@ -141,6 +163,46 @@ describe("TodayWorkspace", () => {
     wrapper.unmount();
   });
 
+  it("shows the selected weekday's appointments in the lower schedule", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 20, 12, 0, 0));
+    vi.spyOn(mockApi, "listAppointments").mockResolvedValue([
+      appointment({ id: "monday", contactName: "周一预约" }),
+      appointment({
+        id: "tuesday",
+        serviceDate: "2026-07-21",
+        startsAt: "2026-07-21T16:00:00+08:00",
+        endsAt: "2026-07-21T18:00:00+08:00",
+        contactName: "周二预约",
+      }),
+    ]);
+    vi.spyOn(mockApi, "getDashboardSummary").mockResolvedValue({
+      todaySettledMinor: 0,
+      weekSettledMinor: 0,
+      pendingCount: 0,
+      nextAppointment: null,
+    });
+
+    const wrapper = mount(TodayWorkspace, {
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+
+    const dayHeadings = wrapper.findAll(".week-day__heading");
+    await dayHeadings[1]?.trigger("click");
+
+    expect(wrapper.get(".today-list__header .section-kicker").text()).toBe("当日安排");
+    expect(wrapper.get(".today-list__header h2").text()).toContain("7月21日");
+    expect(wrapper.findAll(".appointment-row__title strong").map((item) => item.text())).toEqual([
+      "周二预约",
+    ]);
+    expect(wrapper.find(".appointment-row--next").exists()).toBe(false);
+    expect(wrapper.find(".week-day.is-today .schedule-chip--next").exists()).toBe(true);
+    expect(wrapper.findAll(".week-day")[1]?.classes()).toContain("is-selected");
+
+    wrapper.unmount();
+  });
+
   it("opens completed unsettled appointments with the settlement focus intent", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 6, 20, 12, 0, 0));
@@ -168,6 +230,36 @@ describe("TodayWorkspace", () => {
 
     expect(ui.activeAppointment?.id).toBe(target.id);
     expect(ui.appointmentDrawerInitialFocus).toBe("amount");
+    wrapper.unmount();
+  });
+
+  it("confirms and deletes an appointment from the lower schedule", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 20, 12, 0, 0));
+    const target = appointment({ id: "appointment-to-delete", contactName: "待删除联系人" });
+    vi.spyOn(mockApi, "listAppointments").mockResolvedValue([target]);
+    vi.spyOn(mockApi, "getDashboardSummary").mockResolvedValue({
+      todaySettledMinor: 0,
+      weekSettledMinor: 0,
+      pendingCount: 0,
+      nextAppointment: null,
+    });
+    const remove = vi.spyOn(mockApi, "deleteAppointment").mockResolvedValue();
+    const confirm = vi.spyOn(globalThis, "confirm").mockReturnValue(true);
+    const wrapper = mount(TodayWorkspace, {
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+
+    const actionLabels = wrapper
+      .findAll(".appointment-row__actions button")
+      .map((button) => button.attributes("aria-label"));
+    expect(actionLabels.slice(-2)).toEqual(["编辑预约", "删除预约"]);
+    await wrapper.get('button[aria-label="删除预约"]').trigger("click");
+    await flushPromises();
+
+    expect(confirm).toHaveBeenCalledWith("确定永久删除 待删除联系人 的这条预约吗？");
+    expect(remove).toHaveBeenCalledWith(target.id);
     wrapper.unmount();
   });
 });

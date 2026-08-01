@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { BriefcaseBusiness, Gamepad2, Save, X } from "@lucide/vue";
+import { format } from "date-fns";
 import { reactive, shallowRef, useTemplateRef, watch } from "vue";
 import { useModalFocus } from "../../composables/useModalFocus";
 import type {
@@ -119,6 +120,10 @@ function selectMode(mode: AppointmentMode): void {
   } else if (draft.settlementStatus === "not_applicable") {
     draft.settlementStatus = "unsettled";
   }
+}
+
+function setCurrentTime(field: "startTime" | "endTime"): void {
+  draft[field] = format(new Date(), "HH:mm");
 }
 
 function focusAdjacentField(event: FieldTabEvent): void {
@@ -254,14 +259,53 @@ useModalFocus({
                   <span class="field__label">日期 *</span>
                   <input v-model="draft.serviceDate" class="input" type="date" />
                 </label>
-                <label class="field">
-                  <span class="field__label">开始时间</span>
-                  <input v-model="draft.startTime" class="input" type="time" />
-                </label>
-                <label class="field">
-                  <span class="field__label">结束时间</span>
-                  <input v-model="draft.endTime" class="input" type="time" />
-                </label>
+                <div class="field">
+                  <label class="field__label" for="appointment-start-time">开始时间</label>
+                  <div class="time-field__control">
+                    <input
+                      id="appointment-start-time"
+                      v-model="draft.startTime"
+                      class="input"
+                      type="time"
+                    />
+                    <button
+                      class="time-field__button"
+                      type="button"
+                      aria-label="开始时间选择现在"
+                      @click="setCurrentTime('startTime')"
+                    >
+                      现在
+                    </button>
+                  </div>
+                </div>
+                <div class="field">
+                  <label class="field__label" for="appointment-end-time">结束时间（可留空）</label>
+                  <div class="time-field__control time-field__control--end">
+                    <input
+                      id="appointment-end-time"
+                      v-model="draft.endTime"
+                      class="input"
+                      type="time"
+                    />
+                    <button
+                      class="time-field__button"
+                      type="button"
+                      aria-label="结束时间选择现在"
+                      @click="setCurrentTime('endTime')"
+                    >
+                      现在
+                    </button>
+                    <button
+                      class="time-field__button"
+                      type="button"
+                      aria-label="清空结束时间"
+                      :disabled="!draft.endTime"
+                      @click="draft.endTime = ''"
+                    >
+                      清空
+                    </button>
+                  </div>
+                </div>
               </div>
               <div class="form-grid">
                 <label class="field">
@@ -565,6 +609,39 @@ useModalFocus({
 
 .form-grid__wide {
   grid-column: span 1;
+}
+
+.time-field__control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+}
+
+.time-field__control--end {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.time-field__button {
+  min-width: 38px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 8px);
+  color: var(--brand-strong);
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.time-field__button:hover:not(:disabled) {
+  border-color: var(--brand-border);
+  background: var(--brand-soft);
+}
+
+.time-field__button:disabled {
+  color: var(--ink-muted);
+  cursor: default;
+  opacity: 0.5;
 }
 
 .reminder-row {

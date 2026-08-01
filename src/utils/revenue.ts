@@ -1,10 +1,11 @@
 import {
+  addMonths,
+  addWeeks,
   endOfMonth,
   endOfWeek,
   format,
   isValid,
   parseISO,
-  subMonths,
   startOfMonth,
   startOfWeek,
 } from "date-fns";
@@ -15,19 +16,32 @@ export interface RevenuePeriodRange {
   to: string;
 }
 
-export type RevenueRangePreset = "all" | "previous_month" | "current_month";
+export type RevenueRangeUnit = "week" | "month";
+export type RevenueRangeKind = "all" | "custom" | RevenueRangeUnit;
 
-export function revenuePresetRange(
-  preset: RevenueRangePreset,
+export function revenueNaturalRange(
+  unit: RevenueRangeUnit,
   referenceDate: Date = new Date(),
+  offset = 0,
 ): RevenuePeriodRange {
-  if (preset === "all") return { from: "", to: "" };
-
-  const target = preset === "previous_month" ? subMonths(referenceDate, 1) : referenceDate;
+  const target =
+    unit === "week" ? addWeeks(referenceDate, offset) : addMonths(referenceDate, offset);
+  const from = unit === "week" ? startOfWeek(target, { weekStartsOn: 1 }) : startOfMonth(target);
+  const to = unit === "week" ? endOfWeek(target, { weekStartsOn: 1 }) : endOfMonth(target);
   return {
-    from: format(startOfMonth(target), "yyyy-MM-dd"),
-    to: format(endOfMonth(target), "yyyy-MM-dd"),
+    from: format(from, "yyyy-MM-dd"),
+    to: format(to, "yyyy-MM-dd"),
   };
+}
+
+export function shiftRevenueRange(
+  from: string,
+  unit: RevenueRangeUnit,
+  offset: number,
+): RevenuePeriodRange | null {
+  const anchor = parseISO(from);
+  if (!isValid(anchor)) return null;
+  return revenueNaturalRange(unit, anchor, offset);
 }
 
 export function revenuePeriodRange(

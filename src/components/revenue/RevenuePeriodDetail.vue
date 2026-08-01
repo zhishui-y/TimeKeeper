@@ -4,16 +4,20 @@ import { format, parseISO } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import { computed, useTemplateRef, type DeepReadonly } from "vue";
 import { useModalFocus } from "../../composables/useModalFocus";
-import type { ReportGranularity, RevenueSummary } from "../../types/domain";
+import type { Appointment, ReportGranularity, RevenueSummary } from "../../types/domain";
 import { formatCurrency } from "../../utils/formatters";
+import RevenueDayAppointments from "./RevenueDayAppointments.vue";
 
 const props = defineProps<{
-  granularity: Exclude<ReportGranularity, "day">;
+  granularity: ReportGranularity;
   from: string;
   to: string;
   summary: DeepReadonly<RevenueSummary> | null;
   loading: boolean;
   error: string | null;
+  appointments: DeepReadonly<Appointment[]>;
+  appointmentsLoading: boolean;
+  appointmentsError: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -21,8 +25,15 @@ const emit = defineEmits<{
 }>();
 
 const panelRef = useTemplateRef("panel");
-const title = computed(() => (props.granularity === "week" ? "周收入明细" : "月收入明细"));
-const dateRangeLabel = computed(() => `${formatDate(props.from)} — ${formatDate(props.to)}`);
+const title = computed(() => {
+  if (props.granularity === "day") return "当日预约明细";
+  return props.granularity === "week" ? "周收入明细" : "月收入明细";
+});
+const dateRangeLabel = computed(() =>
+  props.from === props.to
+    ? formatDate(props.from)
+    : `${formatDate(props.from)} — ${formatDate(props.to)}`,
+);
 
 function formatDate(date: string): string {
   return format(parseISO(date), "yyyy年M月d日");
@@ -58,7 +69,9 @@ useModalFocus({
       >
         <header class="period-detail__header">
           <div>
-            <span class="section-kicker">DAILY BREAKDOWN</span>
+            <span class="section-kicker">{{
+              granularity === "day" ? "APPOINTMENTS" : "DAILY BREAKDOWN"
+            }}</span>
             <h2 id="period-detail-title">{{ title }}</h2>
             <p><CalendarDays :size="14" />{{ dateRangeLabel }}</p>
           </div>
@@ -94,7 +107,14 @@ useModalFocus({
             </div>
           </section>
 
-          <section class="daily-detail">
+          <RevenueDayAppointments
+            v-if="granularity === 'day'"
+            :appointments="appointments"
+            :loading="appointmentsLoading"
+            :error="appointmentsError"
+          />
+
+          <section v-else class="daily-detail">
             <header>
               <div>
                 <span class="section-kicker">BY DAY</span>

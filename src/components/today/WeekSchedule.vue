@@ -20,11 +20,13 @@ interface DaySchedule {
 const props = defineProps<{
   days: DaySchedule[];
   nextAppointmentId?: string | null;
+  selectedDate?: string;
 }>();
 
 const emit = defineEmits<{
   edit: [appointment: Appointment];
   create: [serviceDate: string];
+  selectDate: [serviceDate: string];
 }>();
 
 const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointments.length), 1));
@@ -60,10 +62,16 @@ function appointmentTitle(appointment: Appointment): string {
         v-for="day in days"
         :key="day.date"
         class="week-day"
-        :class="{ 'is-today': day.isToday }"
+        :class="{ 'is-today': day.isToday, 'is-selected': day.date === selectedDate }"
         @click.self="emit('create', day.date)"
       >
-        <button class="week-day__heading" type="button" @click="emit('create', day.date)">
+        <button
+          class="week-day__heading"
+          type="button"
+          :aria-label="`查看${day.weekday}${day.dayNumber}日的预约`"
+          :aria-pressed="day.date === selectedDate"
+          @click="emit('selectDate', day.date)"
+        >
           <span>{{ day.weekday }}</span>
           <strong>{{ day.dayNumber }}</strong>
         </button>
@@ -179,6 +187,15 @@ function appointmentTitle(appointment: Appointment): string {
     var(--brand-soft),
     color-mix(in srgb, var(--surface) 90%, var(--brand-soft))
   );
+}
+
+.week-day.is-selected {
+  box-shadow: inset 0 0 0 2px var(--brand-border);
+}
+
+.week-day.is-selected .week-day__heading {
+  border-bottom-color: var(--brand);
+  background: color-mix(in srgb, var(--brand-soft) 58%, transparent);
 }
 
 .week-day__heading {

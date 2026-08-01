@@ -12,12 +12,18 @@ All command payloads and responses use camelCase JSON. Rust DTOs use
 - `duplicate_appointment(id, serviceDate?) -> AppointmentMutationResult`
 - `delete_appointment(id) -> void`
 - `delete_appointments(ids) -> number`
+- `sync_appointment_service_statuses() -> number`
 - `set_appointment_service_status(id, status) -> Appointment`
 - `settle_appointment(id, amountMinor, paymentMethod?) -> Appointment`
 
 Conflict detection excludes cancelled appointments and the record being edited.
 It only compares records with both a start and end timestamp. Conflicts warn but
 do not block writes.
+
+`sync_appointment_service_statuses` uses the current China-local time and is idempotent. Scheduled
+appointments become in progress when their start time is reached. Scheduled or in-progress
+appointments become completed when their end time is reached. Appointments without an end time
+can start automatically but are never completed automatically.
 
 ## Accounts and vault
 

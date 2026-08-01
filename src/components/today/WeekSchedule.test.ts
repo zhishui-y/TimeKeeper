@@ -25,6 +25,7 @@ describe("WeekSchedule", () => {
   it("opens creation when the empty schedule track is clicked", async () => {
     const wrapper = mount(WeekSchedule, {
       props: {
+        selectedDate: "2026-07-20",
         days: [
           {
             date: "2026-07-20",
@@ -42,10 +43,43 @@ describe("WeekSchedule", () => {
     expect(wrapper.emitted("create")).toEqual([["2026-07-20"]]);
   });
 
+  it("selects a day from its heading without opening creation", async () => {
+    const wrapper = mount(WeekSchedule, {
+      props: {
+        selectedDate: "2026-07-20",
+        days: [
+          {
+            date: "2026-07-20",
+            weekday: "周一",
+            dayNumber: "20",
+            isToday: true,
+            appointments: [],
+          },
+          {
+            date: "2026-07-21",
+            weekday: "周二",
+            dayNumber: "21",
+            isToday: false,
+            appointments: [],
+          },
+        ],
+      },
+    });
+
+    const headings = wrapper.findAll(".week-day__heading");
+    await headings[1]?.trigger("click");
+
+    expect(wrapper.emitted("selectDate")).toEqual([["2026-07-21"]]);
+    expect(wrapper.emitted("create")).toBeUndefined();
+    expect(headings[0]?.attributes("aria-pressed")).toBe("true");
+    expect(headings[1]?.attributes("aria-pressed")).toBe("false");
+  });
+
   it("applies service colors and compact settlement markers to schedule chips", () => {
     const wrapper = mount(WeekSchedule, {
       props: {
         nextAppointmentId: "scheduled",
+        selectedDate: "2026-07-20",
         days: [
           {
             date: "2026-07-20",

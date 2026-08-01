@@ -137,6 +137,7 @@ pub fn run() {
             appointments::duplicate_appointment,
             appointments::delete_appointment,
             appointments::delete_appointments,
+            appointments::sync_appointment_service_statuses,
             appointments::set_appointment_service_status,
             appointments::settle_appointment,
             accounts::list_account_profiles,

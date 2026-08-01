@@ -26,6 +26,7 @@ const nativeApi: ApiClient = {
     invoke<AppointmentMutationResult>("duplicate_appointment", { id, serviceDate }),
   deleteAppointment: (id) => invoke<void>("delete_appointment", { id }),
   deleteAppointments: (ids) => invoke<number>("delete_appointments", { ids }),
+  syncAppointmentServiceStatuses: () => invoke<number>("sync_appointment_service_statuses"),
   setAppointmentServiceStatus: (id, status) =>
     invoke<Appointment>("set_appointment_service_status", { id, status }),
   settleAppointment: (id, amountMinor, paymentMethod) =>

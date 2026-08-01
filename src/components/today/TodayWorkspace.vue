@@ -23,6 +23,7 @@ import WeekSchedule from "./WeekSchedule.vue";
 
 const now = shallowRef(new Date());
 const todayKey = computed(() => format(now.value, "yyyy-MM-dd"));
+const selectedDateKey = shallowRef(todayKey.value);
 const weekStart = computed(() => startOfWeek(now.value, { weekStartsOn: 1 }));
 const weekEnd = computed(() => endOfWeek(now.value, { weekStartsOn: 1 }));
 const currentMonthLabel = computed(() => format(now.value, "yyyy · MM"));
@@ -48,9 +49,28 @@ const todayAppointments = computed(() =>
   ),
 );
 
+const selectedAppointments = computed(() =>
+  sortAppointmentsByStartTime(
+    items.value.filter(
+      (item) => item.serviceDate === selectedDateKey.value && item.serviceStatus !== "cancelled",
+    ),
+  ),
+);
+
+const selectedDateIsToday = computed(() => selectedDateKey.value === todayKey.value);
+const selectedListKicker = computed(() => (selectedDateIsToday.value ? "今日安排" : "当日安排"));
+const selectedListHeading = computed(() =>
+  selectedDateIsToday.value
+    ? "今日预约"
+    : `${format(parseISO(selectedDateKey.value), "M月d日 EEEE", { locale: zhCN })}预约`,
+);
 const nextTodayAppointmentId = computed(
   () => findNextScheduledAppointment(todayAppointments.value, now.value)?.id ?? null,
 );
+const nextSelectedAppointmentId = computed(() => {
+  if (!selectedDateIsToday.value) return null;
+  return nextTodayAppointmentId.value;
+});
 
 const weekDays = computed(() =>
   Array.from({ length: 7 }, (_, index) => {
@@ -71,6 +91,7 @@ const weekDays = computed(() =>
 const nextCountdown = computed(() => {
   const next = dashboard.summary.value?.nextAppointment;
   if (!next) return "暂无待开始预约";
+  if (next.serviceStatus === "in_progress") return "进行中";
   if (!next.startsAt) return "待定时段";
   const minutes = differenceInMinutes(parseISO(next.startsAt), now.value);
   if (minutes <= 0) return "即将开始";
@@ -101,12 +122,28 @@ async function changeStatus(appointment: Appointment, status: ServiceStatus): Pr
   }
 }
 
+async function removeAppointment(appointment: Appointment): Promise<void> {
+  if (!globalThis.confirm(`确定永久删除 ${appointment.contactName} 的这条预约吗？`)) return;
+  try {
+    await api.deleteAppointment(appointment.id);
+    ui.markDataChanged();
+    ui.notify("预约已永久删除", "success");
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  }
+}
+
+function selectDate(serviceDate: string): void {
+  selectedDateKey.value = serviceDate;
+}
+
 watch(
   () => ui.dataRevision,
   () => void refresh(),
 );
 
 watch(todayKey, () => {
+  selectedDateKey.value = todayKey.value;
   filters.from = format(weekStart.value, "yyyy-MM-dd");
   filters.to = format(weekEnd.value, "yyyy-MM-dd");
   void refresh();
@@ -197,17 +234,22 @@ onUnmounted(() => {
       class="today-workspace__week"
       :days="weekDays"
       :next-appointment-id="nextTodayAppointmentId"
+      :selected-date="selectedDateKey"
       @edit="ui.openEditAppointment"
       @create="ui.openCreateAppointment"
+      @select-date="selectDate"
     />
 
     <TodayAppointmentList
       class="today-workspace__list"
-      :appointments="todayAppointments"
-      :next-appointment-id="nextTodayAppointmentId"
+      :appointments="selectedAppointments"
+      :next-appointment-id="nextSelectedAppointmentId"
+      :kicker="selectedListKicker"
+      :heading="selectedListHeading"
       @edit="ui.openEditAppointment"
       @settle="ui.openSettleAppointment"
       @change-status="changeStatus"
+      @delete="removeAppointment"
     />
   </div>
 </template>

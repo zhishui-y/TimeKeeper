@@ -212,6 +212,32 @@ function deleteAppointmentsByIds(ids: readonly string[]): number {
   return before - appointments.length;
 }
 
+function syncAppointmentServiceStatuses(now: Date): number {
+  const nowTime = now.getTime();
+  let changedCount = 0;
+  appointments = appointments.map((appointment) => {
+    if (
+      (appointment.serviceStatus !== "scheduled" && appointment.serviceStatus !== "in_progress") ||
+      !appointment.startsAt ||
+      parseISO(appointment.startsAt).getTime() > nowTime
+    ) {
+      return appointment;
+    }
+
+    const nextStatus =
+      appointment.endsAt && parseISO(appointment.endsAt).getTime() <= nowTime
+        ? "completed"
+        : appointment.serviceStatus === "scheduled"
+          ? "in_progress"
+          : appointment.serviceStatus;
+    if (nextStatus === appointment.serviceStatus) return appointment;
+
+    changedCount += 1;
+    return { ...appointment, serviceStatus: nextStatus, updatedAt: now.toISOString() };
+  });
+  return changedCount;
+}
+
 function getAccountOrThrow(id: string): AccountProfile {
   const item = accounts.find((account) => account.id === id);
   if (!item) throw new Error("账号档案不存在或已被删除");
@@ -283,6 +309,9 @@ export const mockApi: ApiClient = {
   },
   async deleteAppointment(id) {
     deleteAppointmentsByIds([id]);
+  },
+  async syncAppointmentServiceStatuses() {
+    return syncAppointmentServiceStatuses(new Date());
   },
   async setAppointmentServiceStatus(id, status: ServiceStatus) {
     const item = getAppointmentOrThrow(id);

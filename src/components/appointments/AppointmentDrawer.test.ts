@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { flushPromises, mount } from "@vue/test-utils";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Appointment } from "../../types/domain";
 import AppointmentDrawer from "./AppointmentDrawer.vue";
 
@@ -11,6 +11,7 @@ describe("AppointmentDrawer", () => {
   afterEach(() => {
     unmount?.();
     unmount = undefined;
+    vi.useRealTimers();
   });
 
   function mountDrawer(
@@ -81,6 +82,28 @@ describe("AppointmentDrawer", () => {
 
     expect(wrapper.text()).toContain("开始时间和结束时间不能相同");
     expect(wrapper.emitted("save")).toBeUndefined();
+  });
+
+  it("fills either time with the current minute and allows clearing the end time", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 13, 21, 8, 0));
+    const wrapper = mountDrawer();
+
+    await wrapper.get('button[aria-label="开始时间选择现在"]').trigger("click");
+    await wrapper.get('button[aria-label="结束时间选择现在"]').trigger("click");
+    const timeInputs = wrapper.findAll('input[type="time"]');
+    expect((timeInputs[0]?.element as HTMLInputElement).value).toBe("21:08");
+    expect((timeInputs[1]?.element as HTMLInputElement).value).toBe("21:08");
+
+    await wrapper.get('button[aria-label="清空结束时间"]').trigger("click");
+    expect((timeInputs[1]?.element as HTMLInputElement).value).toBe("");
+    await wrapper.get('input[placeholder="谁约的"]').setValue("结束时间待定");
+    await wrapper.get('button.button--primary[type="submit"]').trigger("click");
+
+    expect(wrapper.emitted("save")?.[0]?.[0]).toMatchObject({
+      startTime: "21:08",
+      endTime: null,
+    });
   });
 
   it("requires an amount before a business appointment can be settled", async () => {
