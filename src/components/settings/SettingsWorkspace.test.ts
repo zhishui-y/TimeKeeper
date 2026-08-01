@@ -87,7 +87,9 @@ describe("SettingsWorkspace operation progress", () => {
     const pendingImport = deferred<ExcelImportResult>();
     vi.spyOn(mockApi, "selectExcelFile").mockResolvedValue(preview.sourcePath);
     vi.spyOn(mockApi, "previewExcelImport").mockResolvedValue(preview);
-    vi.spyOn(mockApi, "commitExcelImport").mockReturnValue(pendingImport.promise);
+    const commitExcelImport = vi
+      .spyOn(mockApi, "commitExcelImport")
+      .mockReturnValue(pendingImport.promise);
     const pinia = createPinia();
     const wrapper = mount(SettingsWorkspace, {
       global: { plugins: [pinia] },
@@ -99,16 +101,22 @@ describe("SettingsWorkspace operation progress", () => {
     await flushPromises();
     await buttonWithText(wrapper, "生成预览").trigger("click");
     await flushPromises();
-    await buttonWithText(wrapper, "确认导入").trigger("click");
+    await buttonWithText(wrapper, "导入预约与账号").trigger("click");
     await flushPromises();
 
-    expect(wrapper.get('[role="status"]').text()).toContain("正在导入账本数据");
+    expect(commitExcelImport).toHaveBeenCalledWith("preview-token", {
+      appointments: true,
+      accounts: true,
+    });
+    expect(wrapper.get('[role="status"]').text()).toContain("正在导入预约与账号");
     expect(buttonWithText(wrapper, "正在导入").attributes("disabled")).toBeDefined();
 
     pendingImport.resolve({
       importedAppointments: 408,
       importedProfiles: 23,
       skippedDuplicates: 0,
+      skippedAppointmentDuplicates: 0,
+      skippedProfileDuplicates: 0,
       warnings: [],
     });
     await flushPromises();
@@ -117,6 +125,42 @@ describe("SettingsWorkspace operation progress", () => {
     expect(wrapper.text()).toContain("导入完成");
     expect(ui.dataRevision).toBe(1);
     expect(ui.accountRevision).toBe(1);
+    wrapper.unmount();
+  });
+
+  it("commits only the selected import data type and updates the matching revision", async () => {
+    vi.spyOn(mockApi, "selectExcelFile").mockResolvedValue(preview.sourcePath);
+    vi.spyOn(mockApi, "previewExcelImport").mockResolvedValue(preview);
+    const commitExcelImport = vi.spyOn(mockApi, "commitExcelImport").mockResolvedValue({
+      importedAppointments: 400,
+      importedProfiles: 0,
+      skippedDuplicates: 8,
+      skippedAppointmentDuplicates: 8,
+      skippedProfileDuplicates: 0,
+      warnings: [],
+    });
+    const pinia = createPinia();
+    const wrapper = mount(SettingsWorkspace, {
+      global: { plugins: [pinia] },
+    });
+    const ui = useUiStore(pinia);
+    await flushPromises();
+
+    await wrapper.get('input[aria-label="导入账号档案"]').setValue(false);
+    await buttonWithText(wrapper, "选择文件").trigger("click");
+    await flushPromises();
+    await buttonWithText(wrapper, "生成预览").trigger("click");
+    await flushPromises();
+    await buttonWithText(wrapper, "导入预约记录").trigger("click");
+    await flushPromises();
+
+    expect(commitExcelImport).toHaveBeenCalledWith("preview-token", {
+      appointments: true,
+      accounts: false,
+    });
+    expect(wrapper.text()).toContain("去重跳过 8 条预约、0 个账号");
+    expect(ui.dataRevision).toBe(1);
+    expect(ui.accountRevision).toBe(0);
     wrapper.unmount();
   });
 

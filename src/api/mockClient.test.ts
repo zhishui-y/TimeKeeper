@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { format } from "date-fns";
 import type { AppointmentInput } from "../types/domain";
 import { appointmentToInput } from "../utils/appointment";
 import { mockApi } from "./mockClient";
@@ -24,14 +25,33 @@ function businessInput(
 }
 
 describe("browser mock API", () => {
+  it("resolves an empty revenue range from first income through today", async () => {
+    const summary = await mockApi.getRevenueSummary("", "", "month");
+
+    expect(summary.from).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(summary.to).toBe(format(new Date(), "yyyy-MM-dd"));
+    expect(summary.from <= summary.to).toBe(true);
+    expect(summary.appointmentCount).toBeGreaterThan(0);
+  });
+
   it("uses the same preview token then commit import flow without exposing passwords", async () => {
     const preview = await mockApi.previewExcelImport("C:\\demo\\account.xlsm", 2026);
     expect(preview.previewToken).toBeTruthy();
     expect(preview).not.toHaveProperty("password");
     expect(preview).not.toHaveProperty("passwords");
 
-    const result = await mockApi.commitExcelImport(preview.previewToken);
+    const result = await mockApi.commitExcelImport(preview.previewToken, {
+      appointments: true,
+      accounts: false,
+    });
     expect(result.importedAppointments).toBeGreaterThan(0);
+    expect(result.importedProfiles).toBe(0);
+    await expect(
+      mockApi.commitExcelImport(preview.previewToken, {
+        appointments: false,
+        accounts: false,
+      }),
+    ).rejects.toThrow("至少选择");
   });
 
   it("removes billing data from entertainment appointments", async () => {
@@ -83,9 +103,13 @@ describe("browser mock API", () => {
     );
 
     expect(second.conflicts.map((conflict) => conflict.id)).toContain(first.appointment.id);
+    const pendingCountBeforeCompletion = (await mockApi.getDashboardSummary(date)).pendingCount;
 
     const completed = await mockApi.setAppointmentServiceStatus(second.appointment.id, "completed");
     expect(completed.settlementStatus).toBe("unsettled");
+    expect((await mockApi.getDashboardSummary(date)).pendingCount).toBe(
+      pendingCountBeforeCompletion + 1,
+    );
 
     const beforeSettlement = await mockApi.getRevenueSummary(date, date, "day");
     expect(beforeSettlement.settledMinor).toBe(0);
@@ -93,6 +117,9 @@ describe("browser mock API", () => {
     expect(beforeSettlement.businessHours).toBe(2);
 
     await mockApi.settleAppointment(second.appointment.id, 25_000, "微信");
+    expect((await mockApi.getDashboardSummary(date)).pendingCount).toBe(
+      pendingCountBeforeCompletion,
+    );
     const afterSettlement = await mockApi.getRevenueSummary(date, date, "day");
     expect(afterSettlement.settledMinor).toBe(25_000);
     expect(afterSettlement.unsettledMinor).toBe(10_000);

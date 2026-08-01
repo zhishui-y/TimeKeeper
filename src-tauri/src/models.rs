@@ -237,7 +237,7 @@ pub struct RevenueSummary {
 pub struct DashboardSummary {
     pub today_settled_minor: i64,
     pub week_settled_minor: i64,
-    pub pending_minor: i64,
+    pub pending_count: i64,
     pub next_appointment: Option<Appointment>,
 }
 

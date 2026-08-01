@@ -13,7 +13,7 @@ export const router = createRouter({
       path: "/calendar",
       name: "calendar",
       component: () => import("../views/CalendarView.vue"),
-      meta: { title: "排班日历", subtitle: "拖动预约即可调整时间" },
+      meta: { title: "排班日历", subtitle: "点击预约即可查看或编辑安排" },
     },
     {
       path: "/appointments",

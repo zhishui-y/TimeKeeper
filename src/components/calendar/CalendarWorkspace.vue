@@ -1,74 +1,40 @@
 <script setup lang="ts">
-import { Info, RotateCcw } from "@lucide/vue";
-import { onBeforeUnmount, shallowRef, watch } from "vue";
-import { api, errorMessage } from "../../api/client";
+import { Info } from "@lucide/vue";
+import { format } from "date-fns";
+import { computed, onBeforeUnmount, onMounted, shallowRef, watch } from "vue";
 import { useAppointments } from "../../composables/useAppointments";
 import { useUiStore } from "../../stores/ui";
-import type { Appointment, AppointmentInput } from "../../types/domain";
-import { appointmentToInput, rescheduledInput } from "../../utils/appointment";
+import { findNextScheduledAppointment } from "../../utils/appointment";
 import CalendarBoard from "./CalendarBoard.vue";
-
-interface ReschedulePayload {
-  appointment: Appointment;
-  startsAt: Date;
-  endsAt: Date | null;
-  allDay: boolean;
-  revert: () => void;
-}
-
-interface UndoState {
-  id: string;
-  input: AppointmentInput;
-}
 
 const ui = useUiStore();
 const { items, loading, error, load } = useAppointments();
-const undoState = shallowRef<UndoState | null>(null);
-let undoTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+const now = shallowRef(new Date());
+let clockTimer: ReturnType<typeof globalThis.setInterval> | undefined;
 
-async function reschedule(payload: ReschedulePayload): Promise<void> {
-  const previous = appointmentToInput(payload.appointment);
-  try {
-    const result = await api.updateAppointment(
-      payload.appointment.id,
-      rescheduledInput(payload.appointment, payload.startsAt, payload.endsAt, payload.allDay),
-    );
-    undoState.value = { id: payload.appointment.id, input: previous };
-    globalThis.clearTimeout(undoTimer);
-    undoTimer = globalThis.setTimeout(() => (undoState.value = null), 7000);
-    ui.markDataChanged();
-    await load();
-    if (result.conflicts.length) {
-      ui.notify(`时间已调整，但与 ${result.conflicts.length} 条预约重叠`, "warning");
-    } else {
-      ui.notify("预约时间已调整", "success");
-    }
-  } catch (cause) {
-    payload.revert();
-    ui.notify(errorMessage(cause), "danger");
-  }
-}
-
-async function undo(): Promise<void> {
-  if (!undoState.value) return;
-  try {
-    await api.updateAppointment(undoState.value.id, undoState.value.input);
-    undoState.value = null;
-    ui.markDataChanged();
-    await load();
-    ui.notify("已撤销时间调整", "success");
-  } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
-  }
-}
+const nextAppointmentId = computed(
+  () =>
+    findNextScheduledAppointment(
+      items.value.filter(
+        (appointment) => appointment.serviceDate === format(now.value, "yyyy-MM-dd"),
+      ),
+      now.value,
+    )?.id ?? null,
+);
 
 watch(
   () => ui.dataRevision,
   () => void load(),
 );
 
+onMounted(() => {
+  clockTimer = globalThis.setInterval(() => {
+    now.value = new Date();
+  }, 30_000);
+});
+
 onBeforeUnmount(() => {
-  if (undoTimer !== undefined) globalThis.clearTimeout(undoTimer);
+  if (clockTimer !== undefined) globalThis.clearInterval(clockTimer);
 });
 </script>
 
@@ -83,6 +49,10 @@ onBeforeUnmount(() => {
         <span class="legend-item--in-progress">
           <i class="legend-dot" />
           进行中
+        </span>
+        <span class="legend-item--next">
+          <i class="legend-dot" />
+          下一时段
         </span>
         <span class="legend-item--completed">
           <i class="legend-dot" />
@@ -123,16 +93,10 @@ onBeforeUnmount(() => {
     <CalendarBoard
       class="calendar-workspace__board"
       :appointments="items"
+      :next-appointment-id="nextAppointmentId"
       @edit="ui.openEditAppointment"
       @create="(date, startTime) => ui.openCreateAppointment(date, startTime)"
-      @reschedule="reschedule"
     />
-    <Transition name="undo">
-      <button v-if="undoState" class="undo-bar" type="button" @click="undo">
-        <RotateCcw :size="15" />
-        撤销刚才的时间调整
-      </button>
-    </Transition>
   </div>
 </template>
 
@@ -180,6 +144,12 @@ onBeforeUnmount(() => {
   border-color: var(--amber-border);
   color: #815414;
   background: var(--amber-soft);
+}
+
+.calendar-legend .legend-item--next {
+  border-color: var(--gold-border);
+  color: var(--gold-strong);
+  background: var(--gold-soft);
 }
 
 .calendar-legend .legend-item--completed {
@@ -247,38 +217,6 @@ onBeforeUnmount(() => {
 .calendar-workspace__board {
   min-height: 0;
   flex: 1;
-}
-
-.undo-bar {
-  position: absolute;
-  right: 18px;
-  bottom: 18px;
-  display: inline-flex;
-  height: 38px;
-  align-items: center;
-  gap: 7px;
-  padding: 0 13px;
-  border: 1px solid var(--brand-border, var(--line-strong));
-  border-radius: var(--radius-sm, var(--radius));
-  color: var(--brand-strong);
-  background: var(--surface);
-  box-shadow: var(--shadow);
-  font-size: 12px;
-  font-weight: 650;
-  cursor: pointer;
-}
-
-.undo-enter-active,
-.undo-leave-active {
-  transition:
-    opacity 150ms ease,
-    transform 150ms ease;
-}
-
-.undo-enter-from,
-.undo-leave-to {
-  opacity: 0;
-  transform: translateY(6px);
 }
 
 @media (max-width: 1180px) {

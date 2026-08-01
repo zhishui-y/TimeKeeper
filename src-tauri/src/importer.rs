@@ -7,7 +7,7 @@ use std::{
 
 use calamine::{Data, DataType, Reader, open_workbook_auto};
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{Sqlite, Transaction};
 use tauri::{AppHandle, Manager, Runtime, State};
@@ -126,7 +126,25 @@ pub struct ExcelImportResult {
     imported_appointments: usize,
     imported_profiles: usize,
     skipped_duplicates: usize,
+    skipped_appointment_duplicates: usize,
+    skipped_profile_duplicates: usize,
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExcelImportSelection {
+    appointments: bool,
+    accounts: bool,
+}
+
+impl ExcelImportSelection {
+    fn validate(self) -> Result<Self, String> {
+        if !self.appointments && !self.accounts {
+            return Err("请至少选择导入预约或账号".into());
+        }
+        Ok(self)
+    }
 }
 
 #[tauri::command]
@@ -203,11 +221,13 @@ async fn parse_legacy_workbook_in_background(
 pub async fn commit_excel_import<R: Runtime>(
     app: AppHandle<R>,
     preview_token: String,
+    selection: ExcelImportSelection,
     imports: State<'_, ImportState>,
     database: State<'_, Database>,
     notifications: State<'_, NotificationState>,
     backup: State<'_, BackupState>,
 ) -> Result<ExcelImportResult, String> {
+    let selection = selection.validate()?;
     let operation_guard = backup.lock_data_operation().await;
     let parsed = imports.take(&preview_token)?;
     let mut transaction = database
@@ -218,65 +238,73 @@ pub async fn commit_excel_import<R: Runtime>(
     let mut secret_changes: Vec<(String, Option<String>)> = Vec::new();
     let mut imported_profiles = 0;
     let mut imported_appointments = 0;
-    let mut skipped_duplicates = 0;
+    let mut skipped_profile_duplicates = 0;
+    let mut skipped_appointment_duplicates = 0;
 
-    for profile in parsed
-        .profiles
-        .iter()
-        .chain(parsed.unmatched_profiles.iter())
-    {
-        let write = match insert_imported_account_profile(&mut transaction, profile).await {
-            Ok(write) => write,
-            Err(error) => {
-                return Err(rollback_import(&app, transaction, secret_changes, error).await);
-            }
-        };
-        imported_profiles += write.inserted;
-        skipped_duplicates += write.skipped;
-
-        if write.inserted > 0 {
-            match set_imported_secret(&app, write.record_id.clone(), profile.password.clone()).await
-            {
-                Ok(previous) => secret_changes.push((write.record_id, previous)),
+    if selection.accounts {
+        for profile in parsed
+            .profiles
+            .iter()
+            .chain(parsed.unmatched_profiles.iter())
+        {
+            let write = match insert_imported_account_profile(&mut transaction, profile).await {
+                Ok(write) => write,
                 Err(error) => {
-                    return Err(rollback_import(
-                        &app,
-                        transaction,
-                        secret_changes,
-                        format!("写入导入账号密码失败：{error}"),
-                    )
-                    .await);
+                    return Err(rollback_import(&app, transaction, secret_changes, error).await);
+                }
+            };
+            imported_profiles += write.inserted;
+            skipped_profile_duplicates += write.skipped;
+
+            if write.inserted > 0 {
+                match set_imported_secret(&app, write.record_id.clone(), profile.password.clone())
+                    .await
+                {
+                    Ok(previous) => secret_changes.push((write.record_id, previous)),
+                    Err(error) => {
+                        return Err(rollback_import(
+                            &app,
+                            transaction,
+                            secret_changes,
+                            format!("写入导入账号密码失败：{error}"),
+                        )
+                        .await);
+                    }
                 }
             }
         }
     }
 
-    for appointment in &parsed.appointments {
-        let account_profile_id = match appointment.account_name.as_deref() {
-            Some(account_name) => {
-                match find_imported_account_profile_id(&mut transaction, account_name).await {
-                    Ok(account_profile_id) => account_profile_id,
-                    Err(error) => {
-                        return Err(rollback_import(&app, transaction, secret_changes, error).await);
+    if selection.appointments {
+        for appointment in &parsed.appointments {
+            let account_profile_id = match appointment.account_name.as_deref() {
+                Some(account_name) => {
+                    match find_imported_account_profile_id(&mut transaction, account_name).await {
+                        Ok(account_profile_id) => account_profile_id,
+                        Err(error) => {
+                            return Err(
+                                rollback_import(&app, transaction, secret_changes, error).await
+                            );
+                        }
                     }
                 }
-            }
-            None => None,
-        };
-        let write = match insert_imported_appointment(
-            &mut transaction,
-            appointment,
-            account_profile_id.as_deref(),
-        )
-        .await
-        {
-            Ok(write) => write,
-            Err(error) => {
-                return Err(rollback_import(&app, transaction, secret_changes, error).await);
-            }
-        };
-        imported_appointments += write.inserted;
-        skipped_duplicates += write.skipped;
+                None => None,
+            };
+            let write = match insert_imported_appointment(
+                &mut transaction,
+                appointment,
+                account_profile_id.as_deref(),
+            )
+            .await
+            {
+                Ok(write) => write,
+                Err(error) => {
+                    return Err(rollback_import(&app, transaction, secret_changes, error).await);
+                }
+            };
+            imported_appointments += write.inserted;
+            skipped_appointment_duplicates += write.skipped;
+        }
     }
 
     if let Err(error) = transaction.commit().await {
@@ -291,12 +319,16 @@ pub async fn commit_excel_import<R: Runtime>(
     }
 
     drop(operation_guard);
-    restore_pending_notifications(app, database.inner(), notifications.inner()).await?;
+    if selection.appointments {
+        restore_pending_notifications(app, database.inner(), notifications.inner()).await?;
+    }
 
     Ok(ExcelImportResult {
         imported_appointments,
         imported_profiles,
-        skipped_duplicates,
+        skipped_duplicates: skipped_appointment_duplicates + skipped_profile_duplicates,
+        skipped_appointment_duplicates,
+        skipped_profile_duplicates,
         warnings: parsed.warnings,
     })
 }
@@ -771,6 +803,34 @@ fn fingerprint(parts: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn import_selection_requires_at_least_one_data_type() {
+        assert!(
+            ExcelImportSelection {
+                appointments: false,
+                accounts: false,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            ExcelImportSelection {
+                appointments: true,
+                accounts: false,
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            ExcelImportSelection {
+                appointments: false,
+                accounts: true,
+            }
+            .validate()
+            .is_ok()
+        );
+    }
 
     #[test]
     fn parses_month_day_with_base_year() {

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it } from "vitest";
+import type { Appointment } from "../../types/domain";
 import AppointmentDrawer from "./AppointmentDrawer.vue";
 
 describe("AppointmentDrawer", () => {
@@ -12,11 +13,17 @@ describe("AppointmentDrawer", () => {
     unmount = undefined;
   });
 
-  function mountDrawer(defaultReminderMinutes = 30) {
+  function mountDrawer(
+    defaultReminderMinutes = 30,
+    appointment: Appointment | null = null,
+    initialFocus: "default" | "amount" = "default",
+  ) {
     const wrapper = mount(AppointmentDrawer, {
+      attachTo: document.body,
       props: {
         open: true,
-        appointment: null,
+        appointment,
+        initialFocus,
         requestedDate: "2026-07-13",
         requestedStartTime: null,
         accounts: [],
@@ -26,6 +33,22 @@ describe("AppointmentDrawer", () => {
     });
     unmount = () => wrapper.unmount();
     return wrapper;
+  }
+
+  function completedAppointment(): Appointment {
+    return {
+      id: "appointment-to-settle",
+      serviceDate: "2026-07-13",
+      startsAt: "2026-07-13T20:00:00+08:00",
+      endsAt: "2026-07-13T22:00:00+08:00",
+      contactName: "待结算联系人",
+      mode: "business",
+      serviceStatus: "completed",
+      settlementStatus: "unsettled",
+      amountMinor: 18_000,
+      createdAt: "2026-07-13T00:00:00Z",
+      updatedAt: "2026-07-13T00:00:00Z",
+    };
   }
 
   it("uses the configured reminder default for new appointments", () => {
@@ -54,7 +77,7 @@ describe("AppointmentDrawer", () => {
     await timeInputs[0].setValue("10:00");
     await timeInputs[1].setValue("10:00");
 
-    await wrapper.get('button.button--primary[type="button"]').trigger("click");
+    await wrapper.get('button.button--primary[type="submit"]').trigger("click");
 
     expect(wrapper.text()).toContain("开始时间和结束时间不能相同");
     expect(wrapper.emitted("save")).toBeUndefined();
@@ -68,17 +91,47 @@ describe("AppointmentDrawer", () => {
     expect(settlementSelect).toBeDefined();
     await settlementSelect?.setValue("settled");
 
-    await wrapper.get('button.button--primary[type="button"]').trigger("click");
+    await wrapper.get('button.button--primary[type="submit"]').trigger("click");
 
     expect(wrapper.text()).toContain("已结算预约必须填写金额");
     expect(wrapper.emitted("save")).toBeUndefined();
+  });
+
+  it("focuses the amount input when opened from the settlement action", async () => {
+    const wrapper = mountDrawer(30, completedAppointment(), "amount");
+    await flushPromises();
+
+    const amountInput = wrapper.get('input[type="number"][step="0.01"]');
+    expect(document.activeElement).toBe(amountInput.element);
+  });
+
+  it("associates the save action with the form for native Enter submission", () => {
+    const wrapper = mountDrawer();
+    const form = wrapper.get("form#appointment-form");
+    const saveButton = wrapper.get('button.button--primary[type="submit"]');
+
+    expect(saveButton.attributes("form")).toBe(form.attributes("id"));
+  });
+
+  it("moves Tab directly between appointment fields", async () => {
+    const wrapper = mountDrawer();
+    await flushPromises();
+    const dateInput = wrapper.get('input[type="date"]');
+    const startTimeInput = wrapper.findAll('input[type="time"]')[0];
+
+    expect(document.activeElement).toBe(dateInput.element);
+    await dateInput.trigger("keydown", { key: "Tab" });
+    expect(document.activeElement).toBe(startTimeInput.element);
+
+    await startTimeInput.trigger("keydown", { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(dateInput.element);
   });
 
   it("disables repeat submission while a save is in progress", async () => {
     const wrapper = mountDrawer();
     await wrapper.setProps({ saving: true });
 
-    const saveButton = wrapper.get('button.button--primary[type="button"]');
+    const saveButton = wrapper.get('button.button--primary[type="submit"]');
     expect(saveButton.attributes("disabled")).toBeDefined();
     expect(saveButton.text()).toContain("保存中");
     await saveButton.trigger("click");

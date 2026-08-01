@@ -107,7 +107,9 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       await page.getByRole("button", { name: "选择文件" }).click();
       await page.getByRole("button", { name: "生成预览" }).click();
       await expect(page.locator(".import-preview")).toBeVisible();
-      await expect(page.getByRole("button", { name: "确认导入" })).toBeEnabled();
+      await expect(page.getByRole("checkbox", { name: "导入预约记录" })).toBeChecked();
+      await expect(page.getByRole("checkbox", { name: "导入账号档案" })).toBeChecked();
+      await expect(page.getByRole("button", { name: "导入预约与账号" })).toBeEnabled();
     });
 
     await test.step("修改年份使旧令牌对应的预览失效", async () => {
@@ -115,7 +117,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       const nextYear = currentYear >= 2100 ? currentYear - 1 : currentYear + 1;
       await yearInput.fill(String(nextYear));
       await expect(page.locator(".import-preview")).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "确认导入" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "导入预约与账号" })).toHaveCount(0);
     });
   });
 

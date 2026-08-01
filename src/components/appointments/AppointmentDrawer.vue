@@ -30,10 +30,21 @@ interface Draft {
   notes: string;
 }
 
+interface FocusTarget {
+  focus(): void;
+}
+
+interface FieldTabEvent {
+  target: unknown;
+  shiftKey: boolean;
+  preventDefault(): void;
+}
+
 const props = withDefaults(
   defineProps<{
     open: boolean;
     appointment: Appointment | null;
+    initialFocus?: "default" | "amount";
     requestedDate: string;
     requestedStartTime: string | null;
     accounts: readonly AccountProfile[];
@@ -41,7 +52,7 @@ const props = withDefaults(
     defaultReminderMinutes: number;
     saving?: boolean;
   }>(),
-  { accountsLoading: false, saving: false },
+  { accountsLoading: false, initialFocus: "default", saving: false },
 );
 
 const emit = defineEmits<{
@@ -69,6 +80,9 @@ const draft = reactive<Draft>({
 
 const errors = shallowRef<string[]>([]);
 const drawerRef = useTemplateRef("drawer");
+const appointmentFormRef = useTemplateRef("appointmentForm");
+const amountInputRef = useTemplateRef<FocusTarget>("amountInput");
+const formFieldSelector = "input:not([disabled]), select:not([disabled]), textarea:not([disabled])";
 
 function resetDraft(): void {
   const source = props.appointment ? appointmentToInput(props.appointment) : null;
@@ -105,6 +119,19 @@ function selectMode(mode: AppointmentMode): void {
   } else if (draft.settlementStatus === "not_applicable") {
     draft.settlementStatus = "unsettled";
   }
+}
+
+function focusAdjacentField(event: FieldTabEvent): void {
+  const fields = Array.from(appointmentFormRef.value?.querySelectorAll(formFieldSelector) ?? []);
+  const currentIndex = fields.findIndex((field) => field === event.target);
+  if (currentIndex < 0) return;
+
+  const nextIndex = currentIndex + (event.shiftKey ? -1 : 1);
+  const nextField = fields[nextIndex];
+  if (!nextField) return;
+
+  event.preventDefault();
+  (nextField as unknown as FocusTarget).focus();
 }
 
 function submit(): void {
@@ -156,6 +183,7 @@ useModalFocus({
   open: () => props.open,
   container: drawerRef,
   close: () => emit("close"),
+  initialFocus: () => (props.initialFocus === "amount" ? amountInputRef.value : null),
 });
 </script>
 
@@ -187,7 +215,13 @@ useModalFocus({
             </button>
           </header>
 
-          <form class="drawer__body" @submit.prevent="submit">
+          <form
+            id="appointment-form"
+            ref="appointmentForm"
+            class="drawer__body"
+            @keydown.tab="focusAdjacentField"
+            @submit.prevent="submit"
+          >
             <div class="mode-switch" role="radiogroup" aria-label="预约模式">
               <button
                 type="button"
@@ -283,6 +317,7 @@ useModalFocus({
                 <label class="field">
                   <span class="field__label">金额（元）</span>
                   <input
+                    ref="amountInput"
                     v-model="draft.amountYuan"
                     class="input mono-number"
                     type="number"
@@ -349,7 +384,12 @@ useModalFocus({
 
           <footer class="drawer__footer">
             <button class="button" type="button" @click="emit('close')">取消</button>
-            <button class="button button--primary" type="button" :disabled="saving" @click="submit">
+            <button
+              class="button button--primary"
+              type="submit"
+              form="appointment-form"
+              :disabled="saving"
+            >
               <Save :size="16" />
               {{ saving ? "保存中…" : "保存预约" }}
             </button>

@@ -47,10 +47,10 @@ function appointment(overrides: Partial<Appointment> = {}): Appointment {
   };
 }
 
-function mountBoard() {
+function mountBoard(nextAppointmentId?: string | null) {
   const profile = appointment();
   const wrapper = mount(CalendarBoard, {
-    props: { appointments: [profile] },
+    props: { appointments: [profile], nextAppointmentId },
   });
   const calendar = wrapper.findComponent({ name: "FullCalendarMock" });
   const options = calendar.props("options") as CalendarOptions;
@@ -75,49 +75,33 @@ describe("CalendarBoard", () => {
     expect(options.eventShortHeight).toBe(36);
     expect(options.views?.timeGridDay?.dayMaxEvents).toBe(1);
     expect(options.views?.timeGridWeek?.dayMaxEvents).toBe(1);
+    expect(options.editable).toBe(false);
+    expect(options.eventStartEditable).toBe(false);
+    expect(options.eventDurationEditable).toBe(false);
   });
 
-  it("keeps edit, create and reschedule events explicit", () => {
+  it("marks the shared next appointment for all calendar views", () => {
+    const { options, profile } = mountBoard("appointment-1");
+    const events = options.events as Array<{ id?: string; classNames?: string[] }>;
+
+    expect(events.find((event) => event.id === profile.id)?.classNames).toContain(
+      "appointment-event--next",
+    );
+  });
+
+  it("keeps edit and create events explicit without drag rescheduling", () => {
     const { wrapper, options, event, profile } = mountBoard();
-    const dropRevert = vi.fn();
-    const resizeRevert = vi.fn();
 
     options.eventClick?.({ event } as never);
     options.dateClick?.({
       dateStr: "2026-07-30T15:30:00+08:00",
       allDay: false,
     } as never);
-    options.eventDrop?.({
-      event,
-      revert: dropRevert,
-    } as never);
-    options.eventResize?.({
-      event,
-      revert: resizeRevert,
-    } as never);
-
     expect(wrapper.emitted("edit")).toEqual([[profile]]);
     expect(wrapper.emitted("create")).toEqual([["2026-07-30", "15:30"]]);
-    expect(wrapper.emitted("reschedule")).toEqual([
-      [
-        {
-          appointment: profile,
-          startsAt: event.start,
-          endsAt: event.end,
-          allDay: false,
-          revert: dropRevert,
-        },
-      ],
-      [
-        {
-          appointment: profile,
-          startsAt: event.start,
-          endsAt: event.end,
-          allDay: false,
-          revert: resizeRevert,
-        },
-      ],
-    ]);
+    expect(options.eventDrop).toBeUndefined();
+    expect(options.eventResize).toBeUndefined();
+    expect(wrapper.emitted("reschedule")).toBeUndefined();
   });
 
   it("shows the active appointment count in compact day headings", async () => {

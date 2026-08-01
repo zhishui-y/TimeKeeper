@@ -19,6 +19,7 @@ interface DaySchedule {
 
 const props = defineProps<{
   days: DaySchedule[];
+  nextAppointmentId?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -37,6 +38,9 @@ function appointmentTitle(appointment: Appointment): string {
   ];
   if (visibleSettlementStatus(appointment)) {
     details.push(settlementStatusLabels[appointment.settlementStatus]);
+  }
+  if (appointment.id === props.nextAppointmentId) {
+    details.unshift("下一时段");
   }
   return details.join(" · ");
 }
@@ -76,6 +80,7 @@ function appointmentTitle(appointment: Appointment): string {
               `schedule-chip--${appointment.mode}`,
               `schedule-chip--${appointment.serviceStatus}`,
               `schedule-chip--${appointment.settlementStatus}`,
+              { 'schedule-chip--next': appointment.id === nextAppointmentId },
             ]"
             type="button"
             :title="appointmentTitle(appointment)"
@@ -298,6 +303,15 @@ function appointmentTitle(appointment: Appointment): string {
 
 .schedule-chip--entertainment {
   --mode-accent: var(--blue);
+}
+
+.schedule-chip--next {
+  --event-accent: var(--gold);
+  --event-background: color-mix(in srgb, var(--gold-soft) 90%, var(--surface));
+  --event-border: var(--gold-border);
+  --event-ink: var(--gold-strong);
+  --mode-accent: var(--gold);
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--gold) 18%, transparent);
 }
 
 .schedule-chip__time {

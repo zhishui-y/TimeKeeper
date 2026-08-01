@@ -84,7 +84,9 @@ describe("calendar appointment presentation", () => {
 
     expect(isShortCalendarAppointment(short)).toBe(true);
     expect(isShortCalendarAppointment(appointment())).toBe(false);
-    expect(calendarEventTimeLabel(short)).toBe("14:00");
+    expect(calendarEventTimeLabel(short)).toBe("14:00–14:30");
+    expect(calendarEventTimeLabel(appointment({ endsAt: null }))).toBe("14:00");
+    expect(calendarEventTimeLabel(crossDay)).toBe("23:30–01:30 +1");
     expect(calendarEventTimeLabel(appointment({ startsAt: null, endsAt: null }))).toBe("待定");
     expect(calendarEventTooltip(crossDay)).toBe(
       [

@@ -477,21 +477,36 @@ export const mockApi: ApiClient = {
       weekSettledMinor: settled(
         appointments.filter((item) => item.serviceDate >= weekFrom && item.serviceDate <= weekTo),
       ),
-      pendingMinor: appointments
-        .filter(
-          (item) => item.serviceStatus !== "cancelled" && item.settlementStatus === "unsettled",
-        )
-        .reduce((sum, item) => sum + (item.amountMinor ?? 0), 0),
+      pendingCount: appointments.filter(
+        (item) =>
+          item.mode === "business" &&
+          item.serviceStatus === "completed" &&
+          item.settlementStatus === "unsettled",
+      ).length,
       nextAppointment: upcoming ? structuredClone(upcoming) : null,
     };
   },
   async getRevenueSummary(from, to, granularity) {
-    const scoped = appointments.filter(
-      (item) =>
-        item.mode === "business" &&
-        item.serviceStatus !== "cancelled" &&
-        item.serviceDate >= from &&
-        item.serviceDate <= to,
+    if ((!from && to) || (from && !to)) {
+      throw new Error("开始日期和结束日期必须同时填写，或同时留空查看全部记录");
+    }
+    const reportable = appointments.filter(
+      (item) => item.mode === "business" && item.serviceStatus !== "cancelled",
+    );
+    const today = format(new Date(), "yyyy-MM-dd");
+    const incomeDates = reportable
+      .filter(
+        (item) =>
+          item.settlementStatus === "settled" &&
+          (item.amountMinor ?? 0) > 0 &&
+          item.serviceDate <= today,
+      )
+      .map((item) => item.serviceDate)
+      .sort();
+    const resolvedFrom = from || incomeDates[0] || today;
+    const resolvedTo = to || today;
+    const scoped = reportable.filter(
+      (item) => item.serviceDate >= resolvedFrom && item.serviceDate <= resolvedTo,
     );
     const pointsMap = new Map<string, RevenuePoint>();
     const paymentMap = new Map<string, number>();
@@ -514,8 +529,8 @@ export const mockApi: ApiClient = {
     const unsettledMinor = points.reduce((sum, point) => sum + point.unsettledMinor, 0);
     const businessHours = points.reduce((sum, point) => sum + point.businessHours, 0);
     return {
-      from,
-      to,
+      from: resolvedFrom,
+      to: resolvedTo,
       settledMinor,
       unsettledMinor,
       businessHours,
@@ -547,11 +562,16 @@ export const mockApi: ApiClient = {
       previewToken: makeId("preview"),
     };
   },
-  async commitExcelImport() {
+  async commitExcelImport(_previewToken, selection) {
+    if (!selection.appointments && !selection.accounts) {
+      throw new Error("请至少选择导入预约或账号");
+    }
     return {
-      importedAppointments: 357,
-      importedProfiles: 37,
+      importedAppointments: selection.appointments ? 357 : 0,
+      importedProfiles: selection.accounts ? 37 : 0,
       skippedDuplicates: 0,
+      skippedAppointmentDuplicates: 0,
+      skippedProfileDuplicates: 0,
       warnings: ["15个账号档案已标记为待完善"],
     };
   },

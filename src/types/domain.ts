@@ -130,7 +130,7 @@ export interface RevenueSummary {
 export interface DashboardSummary {
   todaySettledMinor: number;
   weekSettledMinor: number;
-  pendingMinor: number;
+  pendingCount: number;
   nextAppointment?: Appointment | null;
 }
 
@@ -152,7 +152,14 @@ export interface ExcelImportResult {
   importedAppointments: number;
   importedProfiles: number;
   skippedDuplicates: number;
+  skippedAppointmentDuplicates: number;
+  skippedProfileDuplicates: number;
   warnings: string[];
+}
+
+export interface ExcelImportSelection {
+  appointments: boolean;
+  accounts: boolean;
 }
 
 export interface VaultStatus {

@@ -6,10 +6,12 @@ import StatusBadge from "../common/StatusBadge.vue";
 
 defineProps<{
   appointments: readonly Appointment[];
+  nextAppointmentId?: string | null;
 }>();
 
 const emit = defineEmits<{
   edit: [appointment: Appointment];
+  settle: [appointment: Appointment];
   changeStatus: [appointment: Appointment, status: ServiceStatus];
 }>();
 </script>
@@ -24,7 +26,12 @@ const emit = defineEmits<{
       <span>{{ appointments.length }} 场</span>
     </header>
     <div v-if="appointments.length" class="today-list__body">
-      <article v-for="appointment in appointments" :key="appointment.id" class="appointment-row">
+      <article
+        v-for="appointment in appointments"
+        :key="appointment.id"
+        class="appointment-row"
+        :class="{ 'appointment-row--next': appointment.id === nextAppointmentId }"
+      >
         <time class="appointment-row__time mono-number">
           {{ formatTimeRange(appointment.startsAt, appointment.endsAt) }}
         </time>
@@ -32,6 +39,9 @@ const emit = defineEmits<{
         <div class="appointment-row__main">
           <div class="appointment-row__title">
             <strong>{{ appointment.contactName }}</strong>
+            <span v-if="appointment.id === nextAppointmentId" class="appointment-row__next">
+              下一时段
+            </span>
             <StatusBadge :service-status="appointment.serviceStatus" />
           </div>
           <p>{{ appointment.content || "未填写预约内容" }}</p>
@@ -76,7 +86,7 @@ const emit = defineEmits<{
             type="button"
             title="去结算"
             aria-label="编辑结算"
-            @click="emit('edit', appointment)"
+            @click="emit('settle', appointment)"
           >
             <CircleDollarSign :size="15" />
           </button>
@@ -159,6 +169,27 @@ const emit = defineEmits<{
   background: var(--surface-soft);
 }
 
+.appointment-row--next {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--gold-soft) 84%, var(--surface)),
+    color-mix(in srgb, var(--surface) 97%, var(--gold-soft)) 58%
+  );
+  box-shadow: inset 4px 0 0 var(--gold);
+}
+
+.appointment-row--next:hover {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--gold-soft) 94%, var(--surface)),
+    color-mix(in srgb, var(--surface) 94%, var(--gold-soft)) 62%
+  );
+}
+
+.appointment-row--next .appointment-row__time {
+  color: var(--gold-strong);
+}
+
 .appointment-row__time {
   color: var(--ink-strong);
   font-size: 13px;
@@ -196,6 +227,18 @@ const emit = defineEmits<{
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.appointment-row__next {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid var(--gold-border);
+  border-radius: 999px;
+  color: var(--gold-strong);
+  background: color-mix(in srgb, var(--gold-soft) 92%, var(--surface));
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.25;
 }
 
 .appointment-row__main p {

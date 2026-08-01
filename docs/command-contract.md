@@ -52,16 +52,27 @@ must contain at least 4 Unicode characters; 8 or more are recommended.
 - `get_dashboard_summary(date) -> DashboardSummary`
 - `get_revenue_summary(from, to, granularity) -> RevenueSummary`
 - `preview_excel_import(path, baseYear) -> ExcelImportPreview`
-- `commit_excel_import(previewToken) -> ExcelImportResult`
+- `commit_excel_import(previewToken, selection) -> ExcelImportResult`
 - `create_backup(destination?) -> BackupResult`
 - `restore_backup(path) -> void` (successful restore requests app restart)
 - `get_settings() -> AppSettings`
 - `update_settings(settings) -> AppSettings`
+
+`DashboardSummary.pendingCount` counts business appointments whose service is completed but whose
+settlement status is still unsettled. Scheduled, in-progress, cancelled, entertainment, and settled
+appointments are excluded.
 
 `AppSettings.autoLockMinutes` accepts `0` to disable idle auto-lock, or a value
 from `1` through `1440` minutes. Manual lock and locking caused by closing the
 application remain available when idle auto-lock is disabled.
 
 Excel preview tokens are in-memory, expire after 30 minutes, and contain parsed
-secret values only on the Rust side. A repeated import is skipped using stable
-row fingerprints.
+secret values only on the Rust side. `selection.appointments` and `selection.accounts`
+independently control which data is committed, and at least one must be selected.
+Appointments and account profiles use separate stable row fingerprints; repeated rows
+are skipped independently and reported by data type.
+
+`get_revenue_summary` requires both dates for a bounded report. Passing both `from` and `to` as
+empty strings resolves the range from the earliest non-cancelled, positively settled business
+appointment through the current China-local date. If no income exists, both dates resolve to today.
+Passing only one empty date is invalid.

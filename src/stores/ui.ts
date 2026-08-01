@@ -14,6 +14,7 @@ export interface ToastMessage {
 export const useUiStore = defineStore("ui", () => {
   const appointmentDrawerOpen = shallowRef(false);
   const activeAppointment = shallowRef<Appointment | null>(null);
+  const appointmentDrawerInitialFocus = shallowRef<"default" | "amount">("default");
   const requestedDate = shallowRef(format(new Date(), "yyyy-MM-dd"));
   const requestedStartTime = shallowRef<string | null>(null);
   const dataRevision = shallowRef(0);
@@ -27,6 +28,7 @@ export const useUiStore = defineStore("ui", () => {
     startTime?: string,
   ): void {
     activeAppointment.value = null;
+    appointmentDrawerInitialFocus.value = "default";
     requestedDate.value = serviceDate;
     requestedStartTime.value = startTime ?? null;
     appointmentDrawerOpen.value = true;
@@ -34,6 +36,15 @@ export const useUiStore = defineStore("ui", () => {
 
   function openEditAppointment(appointment: Appointment): void {
     activeAppointment.value = appointment;
+    appointmentDrawerInitialFocus.value = "default";
+    requestedDate.value = appointment.serviceDate;
+    requestedStartTime.value = null;
+    appointmentDrawerOpen.value = true;
+  }
+
+  function openSettleAppointment(appointment: Appointment): void {
+    activeAppointment.value = appointment;
+    appointmentDrawerInitialFocus.value = "amount";
     requestedDate.value = appointment.serviceDate;
     requestedStartTime.value = null;
     appointmentDrawerOpen.value = true;
@@ -42,6 +53,7 @@ export const useUiStore = defineStore("ui", () => {
   function closeAppointmentDrawer(): void {
     appointmentDrawerOpen.value = false;
     activeAppointment.value = null;
+    appointmentDrawerInitialFocus.value = "default";
   }
 
   function markDataChanged(): void {
@@ -72,6 +84,7 @@ export const useUiStore = defineStore("ui", () => {
   return {
     appointmentDrawerOpen,
     activeAppointment,
+    appointmentDrawerInitialFocus,
     requestedDate,
     requestedStartTime,
     dataRevision,
@@ -80,6 +93,7 @@ export const useUiStore = defineStore("ui", () => {
     toast,
     openCreateAppointment,
     openEditAppointment,
+    openSettleAppointment,
     closeAppointmentDrawer,
     markDataChanged,
     markAccountsChanged,

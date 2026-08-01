@@ -1,17 +1,29 @@
 <script setup lang="ts">
 import { CalendarRange, CheckCircle2, Clock3, Coins, Gauge } from "@lucide/vue";
 import { endOfMonth, format, startOfMonth } from "date-fns";
-import { computed, defineAsyncComponent, reactive, watch } from "vue";
+import { computed, defineAsyncComponent, reactive, shallowRef, watch } from "vue";
 import { useRevenue } from "../../composables/useRevenue";
 import { useUiStore } from "../../stores/ui";
-import type { ReportGranularity } from "../../types/domain";
+import type { ReportGranularity, RevenuePoint } from "../../types/domain";
 import { formatCurrency } from "../../utils/formatters";
+import {
+  revenuePeriodRange,
+  revenuePresetRange,
+  type RevenueRangePreset,
+} from "../../utils/revenue";
 
 const RevenueChart = defineAsyncComponent({
   loader: () => import("./RevenueChart.vue"),
   delay: 180,
   timeout: 20_000,
 });
+const RevenuePeriodDetail = defineAsyncComponent(() => import("./RevenuePeriodDetail.vue"));
+
+interface SelectedPeriod {
+  granularity: Exclude<ReportGranularity, "day">;
+  from: string;
+  to: string;
+}
 
 const today = new Date();
 const range = reactive({
@@ -21,6 +33,19 @@ const range = reactive({
 });
 const ui = useUiStore();
 const { summary, loading, error, load } = useRevenue();
+const {
+  summary: detailSummary,
+  loading: detailLoading,
+  error: detailError,
+  load: loadDetail,
+} = useRevenue();
+const selectedPeriod = shallowRef<SelectedPeriod | null>(null);
+const activePreset = shallowRef<RevenueRangePreset | null>("current_month");
+const reportQuery = computed(() => ({
+  from: activePreset.value === "all" ? "" : range.from,
+  to: activePreset.value === "all" ? "" : range.to,
+  granularity: range.granularity,
+}));
 
 const completionRate = computed(() => {
   if (!summary.value?.appointmentCount) return 0;
@@ -33,16 +58,65 @@ const maxPayment = computed(() =>
 
 const chartDescription = computed(
   () =>
-    `收益与工时趋势，${summary.value?.from ?? range.from} 至 ${summary.value?.to ?? range.to}，共 ${summary.value?.points.length ?? 0} 个数据点`,
+    `收益与工时趋势，${summary.value?.from ?? range.from} 至 ${summary.value?.to ?? range.to}，共 ${summary.value?.points.length ?? 0} 个数据点${range.granularity === "day" ? "" : "，可点击柱形查看每日明细"}`,
 );
 
+const summaryRangeLabel = computed(
+  () => `${summary.value?.from ?? range.from} — ${summary.value?.to ?? range.to}`,
+);
+
+const rangePresets: ReadonlyArray<{ value: RevenueRangePreset; label: string }> = [
+  { value: "all", label: "全部" },
+  { value: "previous_month", label: "上月" },
+  { value: "current_month", label: "本月" },
+];
+
+function selectRangePreset(preset: RevenueRangePreset): void {
+  activePreset.value = preset;
+  if (preset === "all") return;
+
+  const presetRange = revenuePresetRange(preset);
+  range.from = presetRange.from;
+  range.to = presetRange.to;
+}
+
+function useCustomRange(): void {
+  activePreset.value = null;
+}
+
+function showPeriodDetail(point: RevenuePoint): void {
+  if (range.granularity === "day") return;
+  const granularity = range.granularity;
+  const selectedRange = revenuePeriodRange(point.period, granularity);
+  if (!selectedRange) return;
+
+  selectedPeriod.value = { granularity, ...selectedRange };
+  void loadDetail(selectedRange.from, selectedRange.to, "day");
+}
+
+function closePeriodDetail(): void {
+  selectedPeriod.value = null;
+}
+
 watch(
-  () => [range.from, range.to, range.granularity, ui.dataRevision] as const,
-  ([from, to, granularity]) => {
-    if (from && to) void load(from, to, granularity);
+  () => [reportQuery.value, ui.dataRevision] as const,
+  ([query]) => {
+    if (query.from || query.to) {
+      if (query.from && query.to) void load(query.from, query.to, query.granularity);
+      return;
+    }
+    void load("", "", query.granularity);
   },
   { immediate: true },
 );
+
+watch(summary, (nextSummary) => {
+  if (activePreset.value !== "all" || !nextSummary) return;
+  range.from = nextSummary.from;
+  range.to = nextSummary.to;
+});
+
+watch(() => [range.from, range.to, range.granularity] as const, closePeriodDetail);
 </script>
 
 <template>
@@ -50,9 +124,34 @@ watch(
     <div class="page-toolbar revenue-toolbar">
       <div class="revenue-toolbar__range">
         <CalendarRange :size="16" />
-        <input v-model="range.from" class="input" type="date" aria-label="统计开始日期" />
+        <input
+          v-model="range.from"
+          class="input"
+          type="date"
+          aria-label="统计开始日期"
+          @input="useCustomRange"
+        />
         <span>至</span>
-        <input v-model="range.to" class="input" type="date" aria-label="统计结束日期" />
+        <input
+          v-model="range.to"
+          class="input"
+          type="date"
+          aria-label="统计结束日期"
+          @input="useCustomRange"
+        />
+        <div class="range-presets" aria-label="日期快捷范围">
+          <button
+            v-for="preset in rangePresets"
+            :key="preset.value"
+            class="range-preset"
+            :class="{ 'is-active': activePreset === preset.value }"
+            type="button"
+            :aria-pressed="activePreset === preset.value"
+            @click="selectRangePreset(preset.value)"
+          >
+            {{ preset.label }}
+          </button>
+        </div>
       </div>
       <div class="segmented" aria-label="统计粒度">
         <button
@@ -108,9 +207,20 @@ watch(
             <span class="section-kicker">TREND</span>
             <h2>收益与工时趋势</h2>
           </div>
-          <span>{{ summary?.from }} — {{ summary?.to }}</span>
+          <div class="panel-header__meta">
+            <span v-if="range.granularity !== 'day'" class="chart-drill-hint">
+              点击柱形查看每日明细
+            </span>
+            <span>{{ summaryRangeLabel }}</span>
+          </div>
         </header>
-        <RevenueChart role="img" :aria-label="chartDescription" :points="summary?.points ?? []" />
+        <RevenueChart
+          role="img"
+          :aria-label="chartDescription"
+          :points="summary?.points ?? []"
+          :drillable="range.granularity !== 'day'"
+          @period-select="showPeriodDetail"
+        />
       </div>
       <aside class="payment-panel">
         <header class="panel-header">
@@ -133,6 +243,17 @@ watch(
         <div v-else class="payment-empty">当前范围暂无已结收入</div>
       </aside>
     </section>
+
+    <RevenuePeriodDetail
+      v-if="selectedPeriod"
+      :granularity="selectedPeriod.granularity"
+      :from="selectedPeriod.from"
+      :to="selectedPeriod.to"
+      :summary="detailSummary"
+      :loading="detailLoading"
+      :error="detailError"
+      @close="closePeriodDetail"
+    />
   </div>
 </template>
 
@@ -156,6 +277,42 @@ watch(
 
 .revenue-toolbar__range .input {
   width: 138px;
+}
+
+.range-presets {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 3px;
+}
+
+.range-preset {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-muted);
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease,
+    color 150ms ease;
+}
+
+.range-preset:hover {
+  border-color: color-mix(in srgb, var(--brand) 35%, var(--line));
+  color: var(--brand-strong);
+}
+
+.range-preset.is-active {
+  border-color: var(--gold-border);
+  color: var(--gold-strong);
+  background: var(--gold-soft);
+  box-shadow: 0 3px 9px rgba(145, 98, 21, 0.09);
 }
 
 .revenue-metrics {
@@ -250,9 +407,20 @@ watch(
   font-size: 14px;
 }
 
-.panel-header > span {
+.panel-header__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.panel-header__meta > span {
   color: var(--ink-muted);
   font-size: 10px;
+}
+
+.panel-header__meta > .chart-drill-hint {
+  color: var(--gold-strong);
+  font-weight: 650;
 }
 
 .payment-list {

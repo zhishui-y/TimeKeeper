@@ -1,9 +1,14 @@
 import { nextTick, onBeforeUnmount, watch, type Ref } from "vue";
 
+interface FocusTarget {
+  focus(): void;
+}
+
 interface UseModalFocusOptions {
   open: () => boolean;
   container: Readonly<Ref<HTMLElement | null>>;
   close: () => void;
+  initialFocus?: () => FocusTarget | null;
 }
 
 const focusableSelector = [
@@ -15,7 +20,12 @@ const focusableSelector = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(",");
 
-export function useModalFocus({ open, container, close }: UseModalFocusOptions): void {
+export function useModalFocus({
+  open,
+  container,
+  close,
+  initialFocus,
+}: UseModalFocusOptions): void {
   let previousFocus: HTMLElement | null = null;
   let background: HTMLElement | null = null;
 
@@ -81,7 +91,7 @@ export function useModalFocus({ open, container, close }: UseModalFocusOptions):
       const firstInput = container.value?.querySelector<HTMLElement>(
         "input:not([disabled]), select:not([disabled]), textarea:not([disabled])",
       );
-      (firstInput ?? focusableElements()[0] ?? container.value)?.focus();
+      (initialFocus?.() ?? firstInput ?? focusableElements()[0] ?? container.value)?.focus();
       if (background) {
         background.inert = true;
         background.setAttribute("aria-hidden", "true");

@@ -8,6 +8,7 @@ import type {
   DashboardSummary,
   ExcelImportPreview,
   ExcelImportResult,
+  ExcelImportSelection,
   RevenueSummary,
   VaultStatus,
 } from "../types/domain";
@@ -55,8 +56,8 @@ const nativeApi: ApiClient = {
     invoke<RevenueSummary>("get_revenue_summary", { from, to, granularity }),
   previewExcelImport: (path, baseYear) =>
     invoke<ExcelImportPreview>("preview_excel_import", { path, baseYear }),
-  commitExcelImport: (previewToken) =>
-    invoke<ExcelImportResult>("commit_excel_import", { previewToken }),
+  commitExcelImport: (previewToken, selection: ExcelImportSelection) =>
+    invoke<ExcelImportResult>("commit_excel_import", { previewToken, selection }),
   createBackup: (destination) => invoke<BackupResult>("create_backup", { destination }),
   restoreBackup: (path) => invoke<void>("restore_backup", { path }),
   getSettings: () => invoke<AppSettings>("get_settings"),

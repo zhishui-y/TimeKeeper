@@ -2,6 +2,7 @@
 import { BarChart, LineChart } from "echarts/charts";
 import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
 import { use } from "echarts/core";
+import type { ECElementEvent } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import { computed, onBeforeUnmount, onMounted, shallowRef } from "vue";
 import VChart from "vue-echarts";
@@ -11,6 +12,11 @@ use([BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, Canv
 
 const props = defineProps<{
   points: readonly RevenuePoint[];
+  drillable?: boolean;
+}>();
+
+const emit = defineEmits<{
+  periodSelect: [point: RevenuePoint];
 }>();
 
 const reducedMotionQuery =
@@ -21,6 +27,12 @@ const prefersReducedMotion = shallowRef(reducedMotionQuery?.matches ?? false);
 
 function updateReducedMotion(): void {
   prefersReducedMotion.value = reducedMotionQuery?.matches ?? false;
+}
+
+function handleChartClick(event: ECElementEvent): void {
+  if (!props.drillable || event.componentType !== "series" || event.seriesType !== "bar") return;
+  const point = props.points[event.dataIndex];
+  if (point) emit("periodSelect", point);
 }
 
 onMounted(() => reducedMotionQuery?.addEventListener("change", updateReducedMotion));
@@ -75,6 +87,7 @@ const option = computed(() => ({
     {
       name: "已结收益",
       type: "bar",
+      cursor: props.drillable ? "pointer" : "default",
       barMaxWidth: 28,
       data: props.points.map((point) => point.settledMinor),
       itemStyle: { borderRadius: [3, 3, 0, 0] },
@@ -83,6 +96,7 @@ const option = computed(() => ({
     {
       name: "待结金额",
       type: "bar",
+      cursor: props.drillable ? "pointer" : "default",
       barMaxWidth: 28,
       data: props.points.map((point) => point.unsettledMinor),
       itemStyle: { borderRadius: [3, 3, 0, 0] },
@@ -108,6 +122,7 @@ const option = computed(() => ({
     :option="option"
     :init-options="{ renderer: 'canvas' }"
     :autoresize="{ throttle: 120 }"
+    @click="handleChartClick"
   />
 </template>
 

@@ -139,6 +139,57 @@ test("预约抽屉圈定键盘焦点并可用 Escape 关闭", async ({ page }) =
   await expect(trigger).toBeFocused();
 });
 
+test("应用全局阻止浏览器右键菜单", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "新建预约", exact: true }).click();
+  const drawer = page.getByRole("dialog", { name: "新建预约" });
+  await expect(drawer).toBeVisible();
+
+  const contextMenuPrevented = await drawer.evaluate((element) => {
+    const event = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+    });
+    element.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+
+  expect(contextMenuPrevented).toBe(true);
+});
+
+test("排班日历显示完整起止时间且时间标签未被截断", async ({ page }) => {
+  await page.goto("/#/calendar");
+
+  const timeLabels = page
+    .locator(".calendar-event-card__time")
+    .filter({ hasText: /\d{2}:\d{2}.*\d{2}:\d{2}/ });
+  await expect(timeLabels.first()).toBeVisible();
+
+  const clippedLabels = await timeLabels.evaluateAll((elements) =>
+    elements
+      .filter((element) => element.scrollWidth > element.clientWidth)
+      .map((element) => element.textContent?.trim()),
+  );
+  expect(clippedLabels).toEqual([]);
+  await expect(page.locator(".fc-event-draggable")).toHaveCount(0);
+  await expect(page.locator(".fc-event-resizable")).toHaveCount(0);
+});
+
+test("账号档案可通过左侧手柄拖动排序", async ({ page }) => {
+  await page.goto("/#/accounts");
+
+  const rows = page.locator(".account-table tbody tr");
+  const originalFirstAccount = await rows.first().locator("td:nth-child(7) strong").innerText();
+  const sourceHandle = rows.first().getByRole("button", { name: /拖动账号.+调整顺序/ });
+  const targetHandle = rows.last().getByRole("button", { name: /拖动账号.+调整顺序/ });
+
+  await sourceHandle.dragTo(targetHandle);
+
+  await expect(rows.first().locator("td:nth-child(7) strong")).not.toHaveText(originalFirstAccount);
+  await expect(page.getByRole("status")).toContainText("账号顺序已保存");
+});
+
 test("娱乐预约不会显示账单字段", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "新建预约" }).click();
@@ -195,6 +246,7 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
 
   await targetRow.getByRole("button", { name: "编辑结算" }).click();
   const settlementDrawer = page.getByRole("dialog", { name: "编辑预约" });
+  await expect(settlementDrawer.getByLabel("金额（元）")).toBeFocused();
   await settlementDrawer.getByLabel("结算状态").selectOption("settled");
   await settlementDrawer.getByLabel("收款方式").fill("微信");
   await settlementDrawer.getByRole("button", { name: "保存预约" }).click();

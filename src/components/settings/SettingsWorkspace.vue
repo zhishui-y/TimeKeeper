@@ -18,10 +18,12 @@ import type {
   BackupResult,
   ExcelImportPreview,
   ExcelImportResult,
+  ExcelImportSelection,
 } from "../../types/domain";
 import type { AppNotificationPermission } from "../../api/types";
 import { formatFileSize } from "../../utils/formatters";
 import OperationProgress from "./OperationProgress.vue";
+import ExcelImportScopeSelector from "./ExcelImportScopeSelector.vue";
 import VaultSettingsPanel from "./VaultSettingsPanel.vue";
 
 type ImportOperation = "preview" | "commit";
@@ -39,6 +41,7 @@ const importPath = shallowRef("");
 const baseYear = shallowRef(new Date().getFullYear());
 const importPreview = shallowRef<ExcelImportPreview | null>(null);
 const importResult = shallowRef<ExcelImportResult | null>(null);
+const importSelection = reactive<ExcelImportSelection>({ appointments: true, accounts: true });
 const importOperation = shallowRef<ImportOperation | null>(null);
 const backupOperation = shallowRef<BackupOperation | null>(null);
 const lastBackup = shallowRef<BackupResult | null>(null);
@@ -46,6 +49,18 @@ const notificationPermission = shallowRef<AppNotificationPermission>("default");
 const vaultPanel = shallowRef<InstanceType<typeof VaultSettingsPanel> | null>(null);
 
 const importBusy = computed(() => importOperation.value !== null);
+const hasImportSelection = computed(() => importSelection.appointments || importSelection.accounts);
+const importSelectionLabel = computed(() => {
+  if (importSelection.appointments && importSelection.accounts) return "预约与账号";
+  if (importSelection.appointments) return "预约记录";
+  if (importSelection.accounts) return "账号档案";
+  return "未选择导入内容";
+});
+const importButtonLabel = computed(() => {
+  if (importOperation.value === "commit") return "正在导入";
+  if (!hasImportSelection.value) return "请选择导入内容";
+  return `导入${importSelectionLabel.value}`;
+});
 const backupBusy = computed(() => backupOperation.value !== null);
 const importProgress = computed(() => {
   if (importOperation.value === "preview") {
@@ -56,8 +71,8 @@ const importProgress = computed(() => {
   }
   if (importOperation.value === "commit") {
     return {
-      title: "正在导入账本数据",
-      detail: "正在写入预约、账号档案与加密密码，并检查重复记录。",
+      title: `正在导入${importSelectionLabel.value}`,
+      detail: "正在写入所选数据并检查重复内容，请勿关闭应用。",
     };
   }
   return null;
@@ -133,13 +148,18 @@ async function previewImport(): Promise<void> {
 
 async function commitImport(): Promise<void> {
   if (!importPreview.value) return;
+  if (!hasImportSelection.value) {
+    ui.notify("请至少选择导入预约或账号", "warning");
+    return;
+  }
   const previewToken = importPreview.value.previewToken;
+  const selection = { ...importSelection };
   importOperation.value = "commit";
   try {
-    importResult.value = await api.commitExcelImport(previewToken);
+    importResult.value = await api.commitExcelImport(previewToken, selection);
     importPreview.value = null;
-    ui.markDataChanged();
-    ui.markAccountsChanged();
+    if (selection.appointments) ui.markDataChanged();
+    if (selection.accounts) ui.markAccountsChanged();
     ui.notify("Excel 账本导入完成", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
@@ -229,6 +249,14 @@ onMounted(() => {
               <Upload :size="14" />选择文件
             </button>
           </div>
+          <ExcelImportScopeSelector
+            v-model:appointments="importSelection.appointments"
+            v-model:accounts="importSelection.accounts"
+            :disabled="importBusy"
+          />
+          <div v-if="!hasImportSelection" class="import-scope-warning" role="alert">
+            请至少选择导入预约记录或账号档案。
+          </div>
           <div class="import-actions">
             <label class="field import-year">
               <span class="field__label">短日期基准年份</span>
@@ -244,7 +272,7 @@ onMounted(() => {
             <button
               class="button"
               type="button"
-              :disabled="!importPath || importBusy"
+              :disabled="!importPath || importBusy || !hasImportSelection"
               @click="previewImport"
             >
               <FileSearch :size="15" />{{ importOperation === "preview" ? "正在生成" : "生成预览" }}
@@ -260,28 +288,28 @@ onMounted(() => {
           <div v-if="importPreview" class="import-preview">
             <div class="import-preview__title">
               <strong>预览结果</strong>
-              <span>令牌将在30分钟后失效</span>
+              <span>本次导入：{{ importSelectionLabel }} · 令牌30分钟内有效</span>
             </div>
             <div class="preview-stats">
-              <span
+              <span :class="{ 'is-excluded': !importSelection.appointments }"
                 ><strong>{{ importPreview.appointmentCount }}</strong
-                >预约</span
+                >预约{{ importSelection.appointments ? "" : "（不导入）" }}</span
               >
-              <span
+              <span :class="{ 'is-excluded': !importSelection.accounts }"
                 ><strong>{{ importPreview.profileCount }}</strong
-                >账号</span
+                >账号{{ importSelection.accounts ? "" : "（不导入）" }}</span
               >
-              <span
+              <span :class="{ 'is-excluded': !importSelection.appointments }"
                 ><strong>{{ importPreview.crossMidnightCount }}</strong
-                >跨夜</span
+                >跨夜{{ importSelection.appointments ? "" : "（不导入）" }}</span
               >
-              <span
+              <span :class="{ 'is-excluded': !importSelection.accounts }"
                 ><strong>{{ importPreview.unmatchedProfileCount }}</strong
-                >待完善</span
+                >待完善{{ importSelection.accounts ? "" : "（不导入）" }}</span
               >
-              <span
+              <span :class="{ 'is-excluded': !importSelection.accounts }"
                 ><strong>{{ importPreview.passwordConflictCount }}</strong
-                >密码冲突</span
+                >密码冲突{{ importSelection.accounts ? "" : "（不处理）" }}</span
               >
               <span
                 ><strong>{{ importPreview.skippedCount }}</strong
@@ -294,12 +322,10 @@ onMounted(() => {
             <button
               class="button button--primary"
               type="button"
-              :disabled="importBusy"
+              :disabled="importBusy || !hasImportSelection"
               @click="commitImport"
             >
-              <CheckCircle2 :size="15" />{{
-                importOperation === "commit" ? "正在导入" : "确认导入"
-              }}
+              <CheckCircle2 :size="15" />{{ importButtonLabel }}
             </button>
           </div>
 
@@ -311,7 +337,13 @@ onMounted(() => {
                 >新增 {{ importResult.importedAppointments }} 条预约、{{
                   importResult.importedProfiles
                 }}
-                个账号，跳过 {{ importResult.skippedDuplicates }} 条重复记录。</span
+                个账号。</span
+              >
+              <span class="import-result__dedup"
+                >去重跳过 {{ importResult.skippedAppointmentDuplicates }} 条预约、{{
+                  importResult.skippedProfileDuplicates
+                }}
+                个账号，共 {{ importResult.skippedDuplicates }} 条重复数据。</span
               >
             </div>
           </div>
@@ -561,6 +593,16 @@ onMounted(() => {
   margin-top: 12px;
 }
 
+.import-scope-warning {
+  margin-top: 8px;
+  padding: 7px 9px;
+  border: 1px solid #e5c690;
+  border-radius: var(--radius-sm, 9px);
+  color: #805c1e;
+  background: #fff8e9;
+  font-size: 10px;
+}
+
 .import-year {
   width: 150px;
 }
@@ -616,6 +658,11 @@ onMounted(() => {
   font-size: 14px;
 }
 
+.preview-stats .is-excluded {
+  opacity: 0.48;
+  filter: grayscale(0.7);
+}
+
 .warning-list {
   margin: 0 0 12px;
   padding-left: 18px;
@@ -649,6 +696,10 @@ onMounted(() => {
 .import-result span {
   font-size: 11px;
   line-height: 1.5;
+}
+
+.import-result .import-result__dedup {
+  color: var(--ink-muted);
 }
 
 .unit-input {

@@ -88,6 +88,10 @@ async function ensureAppointmentAccounts(): Promise<void> {
   if (!accountsError.value) loadedAccountRevision.value = revision;
 }
 
+function preventBrowserContextMenu(event: { preventDefault(): void }): void {
+  event.preventDefault();
+}
+
 watch([() => ui.appointmentDrawerOpen, () => ui.accountRevision], ([open]) => {
   if (open) {
     appointmentDrawerLoaded.value = true;
@@ -96,12 +100,14 @@ watch([() => ui.appointmentDrawerOpen, () => ui.accountRevision], ([open]) => {
 });
 
 onMounted(async () => {
+  globalThis.document.addEventListener("contextmenu", preventBrowserContextMenu);
   await Promise.all([vault.load(), loadAppointmentDefaults()]);
   vaultReady.value = true;
   vaultTimer = globalThis.setInterval(() => void vault.load(), 30_000);
 });
 
 onUnmounted(() => {
+  globalThis.document.removeEventListener("contextmenu", preventBrowserContextMenu);
   if (vaultTimer !== undefined) globalThis.clearInterval(vaultTimer);
 });
 </script>
@@ -129,6 +135,7 @@ onUnmounted(() => {
       v-if="appointmentDrawerLoaded"
       :open="ui.appointmentDrawerOpen"
       :appointment="ui.activeAppointment"
+      :initial-focus="ui.appointmentDrawerInitialFocus"
       :requested-date="ui.requestedDate"
       :requested-start-time="ui.requestedStartTime"
       :accounts="accounts"

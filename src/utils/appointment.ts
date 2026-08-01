@@ -58,3 +58,33 @@ export function combineDateTime(
   if (end < start) end = addDays(end, 1);
   return { startsAt: start.toISOString(), endsAt: end.toISOString() };
 }
+
+export function sortAppointmentsByStartTime(appointments: readonly Appointment[]): Appointment[] {
+  return appointments
+    .map((appointment, index) => ({ appointment, index }))
+    .sort((left, right) => {
+      const leftTime = left.appointment.startsAt
+        ? parseISO(left.appointment.startsAt).getTime()
+        : Number.POSITIVE_INFINITY;
+      const rightTime = right.appointment.startsAt
+        ? parseISO(right.appointment.startsAt).getTime()
+        : Number.POSITIVE_INFINITY;
+      return leftTime - rightTime || left.index - right.index;
+    })
+    .map(({ appointment }) => appointment);
+}
+
+export function findNextScheduledAppointment(
+  appointments: readonly Appointment[],
+  now: Date,
+): Appointment | null {
+  const nowTime = now.getTime();
+  return (
+    sortAppointmentsByStartTime(appointments).find(
+      (appointment) =>
+        appointment.serviceStatus === "scheduled" &&
+        typeof appointment.startsAt === "string" &&
+        parseISO(appointment.startsAt).getTime() > nowTime,
+    ) ?? null
+  );
+}

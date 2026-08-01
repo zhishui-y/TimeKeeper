@@ -16,6 +16,7 @@ import { useAppointments } from "../../composables/useAppointments";
 import { useDashboard } from "../../composables/useDashboard";
 import { useUiStore } from "../../stores/ui";
 import type { Appointment, ServiceStatus } from "../../types/domain";
+import { findNextScheduledAppointment, sortAppointmentsByStartTime } from "../../utils/appointment";
 import { formatCurrency, formatDateHeading, formatTimeRange } from "../../utils/formatters";
 import TodayAppointmentList from "./TodayAppointmentList.vue";
 import WeekSchedule from "./WeekSchedule.vue";
@@ -40,9 +41,15 @@ const dashboard = useDashboard();
 let clockTimer: ReturnType<typeof globalThis.setInterval> | undefined;
 
 const todayAppointments = computed(() =>
-  items.value.filter(
-    (item) => item.serviceDate === todayKey.value && item.serviceStatus !== "cancelled",
+  sortAppointmentsByStartTime(
+    items.value.filter(
+      (item) => item.serviceDate === todayKey.value && item.serviceStatus !== "cancelled",
+    ),
   ),
+);
+
+const nextTodayAppointmentId = computed(
+  () => findNextScheduledAppointment(todayAppointments.value, now.value)?.id ?? null,
 );
 
 const weekDays = computed(() =>
@@ -54,7 +61,9 @@ const weekDays = computed(() =>
       weekday: format(date, "EEE", { locale: zhCN }),
       dayNumber: format(date, "d"),
       isToday: isSameDay(date, now.value),
-      appointments: items.value.filter((item) => item.serviceDate === dateKey),
+      appointments: sortAppointmentsByStartTime(
+        items.value.filter((item) => item.serviceDate === dateKey),
+      ),
     };
   }),
 );
@@ -168,11 +177,9 @@ onUnmounted(() => {
         <div class="metric metric--pending">
           <Clock3 :size="18" />
           <div>
-            <span>待结金额</span>
-            <strong class="mono-number">{{
-              formatCurrency(dashboard.summary.value?.pendingMinor)
-            }}</strong>
-            <small>不计入已结收益</small>
+            <span>待结场次</span>
+            <strong class="mono-number">{{ dashboard.summary.value?.pendingCount ?? 0 }}</strong>
+            <small>已完成但未结算</small>
           </div>
         </div>
       </div>
@@ -189,6 +196,7 @@ onUnmounted(() => {
     <WeekSchedule
       class="today-workspace__week"
       :days="weekDays"
+      :next-appointment-id="nextTodayAppointmentId"
       @edit="ui.openEditAppointment"
       @create="ui.openCreateAppointment"
     />
@@ -196,7 +204,9 @@ onUnmounted(() => {
     <TodayAppointmentList
       class="today-workspace__list"
       :appointments="todayAppointments"
+      :next-appointment-id="nextTodayAppointmentId"
       @edit="ui.openEditAppointment"
+      @settle="ui.openSettleAppointment"
       @change-status="changeStatus"
     />
   </div>

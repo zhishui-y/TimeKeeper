@@ -12,22 +12,14 @@ import type { Appointment } from "../../types/domain";
 import { calendarAppointmentCounts, calendarEventClassNames } from "../../utils/calendar";
 import CalendarEventCard from "./CalendarEventCard.vue";
 
-interface ReschedulePayload {
-  appointment: Appointment;
-  startsAt: Date;
-  endsAt: Date | null;
-  allDay: boolean;
-  revert: () => void;
-}
-
 const props = defineProps<{
   appointments: readonly Appointment[];
+  nextAppointmentId?: string | null;
 }>();
 
 const emit = defineEmits<{
   edit: [appointment: Appointment];
   create: [serviceDate: string, startTime?: string];
-  reschedule: [payload: ReschedulePayload];
 }>();
 
 const calendarRef = useTemplateRef<InstanceType<typeof FullCalendar>>("calendar");
@@ -42,9 +34,10 @@ const events = computed<EventInput[]>(() =>
     start: appointment.startsAt ?? appointment.serviceDate,
     end: appointment.endsAt ?? undefined,
     allDay: !appointment.startsAt,
-    editable: appointment.serviceStatus !== "cancelled",
-    durationEditable: Boolean(appointment.startsAt),
-    classNames: calendarEventClassNames(appointment),
+    classNames: [
+      ...calendarEventClassNames(appointment),
+      ...(appointment.id === props.nextAppointmentId ? ["appointment-event--next"] : []),
+    ],
     extendedProps: { appointment },
   })),
 );
@@ -74,10 +67,11 @@ const calendarOptions = computed<CalendarOptions>(() => ({
     timeGridWeek: { dayMaxEvents: 1 },
   },
   nowIndicator: true,
-  editable: true,
+  editable: false,
   selectable: true,
   selectMirror: true,
-  eventDurationEditable: true,
+  eventStartEditable: false,
+  eventDurationEditable: false,
   eventMinHeight: 15,
   eventShortHeight: 36,
   slotMinTime: "08:00:00",
@@ -96,28 +90,6 @@ const calendarOptions = computed<CalendarOptions>(() => ({
   },
   dateClick(info) {
     emit("create", info.dateStr.slice(0, 10), info.allDay ? undefined : info.dateStr.slice(11, 16));
-  },
-  eventDrop(info) {
-    const appointment = info.event.extendedProps.appointment as Appointment;
-    if (!info.event.start) return;
-    emit("reschedule", {
-      appointment,
-      startsAt: info.event.start,
-      endsAt: info.event.end,
-      allDay: info.event.allDay,
-      revert: info.revert,
-    });
-  },
-  eventResize(info) {
-    const appointment = info.event.extendedProps.appointment as Appointment;
-    if (!info.event.start) return;
-    emit("reschedule", {
-      appointment,
-      startsAt: info.event.start,
-      endsAt: info.event.end,
-      allDay: info.event.allDay,
-      revert: info.revert,
-    });
   },
 }));
 
@@ -196,6 +168,7 @@ function move(direction: "prev" | "next" | "today"): void {
             :compact="isCompactTimeGrid(content.view.type)"
             :all-day="content.event.allDay"
             :time-text="content.timeText"
+            :is-next="appointmentFromEvent(content.event).id === nextAppointmentId"
           />
         </template>
         <template #dayHeaderContent="header">
@@ -411,6 +384,15 @@ function move(direction: "prev" | "next" | "today"): void {
 
 .calendar-board__canvas :deep(.appointment-event--entertainment) {
   --mode-accent: var(--blue);
+}
+
+.calendar-board__canvas :deep(.appointment-event--next) {
+  --event-accent: var(--gold);
+  --event-background: color-mix(in srgb, var(--gold-soft) 90%, var(--surface));
+  --event-border: var(--gold-border);
+  --event-ink: var(--gold-strong);
+  --mode-accent: var(--gold);
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--gold) 18%, transparent);
 }
 
 .calendar-board__canvas :deep(.appointment-event--cancelled .calendar-event-card__contact) {

@@ -10,6 +10,7 @@ import type {
   DashboardSummary,
   ExcelImportPreview,
   ExcelImportResult,
+  ExcelImportSelection,
   ReportGranularity,
   RevenueSummary,
   ServiceStatus,
@@ -51,7 +52,10 @@ export interface ApiClient {
     granularity: ReportGranularity,
   ): Promise<RevenueSummary>;
   previewExcelImport(path: string, baseYear: number): Promise<ExcelImportPreview>;
-  commitExcelImport(previewToken: string): Promise<ExcelImportResult>;
+  commitExcelImport(
+    previewToken: string,
+    selection: ExcelImportSelection,
+  ): Promise<ExcelImportResult>;
   createBackup(destination?: string): Promise<BackupResult>;
   restoreBackup(path: string): Promise<void>;
   getSettings(): Promise<AppSettings>;

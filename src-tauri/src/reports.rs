@@ -150,14 +150,14 @@ async fn get_dashboard_summary_at(
         &[&week_from, &week_to],
     )
     .await?;
-    let pending_minor = sum_minor(
-        database,
-        "SELECT COALESCE(SUM(amount_minor), 0) AS total FROM appointments
-         WHERE mode = 'business' AND service_status != 'cancelled'
+    let pending_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM appointments
+         WHERE mode = 'business' AND service_status = 'completed'
            AND settlement_status = 'unsettled'",
-        &[],
     )
-    .await?;
+    .fetch_one(database.pool())
+    .await
+    .map_err(db_error)?;
 
     let apply_time_cutoff = i64::from(date_value == local_now.date());
     let cutoff = local_now.format(DATE_TIME_FORMAT).to_string();
@@ -191,7 +191,7 @@ async fn get_dashboard_summary_at(
     Ok(DashboardSummary {
         today_settled_minor,
         week_settled_minor,
-        pending_minor,
+        pending_count,
         next_appointment,
     })
 }
@@ -212,8 +212,35 @@ pub(crate) async fn get_revenue_summary_impl(
     to: &str,
     granularity: ReportGranularity,
 ) -> Result<RevenueSummary, String> {
-    let from_date = parse_date(from, "开始日期")?;
-    let to_date = parse_date(to, "结束日期")?;
+    let from = from.trim();
+    let to = to.trim();
+    if from.is_empty() != to.is_empty() {
+        return Err("开始日期和结束日期必须同时填写，或同时留空查看全部记录".into());
+    }
+
+    let (from_date, to_date) = if from.is_empty() {
+        let today = (Utc::now().naive_utc() + Duration::hours(8)).date();
+        let today_text = today.format(DATE_FORMAT).to_string();
+        let row = sqlx::query(
+            "SELECT MIN(service_date) AS first_date
+             FROM appointments
+             WHERE mode = 'business' AND service_status != 'cancelled'
+               AND settlement_status = 'settled' AND COALESCE(amount_minor, 0) > 0
+               AND service_date <= ?",
+        )
+        .bind(&today_text)
+        .fetch_one(database.pool())
+        .await
+        .map_err(db_error)?;
+        let first_date: Option<String> = row.try_get("first_date").map_err(db_error)?;
+        let first_date = first_date
+            .map(|value| parse_date(&value, "数据库最早收入日期"))
+            .transpose()?
+            .unwrap_or(today);
+        (first_date, today)
+    } else {
+        (parse_date(from, "开始日期")?, parse_date(to, "结束日期")?)
+    };
     if from_date > to_date {
         return Err("开始日期不能晚于结束日期".into());
     }
@@ -438,7 +465,90 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_uses_monday_week_and_keeps_pending_separate() {
+    fn resolves_an_empty_revenue_range_from_first_income_through_today() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let today = (Utc::now().naive_utc() + Duration::hours(8)).date();
+            let first_income_date = today.checked_sub_days(Days::new(2)).unwrap();
+            let earlier_pending_date = today.checked_sub_days(Days::new(3)).unwrap();
+            create_appointment_impl(
+                &database,
+                input(
+                    &earlier_pending_date.format(DATE_FORMAT).to_string(),
+                    "20:00",
+                    "21:00",
+                    SettlementStatus::Unsettled,
+                    8_000,
+                ),
+            )
+            .await
+            .unwrap();
+            create_appointment_impl(
+                &database,
+                input(
+                    &first_income_date.format(DATE_FORMAT).to_string(),
+                    "20:00",
+                    "22:00",
+                    SettlementStatus::Settled,
+                    5_000,
+                ),
+            )
+            .await
+            .unwrap();
+            create_appointment_impl(
+                &database,
+                input(
+                    &today.format(DATE_FORMAT).to_string(),
+                    "18:00",
+                    "19:00",
+                    SettlementStatus::Unsettled,
+                    3_000,
+                ),
+            )
+            .await
+            .unwrap();
+
+            let all = get_revenue_summary_impl(&database, "", "", ReportGranularity::Day)
+                .await
+                .unwrap();
+            assert_eq!(all.from, first_income_date.format(DATE_FORMAT).to_string());
+            assert_eq!(all.to, today.format(DATE_FORMAT).to_string());
+            assert_eq!(all.points.len(), 3);
+            assert_eq!(all.appointment_count, 2);
+
+            let error = get_revenue_summary_impl(
+                &database,
+                &first_income_date.format(DATE_FORMAT).to_string(),
+                "",
+                ReportGranularity::Day,
+            )
+            .await
+            .unwrap_err();
+            assert!(error.contains("必须同时填写"));
+        });
+    }
+
+    #[test]
+    fn falls_back_to_today_when_no_income_exists() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let all = get_revenue_summary_impl(&database, "", "", ReportGranularity::Month)
+                .await
+                .unwrap();
+            let today = (Utc::now().naive_utc() + Duration::hours(8))
+                .date()
+                .format(DATE_FORMAT)
+                .to_string();
+
+            assert_eq!(all.from, today);
+            assert_eq!(all.to, today);
+            assert_eq!(all.points.len(), 1);
+            assert_eq!(all.appointment_count, 0);
+        });
+    }
+
+    #[test]
+    fn dashboard_uses_monday_week_and_counts_only_completed_unsettled_appointments() {
         run_async(async {
             let database = Database::in_memory().await.unwrap();
             create_appointment_impl(
@@ -480,7 +590,7 @@ mod tests {
                 .unwrap();
             assert_eq!(dashboard.today_settled_minor, 10_000);
             assert_eq!(dashboard.week_settled_minor, 10_000);
-            assert_eq!(dashboard.pending_minor, 13_000);
+            assert_eq!(dashboard.pending_count, 1);
             assert_eq!(
                 dashboard.next_appointment.unwrap().service_date,
                 "2026-07-15"

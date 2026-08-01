@@ -2,7 +2,6 @@ import { differenceInMinutes, parseISO } from "date-fns";
 import type { Appointment } from "../types/domain";
 import {
   formatCurrency,
-  formatTime,
   formatTimeRange,
   serviceStatusLabels,
   settlementStatusLabels,
@@ -59,7 +58,7 @@ export function isShortCalendarAppointment(appointment: Appointment): boolean {
 }
 
 export function calendarEventTimeLabel(appointment: Appointment): string {
-  return formatTime(appointment.startsAt);
+  return appointment.startsAt ? formatTimeRange(appointment.startsAt, appointment.endsAt) : "待定";
 }
 
 export function calendarEventTooltip(appointment: Appointment): string {

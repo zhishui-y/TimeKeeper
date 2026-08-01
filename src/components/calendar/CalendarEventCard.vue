@@ -13,15 +13,19 @@ const props = defineProps<{
   compact: boolean;
   allDay: boolean;
   timeText?: string;
+  isNext?: boolean;
 }>();
 
 const contentLabel = computed(() => props.appointment.content?.trim() || "未填写内容");
 const settlementLabel = computed(() => calendarSettlementLabel(props.appointment));
 const timeLabel = computed(
   () =>
-    props.timeText?.trim().split(/\s*(?:-|–)\s*/)[0] || calendarEventTimeLabel(props.appointment),
+    props.timeText?.trim().replace(/\s*-\s*/g, "–") || calendarEventTimeLabel(props.appointment),
 );
-const tooltip = computed(() => calendarEventTooltip(props.appointment));
+const tooltip = computed(() => {
+  const details = calendarEventTooltip(props.appointment);
+  return props.isNext ? `下一时段\n${details}` : details;
+});
 const shortEvent = computed(
   () => props.compact && !props.allDay && isShortCalendarAppointment(props.appointment),
 );
@@ -36,6 +40,7 @@ const showSecondary = computed(() => !props.compact || (!props.allDay && !shortE
       'calendar-event-card--legacy': !compact,
       'calendar-event-card--pending': compact && allDay,
       'calendar-event-card--short': shortEvent,
+      'calendar-event-card--next': isNext,
     }"
     :title="tooltip"
     :aria-label="tooltip"
