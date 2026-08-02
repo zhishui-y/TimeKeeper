@@ -58,6 +58,24 @@ describe("browser mock API", () => {
     ).rejects.toThrow("至少选择");
   });
 
+  it("refreshes role data deterministically without a network request", async () => {
+    const result = await mockApi.refreshAccountProfileRoleData([
+      "account-1",
+      "account-3",
+      "missing-account",
+      "account-1",
+    ]);
+
+    expect(result.requestedCount).toBe(3);
+    expect(result.items.map((item) => item.status)).toEqual(["updated", "noRecord", "failed"]);
+    expect(result.updatedCount).toBe(1);
+    expect(result.noRecordCount).toBe(1);
+    expect(result.failedCount).toBe(1);
+    expect((await mockApi.getAccountProfile("account-1")).scoreUpdatedAt).toMatch(
+      /^\d{4}-\d{2}-\d{2}$/,
+    );
+  });
+
   it("removes billing data from entertainment appointments", async () => {
     const result = await mockApi.createAppointment({
       serviceDate: "2026-07-20",

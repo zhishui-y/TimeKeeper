@@ -1,6 +1,7 @@
 import { differenceInMinutes, endOfWeek, format, parseISO, startOfWeek } from "date-fns";
 import type {
   AccountProfile,
+  AccountRoleDataRefreshResult,
   AccountTableColumnWidths,
   AccountUsageWeekSyncResult,
   AppSettings,
@@ -20,6 +21,10 @@ import {
   MAX_ACCOUNT_TABLE_COLUMN_WIDTH,
   MIN_ACCOUNT_TABLE_COLUMN_WIDTHS,
 } from "../utils/accountTableColumns";
+import {
+  DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
+  validateAccountRoleDataServerUrl,
+} from "../utils/accountRoleData";
 import { MIN_MASTER_PASSWORD_CHARACTERS, isMasterPasswordLongEnough } from "../utils/security";
 import { combineDateTime } from "../utils/appointment";
 import { demoAccounts, demoAppointments, demoPasswords } from "./mockData";
@@ -73,7 +78,9 @@ let settings: AppSettings = {
   lastAutomaticBackupDate: format(new Date(), "yyyy-MM-dd"),
   accountTableColumnWidths: loadStoredAccountTableColumnWidths(),
   lastAccountUsageWeekStart: null,
+  accountRoleDataServerUrl: DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
 };
+let accountRoleDataRefreshBusy = false;
 
 interface MockBackupSnapshot {
   appointments: Appointment[];
@@ -104,6 +111,52 @@ function currentChinaWeekStart(): string {
   const monday = new Date(Date.UTC(value("year"), value("month") - 1, value("day")));
   monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
   return monday.toISOString().slice(0, 10);
+}
+
+function currentChinaDate(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
+
+function refreshMockAccountRoleData(ids: string[]): AccountRoleDataRefreshResult {
+  const normalizedIds = [...new Set(ids.map((id) => id.trim()))];
+  if (!normalizedIds.length) throw new Error("请至少选择一个账号更新角色数据");
+  if (normalizedIds.some((id) => !id)) throw new Error("角色数据更新包含空白账号 ID");
+
+  const items: AccountRoleDataRefreshResult["items"] = normalizedIds.map((id, index) => {
+    const profile = accounts.find((account) => account.id === id);
+    if (!profile) return { accountId: id, status: "failed", message: "账号档案不存在" };
+    if (!profile.server?.trim() || !profile.characterName?.trim()) {
+      return { accountId: id, status: "skipped", message: "缺少服务器或角色名" };
+    }
+    if (profile.characterName.includes("未补充")) {
+      return { accountId: id, status: "noRecord", message: "服务器未返回角色战绩" };
+    }
+
+    const nextScore = (profile.currentScore ?? 1800) + index + 1;
+    profile.gearScore = String(200_000 + nextScore);
+    profile.currentScore = nextScore;
+    profile.highestScore = Math.max(profile.highestScore ?? 0, nextScore + 100);
+    profile.scoreUpdatedAt = currentChinaDate();
+    profile.updatedAt = new Date().toISOString();
+    return { accountId: id, status: "updated" };
+  });
+
+  return {
+    requestedCount: items.length,
+    updatedCount: items.filter((item) => item.status === "updated").length,
+    noRecordCount: items.filter((item) => item.status === "noRecord").length,
+    skippedCount: items.filter((item) => item.status === "skipped").length,
+    failedCount: items.filter((item) => item.status === "failed").length,
+    items,
+  };
 }
 
 function syncMockAccountUsageWeek(): AccountUsageWeekSyncResult {
@@ -512,6 +565,17 @@ export const mockApi: ApiClient = {
     if (!globalThis.navigator?.clipboard) throw new Error("当前环境无法访问剪贴板");
     await globalThis.navigator.clipboard.writeText(profile.accountName);
   },
+  async refreshAccountProfileRoleData(ids) {
+    if (accountRoleDataRefreshBusy) throw new Error("已有角色数据更新任务正在进行");
+    const validationError = validateAccountRoleDataServerUrl(settings.accountRoleDataServerUrl);
+    if (validationError) throw new Error(validationError);
+    accountRoleDataRefreshBusy = true;
+    try {
+      return structuredClone(refreshMockAccountRoleData(ids));
+    } finally {
+      accountRoleDataRefreshBusy = false;
+    }
+  },
 
   async vaultStatus() {
     return structuredClone(vault);
@@ -742,9 +806,12 @@ export const mockApi: ApiClient = {
     if (!accountTableColumnWidthsAreValid(nextSettings.accountTableColumnWidths)) {
       throw new Error("账号表格列宽超出允许范围");
     }
+    const serverUrlError = validateAccountRoleDataServerUrl(nextSettings.accountRoleDataServerUrl);
+    if (serverUrlError) throw new Error(serverUrlError);
     storeAccountTableColumnWidths(nextSettings.accountTableColumnWidths);
     settings = {
       ...structuredClone(nextSettings),
+      accountRoleDataServerUrl: nextSettings.accountRoleDataServerUrl.trim(),
       lastAccountUsageWeekStart: settings.lastAccountUsageWeekStart,
     };
     vault = { ...vault, autoLockMinutes: settings.autoLockMinutes };

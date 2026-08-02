@@ -8,6 +8,7 @@ import { useVault } from "../../composables/useVault";
 import { useUiStore } from "../../stores/ui";
 import type { AccountProfile, AppSettings } from "../../types/domain";
 import { DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS } from "../../utils/accountTableColumns";
+import { DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL } from "../../utils/accountRoleData";
 import AccountTable from "./AccountTable.vue";
 import AccountsWorkspace from "./AccountsWorkspace.vue";
 
@@ -71,6 +72,7 @@ const settingsFixture: AppSettings = {
   lastAutomaticBackupDate: null,
   accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
   lastAccountUsageWeekStart: "2026-07-27",
+  accountRoleDataServerUrl: DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
 };
 
 describe("AccountsWorkspace batch delete feedback", () => {
@@ -418,6 +420,93 @@ describe("AccountsWorkspace batch delete feedback", () => {
     await flushPromises();
     expect(listProfiles).toHaveBeenCalledTimes(1);
     expect(useUiStore(pinia).toast?.message).toBe("新的一周已开始，已清空 1 个账号的本周内容");
+    wrapper.unmount();
+  });
+
+  it("refreshes the current filtered list, disables every entry while busy, and renders details", async () => {
+    const pendingRefresh =
+      deferred<Awaited<ReturnType<typeof mockApi.refreshAccountProfileRoleData>>>();
+    const listProfiles = vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
+    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
+      initialized: true,
+      unlocked: true,
+      autoLockMinutes: 15,
+    });
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
+    vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
+      weekStart: "2026-07-27",
+      clearedCount: 0,
+    });
+    const refresh = vi
+      .spyOn(mockApi, "refreshAccountProfileRoleData")
+      .mockReturnValue(pendingRefresh.promise);
+
+    const pinia = createPinia();
+    const wrapper = mount(AccountsWorkspace, { global: { plugins: [pinia] } });
+    await flushPromises();
+    await wrapper.get('select[aria-label="按服务器筛选账号"]').setValue("梦江南");
+    await buttonWithText(wrapper, "更新当前列表").trigger("click");
+    await flushPromises();
+
+    expect(refresh).toHaveBeenCalledWith(["account-1"]);
+    expect(buttonWithText(wrapper, "更新当前列表").attributes("disabled")).toBeDefined();
+    expect(buttonWithText(wrapper, "更新选中").attributes("disabled")).toBeDefined();
+    expect(
+      wrapper.get('button[aria-label="更新角色数据 账号一"]').attributes("disabled"),
+    ).toBeDefined();
+    expect(wrapper.get('button[aria-label="更新角色数据 账号一"]').attributes("aria-busy")).toBe(
+      "true",
+    );
+
+    pendingRefresh.resolve({
+      requestedCount: 1,
+      updatedCount: 0,
+      noRecordCount: 1,
+      skippedCount: 0,
+      failedCount: 0,
+      items: [{ accountId: "account-1", status: "noRecord", message: "无角色战绩" }],
+    });
+    await flushPromises();
+
+    expect(listProfiles).toHaveBeenCalledTimes(2);
+    expect(wrapper.text()).toContain("角色数据更新完成");
+    expect(wrapper.text()).toContain("无战绩 1");
+    expect(wrapper.text()).toContain("无角色战绩");
+    expect(useUiStore(pinia).accountRevision).toBe(1);
+    wrapper.unmount();
+  });
+
+  it("supports selected and single-row role data refresh targets", async () => {
+    vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
+    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
+      initialized: true,
+      unlocked: true,
+      autoLockMinutes: 15,
+    });
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
+    vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
+      weekStart: "2026-07-27",
+      clearedCount: 0,
+    });
+    const refresh = vi.spyOn(mockApi, "refreshAccountProfileRoleData").mockResolvedValue({
+      requestedCount: 1,
+      updatedCount: 1,
+      noRecordCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      items: [{ accountId: "account-2", status: "updated" }],
+    });
+
+    const wrapper = mount(AccountsWorkspace, { global: { plugins: [createPinia()] } });
+    await flushPromises();
+    await wrapper.get('input[aria-label="选择账号 账号二"]').setValue(true);
+    await buttonWithText(wrapper, "更新选中").trigger("click");
+    await flushPromises();
+    expect(refresh).toHaveBeenLastCalledWith(["account-2"]);
+
+    await wrapper.get('button[aria-label="更新角色数据 账号一"]').trigger("click");
+    await flushPromises();
+    expect(refresh).toHaveBeenLastCalledWith(["account-1"]);
     wrapper.unmount();
   });
 });

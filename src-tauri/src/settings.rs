@@ -10,10 +10,17 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 use thiserror::Error;
 
-use crate::{backup::BackupState, vault::VaultState};
+use crate::{
+    accounts_remote::validate_account_role_data_server_url, backup::BackupState, vault::VaultState,
+};
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const SETTINGS_RECOVERY_FILE_NAME: &str = "settings.previous.json";
+pub const DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL: &str = "https://zhishui.cc/api/jx3/excel/";
+
+fn default_account_role_data_server_url() -> String {
+    DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL.to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -83,6 +90,8 @@ pub struct AppSettings {
     pub account_table_column_widths: AccountTableColumnWidths,
     #[serde(default)]
     pub last_account_usage_week_start: Option<String>,
+    #[serde(default = "default_account_role_data_server_url")]
+    pub account_role_data_server_url: String,
 }
 
 impl Default for AppSettings {
@@ -94,11 +103,16 @@ impl Default for AppSettings {
             last_automatic_backup_date: None,
             account_table_column_widths: AccountTableColumnWidths::default(),
             last_account_usage_week_start: None,
+            account_role_data_server_url: default_account_role_data_server_url(),
         }
     }
 }
 
 impl AppSettings {
+    fn normalize(&mut self) {
+        self.account_role_data_server_url = self.account_role_data_server_url.trim().to_string();
+    }
+
     pub(crate) fn validate(&self) -> Result<(), SettingsError> {
         if self.default_reminder_minutes > 7 * 24 * 60 {
             return Err(SettingsError::Validation("默认提醒时间不能超过7天".into()));
@@ -129,6 +143,13 @@ impl AppSettings {
                 ));
             }
         }
+        if self.account_role_data_server_url.is_empty() {
+            return Err(SettingsError::Validation(
+                "角色数据服务器 URL 不能为空".into(),
+            ));
+        }
+        validate_account_role_data_server_url(&self.account_role_data_server_url)
+            .map_err(SettingsError::Validation)?;
         Ok(())
     }
 }
@@ -187,6 +208,7 @@ impl SettingsState {
         proposed.last_automatic_backup_date = current.last_automatic_backup_date.clone();
         // This value advances only after weekly account usage synchronization succeeds.
         proposed.last_account_usage_week_start = current.last_account_usage_week_start.clone();
+        proposed.normalize();
         proposed.validate()?;
         write_settings_atomic(&self.path, &self.recovery_path, &proposed)?;
         *current = proposed.clone();
@@ -247,12 +269,13 @@ pub fn get_settings(state: State<'_, SettingsState>) -> Result<AppSettings, Stri
 
 #[tauri::command]
 pub async fn update_settings(
-    settings: AppSettings,
+    mut settings: AppSettings,
     state: State<'_, SettingsState>,
     vault: State<'_, VaultState>,
     backup: State<'_, BackupState>,
 ) -> Result<AppSettings, String> {
     let _operation_guard = backup.lock_data_operation().await;
+    settings.normalize();
     settings.validate().map_err(|error| error.to_string())?;
 
     let previous_auto_lock = state
@@ -462,6 +485,50 @@ mod tests {
             AccountTableColumnWidths::default()
         );
         assert_eq!(loaded.last_account_usage_week_start, None);
+        assert_eq!(
+            loaded.account_role_data_server_url,
+            DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn validates_normalizes_and_persists_role_data_server_url() {
+        let dir = test_dir("role-data-server-url");
+        let state = SettingsState::load(&dir).unwrap();
+        let proposed = AppSettings {
+            account_role_data_server_url: "  https://example.test/jx3/  ".into(),
+            ..AppSettings::default()
+        };
+        let updated = state.update_from_frontend(proposed).unwrap();
+        assert_eq!(
+            updated.account_role_data_server_url,
+            "https://example.test/jx3/"
+        );
+        assert_eq!(
+            SettingsState::load(&dir)
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .account_role_data_server_url,
+            "https://example.test/jx3/"
+        );
+
+        for invalid in [
+            "file:///tmp/data",
+            "https://user:pass@example.test/",
+            "https://example.test/?token=x",
+            "https://example.test/#fragment",
+        ] {
+            let settings = AppSettings {
+                account_role_data_server_url: invalid.into(),
+                ..AppSettings::default()
+            };
+            assert!(matches!(
+                settings.validate(),
+                Err(SettingsError::Validation(_))
+            ));
+        }
         fs::remove_dir_all(dir).unwrap();
     }
 

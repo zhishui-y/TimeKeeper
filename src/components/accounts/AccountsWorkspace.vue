@@ -5,6 +5,7 @@ import {
   ListFilter,
   LockKeyhole,
   Plus,
+  RefreshCw,
   Search,
   ShieldCheck,
   Trash2,
@@ -13,6 +14,7 @@ import {
 import { computed, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAccounts } from "../../composables/useAccounts";
+import { useAccountRoleDataRefresh } from "../../composables/useAccountRoleDataRefresh";
 import { useVault } from "../../composables/useVault";
 import { useUiStore } from "../../stores/ui";
 import type {
@@ -38,6 +40,7 @@ import {
   type SortDirection,
 } from "../../utils/accounts";
 import AccountDrawer from "./AccountDrawer.vue";
+import AccountRoleDataRefreshFeedback from "./AccountRoleDataRefreshFeedback.vue";
 import AccountTable from "./AccountTable.vue";
 
 const ui = useUiStore();
@@ -93,6 +96,12 @@ const visibleProfiles = computed(() =>
     sortDirection.value,
   ),
 );
+const roleDataRefresh = useAccountRoleDataRefresh({
+  async afterRefresh() {
+    await load(query.value, needsReviewOnly.value ? true : undefined);
+    ui.markAccountsChanged();
+  },
+});
 const activeFilterCount = computed(() => Object.values(accountFilters).filter(Boolean).length);
 const manualReorderEnabled = computed(() => {
   return (
@@ -115,6 +124,30 @@ const sortLabels: Record<AccountProfileSortKey, string> = {
   currentScore: "当前分",
   highestScore: "最高分",
 };
+
+async function refreshRoleData(ids: readonly string[]): Promise<void> {
+  const result = await roleDataRefresh.refresh(ids);
+  if (!result) {
+    if (roleDataRefresh.error.value) ui.notify(roleDataRefresh.error.value, "danger");
+    return;
+  }
+  ui.notify(
+    `角色数据更新完成：更新 ${result.updatedCount}，无战绩 ${result.noRecordCount}，跳过 ${result.skippedCount}，失败 ${result.failedCount}`,
+    result.failedCount > 0 ? "warning" : "success",
+  );
+}
+
+function refreshVisibleRoleData(): void {
+  void refreshRoleData(visibleProfiles.value.map((profile) => profile.id));
+}
+
+function refreshSelectedRoleData(): void {
+  void refreshRoleData(selectedIds.value);
+}
+
+function refreshSingleRoleData(profile: AccountProfile): void {
+  void refreshRoleData([profile.id]);
+}
 
 function openCreate(): void {
   activeProfile.value = null;
@@ -574,6 +607,31 @@ watch(
         <button
           class="button button--ghost"
           type="button"
+          :disabled="roleDataRefresh.busy.value || visibleProfiles.length === 0"
+          :aria-busy="roleDataRefresh.busy.value"
+          title="更新当前搜索和筛选后显示的账号"
+          @click="refreshVisibleRoleData"
+        >
+          <LoaderCircle
+            v-if="roleDataRefresh.busy.value"
+            class="account-actions__spinner"
+            :size="15"
+          />
+          <RefreshCw v-else :size="15" />
+          更新当前列表
+        </button>
+        <button
+          class="button button--ghost"
+          type="button"
+          :disabled="roleDataRefresh.busy.value || selectedCount === 0"
+          title="更新选中的账号"
+          @click="refreshSelectedRoleData"
+        >
+          <RefreshCw :size="15" />更新选中
+        </button>
+        <button
+          class="button button--ghost"
+          type="button"
           :disabled="selectedCount === 0 || !vaultStatus.unlocked || deletingAccounts"
           :aria-busy="deletingAccounts"
           :title="
@@ -691,6 +749,14 @@ watch(
     </div>
     <div v-if="loading" class="loading-line" />
     <div v-if="error" class="error-banner">{{ error }}</div>
+    <div v-if="roleDataRefresh.error.value" class="error-banner" role="alert">
+      {{ roleDataRefresh.error.value }}
+    </div>
+    <AccountRoleDataRefreshFeedback
+      v-if="roleDataRefresh.result.value"
+      :result="roleDataRefresh.result.value"
+      :profiles="items"
+    />
     <AccountTable
       :profiles="visibleProfiles"
       :vault-unlocked="vaultStatus.unlocked"
@@ -703,10 +769,13 @@ watch(
       :column-widths="columnWidths"
       :saving-column-widths="savingColumnWidths"
       :clearing-weekly="clearingWeekly"
+      :role-refresh-busy="roleDataRefresh.busy.value"
+      :refreshing-ids="roleDataRefresh.targetIds.value"
       v-model:selected-ids="selectedIds"
       @edit="openEdit"
       @copy="copy"
       @copy-account="copyAccount"
+      @refresh-role-data="refreshSingleRoleData"
       @update-usage-draft="updateUsageDraft"
       @save-usage="saveUsage"
       @cancel-usage="cancelUsage"

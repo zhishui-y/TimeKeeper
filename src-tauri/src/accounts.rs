@@ -5,6 +5,10 @@ use tauri::{AppHandle, Manager, Runtime, State};
 use uuid::Uuid;
 
 use crate::{
+    accounts_remote::{
+        AccountRoleDataRefreshResult, AccountRoleDataRefreshState,
+        commit_account_role_data_refresh, prepare_account_role_data_refresh,
+    },
     backup::BackupState,
     db::{Database, ImportWriteResult},
     importer::LegacyAccountProfile,
@@ -622,6 +626,27 @@ pub async fn copy_account_name(database: State<'_, Database>, id: String) -> Res
             .map_err(db_error)?
             .ok_or_else(|| format!("账号档案不存在: {id}"))?;
     copy_text_to_clipboard(account_name).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn refresh_account_profile_role_data(
+    database: State<'_, Database>,
+    backup: State<'_, BackupState>,
+    settings: State<'_, SettingsState>,
+    refresh: State<'_, AccountRoleDataRefreshState>,
+    ids: Vec<String>,
+) -> Result<AccountRoleDataRefreshResult, String> {
+    let _refresh_guard = refresh.try_start()?;
+    let base_url = settings
+        .snapshot()
+        .map_err(|error| error.to_string())?
+        .account_role_data_server_url;
+    let prepared =
+        prepare_account_role_data_refresh(database.pool(), refresh.client(), &base_url, ids)
+            .await?;
+
+    let _operation_guard = backup.lock_data_operation().await;
+    commit_account_role_data_refresh(database.pool(), prepared).await
 }
 
 #[cfg(test)]

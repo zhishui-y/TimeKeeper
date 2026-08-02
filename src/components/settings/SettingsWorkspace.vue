@@ -7,6 +7,7 @@ import {
   FileSpreadsheet,
   HardDriveDownload,
   Save,
+  ServerCog,
   ShieldCheck,
   Upload,
 } from "@lucide/vue";
@@ -23,6 +24,11 @@ import type {
 import type { AppNotificationPermission } from "../../api/types";
 import { formatFileSize } from "../../utils/formatters";
 import { DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS } from "../../utils/accountTableColumns";
+import {
+  DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
+  validateAccountRoleDataServerUrl,
+} from "../../utils/accountRoleData";
+import AccountRoleDataServerPanel from "./AccountRoleDataServerPanel.vue";
 import OperationProgress from "./OperationProgress.vue";
 import ExcelImportScopeSelector from "./ExcelImportScopeSelector.vue";
 import VaultSettingsPanel from "./VaultSettingsPanel.vue";
@@ -38,6 +44,7 @@ const settings = reactive<AppSettings>({
   lastAutomaticBackupDate: null,
   accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
   lastAccountUsageWeekStart: null,
+  accountRoleDataServerUrl: DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
 });
 const loadingSettings = shallowRef(false);
 const importPath = shallowRef("");
@@ -65,6 +72,9 @@ const importButtonLabel = computed(() => {
   return `导入${importSelectionLabel.value}`;
 });
 const backupBusy = computed(() => backupOperation.value !== null);
+const serverUrlError = computed(() =>
+  validateAccountRoleDataServerUrl(settings.accountRoleDataServerUrl),
+);
 const importProgress = computed(() => {
   if (importOperation.value === "preview") {
     return {
@@ -402,6 +412,19 @@ onMounted(() => {
         </div>
       </section>
 
+      <section class="settings-section settings-section--role-data">
+        <header class="settings-section__header">
+          <div class="settings-section__icon"><ServerCog :size="19" /></div>
+          <div>
+            <h2>角色数据服务器</h2>
+            <p>为账号档案更新装分、当前分、最高分和服务端日期。</p>
+          </div>
+        </header>
+        <div class="settings-section__body">
+          <AccountRoleDataServerPanel v-model="settings.accountRoleDataServerUrl" />
+        </div>
+      </section>
+
       <section class="settings-section settings-section--backup">
         <header class="settings-section__header">
           <div class="settings-section__icon"><DatabaseBackup :size="19" /></div>
@@ -452,7 +475,12 @@ onMounted(() => {
 
     <footer class="settings-footer">
       <span>数据仅保存在本机；当前设置修改后需手动保存。</span>
-      <button class="button button--primary" type="button" @click="saveSettings">
+      <button
+        class="button button--primary"
+        type="button"
+        :disabled="Boolean(serverUrlError) || loadingSettings"
+        @click="saveSettings"
+      >
         <Save :size="15" />保存设置
       </button>
     </footer>
@@ -515,6 +543,11 @@ onMounted(() => {
 
 .settings-section--vault {
   grid-column: 1 / -1;
+  grid-row: 4;
+}
+
+.settings-section--role-data {
+  grid-column: 2;
   grid-row: 3;
 }
 

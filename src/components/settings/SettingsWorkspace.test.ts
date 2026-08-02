@@ -210,4 +210,28 @@ describe("SettingsWorkspace operation progress", () => {
     expect(buttonWithText(wrapper, "导出完整备份").attributes("disabled")).toBeUndefined();
     wrapper.unmount();
   });
+
+  it("loads, validates, and saves the role data server URL through unified settings", async () => {
+    const previous = await mockApi.getSettings();
+    const updateSettings = vi.spyOn(mockApi, "updateSettings").mockImplementation(async (next) => ({
+      ...next,
+      accountRoleDataServerUrl: next.accountRoleDataServerUrl.trim(),
+    }));
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(previous);
+
+    const wrapper = mount(SettingsWorkspace, { global: { plugins: [createPinia()] } });
+    await flushPromises();
+    const input = wrapper.get('input[aria-label="角色数据服务器基础 URL"]');
+    await input.setValue("https://example.test/jx3/");
+    await buttonWithText(wrapper, "保存设置").trigger("click");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ accountRoleDataServerUrl: "https://example.test/jx3/" }),
+    );
+    await input.setValue("https://user:password@example.test/jx3/");
+    expect(wrapper.get('[role="alert"]').text()).toContain("不能包含用户名或密码");
+    expect(buttonWithText(wrapper, "保存设置").attributes("disabled")).toBeDefined();
+    wrapper.unmount();
+  });
 });

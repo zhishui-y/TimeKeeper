@@ -1,4 +1,5 @@
 mod accounts;
+mod accounts_remote;
 mod appointments;
 mod backup;
 mod db;
@@ -110,6 +111,8 @@ pub fn run() {
                 .map_err(setup_error)?;
             let database = tauri::async_runtime::block_on(db::initialize_database(&data_dir))
                 .map_err(setup_error)?;
+            let account_role_data_refresh =
+                accounts_remote::AccountRoleDataRefreshState::new().map_err(setup_error)?;
 
             let notification_state = notifications::NotificationState::default();
             tauri::async_runtime::block_on(appointments::restore_pending_notifications(
@@ -125,6 +128,7 @@ pub fn run() {
             app.manage(vault);
             app.manage(notification_state);
             app.manage(importer::ImportState::default());
+            app.manage(account_role_data_refresh);
             setup_tray(app).map_err(setup_error)?;
             vault::spawn_auto_lock_task(app.handle().clone());
             Ok(())
@@ -151,6 +155,7 @@ pub fn run() {
             accounts::delete_account_profiles,
             accounts::reorder_account_profiles,
             accounts::copy_account_name,
+            accounts::refresh_account_profile_role_data,
             reports::get_dashboard_summary,
             reports::get_revenue_summary,
             importer::preview_excel_import,

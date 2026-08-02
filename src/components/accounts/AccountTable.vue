@@ -5,7 +5,9 @@ import {
   ArrowUpDown,
   Copy,
   GripVertical,
+  LoaderCircle,
   Pencil,
+  RefreshCw,
   Trash2,
   TriangleAlert,
 } from "@lucide/vue";
@@ -34,19 +36,27 @@ interface AccountDragEvent {
   preventDefault(): void;
 }
 
-const props = defineProps<{
-  profiles: readonly AccountProfile[];
-  vaultUnlocked: boolean;
-  sortKey: AccountProfileSortKey | null;
-  sortDirection: SortDirection;
-  reorderEnabled: boolean;
-  reorderDisabledReason: string;
-  usageDrafts: Readonly<Record<string, string>>;
-  savingUsageIds: ReadonlySet<string>;
-  columnWidths: AccountTableColumnWidths;
-  savingColumnWidths: boolean;
-  clearingWeekly: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    profiles: readonly AccountProfile[];
+    vaultUnlocked: boolean;
+    sortKey: AccountProfileSortKey | null;
+    sortDirection: SortDirection;
+    reorderEnabled: boolean;
+    reorderDisabledReason: string;
+    usageDrafts: Readonly<Record<string, string>>;
+    savingUsageIds: ReadonlySet<string>;
+    columnWidths: AccountTableColumnWidths;
+    savingColumnWidths: boolean;
+    clearingWeekly: boolean;
+    roleRefreshBusy?: boolean;
+    refreshingIds?: ReadonlySet<string>;
+  }>(),
+  {
+    roleRefreshBusy: false,
+    refreshingIds: () => new Set<string>(),
+  },
+);
 const selectedIds = defineModel<string[]>("selectedIds", { required: true });
 
 const emit = defineEmits<{
@@ -54,6 +64,7 @@ const emit = defineEmits<{
   copy: [profile: AccountProfile];
   copyAccount: [profile: AccountProfile];
   delete: [profile: AccountProfile];
+  refreshRoleData: [profile: AccountProfile];
   updateUsageDraft: [profileId: string, value: string];
   saveUsage: [profile: AccountProfile, value: string];
   cancelUsage: [profile: AccountProfile];
@@ -184,7 +195,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
           <col :style="{ width: `${columnWidths.scoreUpdatedAt}px` }" />
           <col :style="{ width: `${columnWidths.weekly}px` }" />
           <col :style="{ width: `${columnWidths.notes}px` }" />
-          <col style="width: 72px" />
+          <col style="width: 108px" />
         </colgroup>
         <thead>
           <tr>
@@ -425,6 +436,8 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
               usageDrafts[profile.id],
               savingUsageIds.has(profile.id),
               clearingWeekly,
+              roleRefreshBusy,
+              refreshingIds.has(profile.id),
             ]"
             :class="{
               'needs-review': profile.needsReview,
@@ -527,6 +540,22 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
                 <button
                   class="icon-button"
                   type="button"
+                  :disabled="roleRefreshBusy"
+                  :title="refreshingIds.has(profile.id) ? '正在更新角色数据' : '更新角色数据'"
+                  :aria-label="`更新角色数据 ${profile.accountName}`"
+                  :aria-busy="refreshingIds.has(profile.id)"
+                  @click="emit('refreshRoleData', profile)"
+                >
+                  <LoaderCircle
+                    v-if="refreshingIds.has(profile.id)"
+                    class="role-refresh-spinner"
+                    :size="14"
+                  />
+                  <RefreshCw v-else :size="14" />
+                </button>
+                <button
+                  class="icon-button"
+                  type="button"
                   title="编辑"
                   aria-label="编辑账号"
                   @click="emit('edit', profile)"
@@ -556,6 +585,16 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
 <style scoped>
 .account-table {
   flex: 1;
+}
+
+.role-refresh-spinner {
+  animation: role-refresh-spin 0.9s linear infinite;
+}
+
+@keyframes role-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .resizable-header {

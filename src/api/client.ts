@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AccountProfile,
+  AccountRoleDataRefreshResult,
   AccountTableColumnWidths,
   AccountUsageWeekSyncResult,
   AppSettings,
@@ -49,6 +50,8 @@ const nativeApi: ApiClient = {
   deleteAccountProfiles: (ids) => invoke<number>("delete_account_profiles", { ids }),
   reorderAccountProfiles: (ids) => invoke<void>("reorder_account_profiles", { ids }),
   copyAccountName: (id) => invoke<void>("copy_account_name", { id }),
+  refreshAccountProfileRoleData: (ids) =>
+    invoke<AccountRoleDataRefreshResult>("refresh_account_profile_role_data", { ids }),
 
   vaultStatus: () => invoke<VaultStatus>("vault_status"),
   initializeVault: (password) => invoke<VaultStatus>("initialize_vault", { password }),

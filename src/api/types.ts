@@ -1,6 +1,7 @@
 import type {
   AccountProfile,
   AccountProfileInput,
+  AccountRoleDataRefreshResult,
   AccountTableColumnWidths,
   AccountUsageWeekSyncResult,
   AppSettings,
@@ -42,6 +43,7 @@ export interface ApiClient {
   deleteAccountProfiles(ids: string[]): Promise<number>;
   reorderAccountProfiles(ids: string[]): Promise<void>;
   copyAccountName(id: string): Promise<void>;
+  refreshAccountProfileRoleData(ids: string[]): Promise<AccountRoleDataRefreshResult>;
 
   vaultStatus(): Promise<VaultStatus>;
   initializeVault(password: string): Promise<VaultStatus>;

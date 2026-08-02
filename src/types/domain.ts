@@ -187,6 +187,23 @@ export interface AccountUsageWeekSyncResult {
   clearedCount: number;
 }
 
+export type AccountRoleDataRefreshStatus = "updated" | "noRecord" | "skipped" | "failed";
+
+export interface AccountRoleDataRefreshItem {
+  accountId: string;
+  status: AccountRoleDataRefreshStatus;
+  message?: string | null;
+}
+
+export interface AccountRoleDataRefreshResult {
+  requestedCount: number;
+  updatedCount: number;
+  noRecordCount: number;
+  skippedCount: number;
+  failedCount: number;
+  items: readonly AccountRoleDataRefreshItem[];
+}
+
 export interface AppSettings {
   defaultReminderMinutes: number;
   autoLockMinutes: number;
@@ -194,6 +211,7 @@ export interface AppSettings {
   lastAutomaticBackupDate?: string | null;
   accountTableColumnWidths: AccountTableColumnWidths;
   lastAccountUsageWeekStart?: string | null;
+  accountRoleDataServerUrl: string;
 }
 
 export interface BackupResult {

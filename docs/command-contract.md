@@ -38,6 +38,7 @@ can start automatically but are never completed automatically.
 - `delete_account_profiles(ids) -> number`
 - `reorder_account_profiles(ids) -> void`
 - `copy_account_name(id) -> void`
+- `refresh_account_profile_role_data(ids) -> AccountRoleDataRefreshResult`
 - `vault_status() -> VaultStatus`
 - `initialize_vault(password) -> VaultStatus`
 - `unlock_vault(password) -> VaultStatus`
@@ -56,6 +57,15 @@ stores blank content as `null`, and updates only the non-secret usage field and 
 Monday boundaries clear all non-null usage values atomically and advance the stored week marker.
 `clear_account_profile_usage` performs the same all-account SQL update on demand. These operations
 remain available while the vault is locked and never access Stronghold.
+
+`refresh_account_profile_role_data` trims and de-duplicates IDs while preserving first-input order.
+Profiles missing a server or character name are `skipped`; `ok=false` responses are `noRecord`;
+HTTP, network, JSON, response-size, date, and field failures are `failed`. Only `updated` items are
+written, after every request finishes, in one transaction. The command overwrites `gearScore`,
+`currentScore`, and the China-local `scoreUpdatedAt`; `highestScore` can only increase. It does not
+update other profile fields, Stronghold data, or appointment snapshots. At most three requests run
+concurrently, with 5-second connect and 15-second total timeouts and no automatic retry. The result
+contains request and status counts plus one ordered item per de-duplicated input ID.
 
 Changing the master password requires an unlocked vault and the current
 password. Rust re-encrypts and verifies the complete Stronghold snapshot before
@@ -80,6 +90,10 @@ update command validates each value against its column minimum and the 480px max
 `lastAccountUsageWeekStart`; generic settings updates cannot overwrite this weekly cleanup marker.
 Older settings files that omit either field load default widths and a missing week marker, preserving
 existing weekly content until the first later week transition.
+
+`AppSettings.accountRoleDataServerUrl` is a non-secret absolute HTTP(S) base URL stored in
+`settings.json` and included in full backups. It cannot contain credentials, query parameters, or a
+fragment. Older settings files receive the active macro URL as their default.
 
 Backup restore requires the current account-profile schema, including the
 `usage_info` column. Backups created before migration `0003` are rejected by
