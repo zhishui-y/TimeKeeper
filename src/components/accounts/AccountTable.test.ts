@@ -15,7 +15,7 @@ const profiles: AccountProfile[] = [
     currentScore: 2100,
     highestScore: 2300,
     scoreUpdatedAt: "2026-07-28",
-    notes: null,
+    notes: "晚间优先，赛季末冲分，长备注用于验证列表中的单行省略展示",
     needsReview: false,
     createdAt: "2026-07-28T00:00:00Z",
     updatedAt: "2026-07-28T00:00:00Z",
@@ -43,7 +43,6 @@ describe("AccountTable", () => {
     const wrapper = mount(AccountTable, {
       props: {
         profiles,
-        revealedPasswords: {},
         vaultUnlocked: true,
         selectedIds: [],
         sortKey: null,
@@ -68,7 +67,6 @@ describe("AccountTable", () => {
     const wrapper = mount(AccountTable, {
       props: {
         profiles: [profiles[0]!],
-        revealedPasswords: {},
         vaultUnlocked: false,
         selectedIds: [],
         sortKey: null,
@@ -78,14 +76,65 @@ describe("AccountTable", () => {
       },
     });
 
+    expect(
+      wrapper.get('button[aria-label="复制账号 账号一"]').attributes("disabled"),
+    ).toBeUndefined();
+    expect(
+      wrapper.get('button[aria-label="复制密码 账号一"]').attributes("disabled"),
+    ).toBeDefined();
     expect(wrapper.get('button[aria-label="删除账号"]').attributes("disabled")).toBeDefined();
+  });
+
+  it("shows copy-only account credentials and a truncated notes column", () => {
+    const wrapper = mount(AccountTable, {
+      props: {
+        profiles,
+        vaultUnlocked: true,
+        selectedIds: [],
+        sortKey: null,
+        sortDirection: "asc",
+        reorderEnabled: true,
+        reorderDisabledReason: "",
+      },
+    });
+
+    const rows = wrapper.findAll("tbody tr");
+    const firstNotes = rows[0]!.get(".notes-cell");
+    const secondNotes = rows[1]!.get(".notes-cell");
+    const headers = wrapper.findAll("thead th").map((header) => header.text().trim());
+
+    expect(wrapper.find(".account-name").exists()).toBe(false);
+    expect(wrapper.find(".password-cell").exists()).toBe(false);
+    expect(wrapper.find('button[aria-label^="查看密码"]').exists()).toBe(false);
+    expect(wrapper.get('button[aria-label="复制账号 账号一"]').text()).toBe("复制账号");
+    expect(wrapper.get('button[aria-label="复制密码 账号一"]').text()).toBe("复制密码");
+    expect(firstNotes.classes()).toContain("truncate");
+    expect(firstNotes.attributes("title")).toBe(profiles[0]!.notes);
+    expect(firstNotes.text()).toBe(profiles[0]!.notes);
+    expect(secondNotes.text()).toBe("—");
+    expect(secondNotes.attributes("title")).toBeUndefined();
+    expect(headers).toEqual([
+      "",
+      "联系人",
+      "服务器",
+      "角色名",
+      "职业 / 心法",
+      "装分",
+      "账号",
+      "密码",
+      "当前分",
+      "最高分",
+      "更新日期",
+      "备注",
+      "",
+    ]);
+    expect(rows[0]!.findAll("td")[11]!.classes()).toContain("notes-cell");
   });
 
   it("emits sortable header selections and exposes the active direction", async () => {
     const wrapper = mount(AccountTable, {
       props: {
         profiles,
-        revealedPasswords: {},
         vaultUnlocked: true,
         selectedIds: [],
         sortKey: "currentScore",
@@ -108,7 +157,6 @@ describe("AccountTable", () => {
     const wrapper = mount(AccountTable, {
       props: {
         profiles,
-        revealedPasswords: {},
         vaultUnlocked: true,
         selectedIds: [],
         sortKey: null,
@@ -125,6 +173,8 @@ describe("AccountTable", () => {
 
     await wrapper.get('button[aria-label="复制账号 账号一"]').trigger("click");
     expect(wrapper.emitted("copyAccount")).toEqual([[profiles[0]]]);
+    await wrapper.get('button[aria-label="复制密码 账号一"]').trigger("click");
+    expect(wrapper.emitted("copy")).toEqual([[profiles[0]]]);
 
     await wrapper
       .get('button[aria-label="拖动账号 账号一 调整顺序"]')

@@ -327,8 +327,15 @@ function appointmentTitle(appointment: Appointment): string {
   --event-background: color-mix(in srgb, var(--gold-soft) 90%, var(--surface));
   --event-border: var(--gold-border);
   --event-ink: var(--gold-strong);
-  --mode-accent: var(--gold);
-  box-shadow: 0 5px 14px color-mix(in srgb, var(--gold) 18%, transparent);
+  box-shadow:
+    inset 0 0 0 2px var(--gold-border),
+    0 5px 14px color-mix(in srgb, var(--gold) 18%, transparent);
+}
+
+.schedule-chip--next:hover {
+  box-shadow:
+    inset 0 0 0 2px var(--gold-border),
+    0 6px 14px color-mix(in srgb, var(--gold) 18%, transparent);
 }
 
 .schedule-chip__time {

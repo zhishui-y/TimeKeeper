@@ -4,8 +4,6 @@ import {
   ArrowUp,
   ArrowUpDown,
   Copy,
-  Eye,
-  EyeOff,
   GripVertical,
   Pencil,
   Trash2,
@@ -33,7 +31,6 @@ interface AccountDragEvent {
 
 const props = defineProps<{
   profiles: readonly AccountProfile[];
-  revealedPasswords: Readonly<Record<string, string>>;
   vaultUnlocked: boolean;
   sortKey: AccountProfileSortKey | null;
   sortDirection: SortDirection;
@@ -44,8 +41,6 @@ const selectedIds = defineModel<string[]>("selectedIds", { required: true });
 
 const emit = defineEmits<{
   edit: [profile: AccountProfile];
-  reveal: [profile: AccountProfile];
-  hide: [profile: AccountProfile];
   copy: [profile: AccountProfile];
   copyAccount: [profile: AccountProfile];
   delete: [profile: AccountProfile];
@@ -144,11 +139,12 @@ function finishDrag(): void {
           <col style="width: 86px" />
           <col style="width: 82px" />
           <col style="width: 68px" />
-          <col style="width: 132px" />
-          <col style="width: 148px" />
+          <col style="width: 104px" />
+          <col style="width: 104px" />
           <col style="width: 62px" />
           <col style="width: 62px" />
           <col style="width: 102px" />
+          <col style="width: 160px" />
           <col style="width: 72px" />
         </colgroup>
         <thead>
@@ -272,6 +268,7 @@ function finishDrag(): void {
               </button>
             </th>
             <th>更新日期</th>
+            <th>备注</th>
             <th aria-label="操作" />
           </tr>
         </thead>
@@ -281,7 +278,6 @@ function finishDrag(): void {
             :key="profile.id"
             v-memo="[
               profile,
-              revealedPasswords[profile.id],
               vaultUnlocked,
               selectedIdSet.has(profile.id),
               reorderEnabled,
@@ -334,52 +330,42 @@ function finishDrag(): void {
             <td class="truncate">{{ profile.characterName || "—" }}</td>
             <td class="truncate">{{ profile.specialization || "—" }}</td>
             <td class="mono-number">{{ profile.gearScore || "—" }}</td>
-            <td>
-              <div class="account-name-cell">
-                <strong class="account-name truncate">{{ profile.accountName }}</strong>
-                <button
-                  class="icon-button"
-                  type="button"
-                  title="复制账号"
-                  :aria-label="`复制账号 ${profile.accountName}`"
-                  @click="emit('copyAccount', profile)"
-                >
-                  <Copy :size="12" />
-                </button>
-              </div>
+            <td class="copy-cell">
+              <button
+                class="button button--compact copy-button"
+                type="button"
+                title="复制账号"
+                :aria-label="`复制账号 ${profile.accountName}`"
+                @click="emit('copyAccount', profile)"
+              >
+                <Copy :size="12" />
+                复制账号
+              </button>
             </td>
-            <td>
-              <div class="password-cell">
-                <code class="truncate">{{ revealedPasswords[profile.id] || "••••••••••" }}</code>
-                <button
-                  class="icon-button"
-                  type="button"
-                  :disabled="!vaultUnlocked"
-                  :title="revealedPasswords[profile.id] ? '隐藏密码' : '查看15秒'"
-                  :aria-label="revealedPasswords[profile.id] ? '隐藏密码' : '查看密码15秒'"
-                  @click="
-                    revealedPasswords[profile.id] ? emit('hide', profile) : emit('reveal', profile)
-                  "
-                >
-                  <EyeOff v-if="revealedPasswords[profile.id]" :size="13" />
-                  <Eye v-else :size="13" />
-                </button>
-                <button
-                  class="icon-button"
-                  type="button"
-                  :disabled="!vaultUnlocked"
-                  title="复制密码"
-                  aria-label="复制密码"
-                  @click="emit('copy', profile)"
-                >
-                  <Copy :size="13" />
-                </button>
-              </div>
+            <td class="copy-cell">
+              <button
+                class="button button--compact copy-button"
+                type="button"
+                :disabled="!vaultUnlocked"
+                :title="vaultUnlocked ? '复制密码' : '解锁密码库后可复制密码'"
+                :aria-label="`复制密码 ${profile.accountName}`"
+                @click="emit('copy', profile)"
+              >
+                <Copy :size="12" />
+                复制密码
+              </button>
             </td>
             <td class="mono-number score-cell">{{ profile.currentScore ?? "—" }}</td>
             <td class="mono-number score-cell">{{ profile.highestScore ?? "—" }}</td>
             <td class="muted">
               {{ profile.scoreUpdatedAt ? formatShortDate(profile.scoreUpdatedAt) : "—" }}
+            </td>
+            <td
+              class="notes-cell truncate"
+              :class="{ muted: !profile.notes }"
+              :title="profile.notes || undefined"
+            >
+              {{ profile.notes || "—" }}
             </td>
             <td>
               <div class="row-actions">
@@ -418,7 +404,7 @@ function finishDrag(): void {
 }
 
 .account-table .data-table {
-  min-width: 1048px;
+  min-width: 1136px;
 }
 
 .select-cell {
@@ -507,44 +493,30 @@ function finishDrag(): void {
   color: var(--amber);
 }
 
-.contact-cell strong,
-.account-name {
+.contact-cell strong {
   display: block;
   color: var(--ink-strong);
   font-size: 12px;
   font-weight: 700;
 }
 
-.account-name-cell {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) 26px;
-  align-items: center;
-  gap: 2px;
+.account-table .copy-cell {
+  padding-inline: 8px;
 }
 
-.account-name-cell .icon-button {
-  width: 26px;
-  height: 26px;
-}
-
-.password-cell {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) 25px 25px;
-  align-items: center;
-  gap: 2px;
-}
-
-.password-cell code {
-  display: block;
-  color: var(--ink);
-  font-family: "Cascadia Mono", monospace;
+.account-table .copy-button {
+  width: 100%;
+  min-height: 28px;
+  gap: 4px;
+  padding-inline: 6px;
+  border-radius: 7px;
   font-size: 11px;
-  letter-spacing: 0.025em;
 }
 
-.password-cell .icon-button,
+.notes-cell {
+  max-width: 0;
+}
+
 .row-actions .icon-button {
   width: 28px;
   height: 28px;

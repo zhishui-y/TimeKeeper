@@ -9,7 +9,7 @@ import {
   Trash2,
   UnlockKeyhole,
 } from "@lucide/vue";
-import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue";
+import { computed, onMounted, reactive, ref, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAccounts } from "../../composables/useAccounts";
 import { useVault } from "../../composables/useVault";
@@ -53,8 +53,6 @@ const batchDeleteFeedback = shallowRef<{
   tone: "neutral" | "success" | "warning" | "danger";
 } | null>(null);
 const masterPassword = shallowRef("");
-const revealedPasswords = shallowRef<Record<string, string>>({});
-const revealTimers = new Map<string, ReturnType<typeof globalThis.setTimeout>>();
 const contactOptions = computed(() => uniqueAccountValues(items.value, "contactName"));
 const serverOptions = computed(() => uniqueAccountValues(items.value, "server"));
 const specializationOptions = computed(() => uniqueAccountValues(items.value, "specialization"));
@@ -156,7 +154,7 @@ async function reorderProfiles(
 async function copyAccount(profile: AccountProfile): Promise<void> {
   try {
     await api.copyAccountName(profile.id);
-    ui.notify(`账号 ${profile.accountName} 已复制`, "success");
+    ui.notify("账号已复制", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
   }
@@ -183,28 +181,6 @@ async function save(input: AccountProfileInput): Promise<void> {
   }
 }
 
-async function reveal(profile: AccountProfile): Promise<void> {
-  try {
-    const password = await api.revealAccountPassword(profile.id);
-    revealedPasswords.value = { ...revealedPasswords.value, [profile.id]: password };
-    globalThis.clearTimeout(revealTimers.get(profile.id));
-    revealTimers.set(
-      profile.id,
-      globalThis.setTimeout(() => hide(profile), 15_000),
-    );
-  } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
-  }
-}
-
-function hide(profile: AccountProfile): void {
-  const next = { ...revealedPasswords.value };
-  delete next[profile.id];
-  revealedPasswords.value = next;
-  globalThis.clearTimeout(revealTimers.get(profile.id));
-  revealTimers.delete(profile.id);
-}
-
 async function copy(profile: AccountProfile): Promise<void> {
   try {
     await api.copyAccountPassword(profile.id);
@@ -219,7 +195,6 @@ async function remove(profile: AccountProfile): Promise<void> {
   try {
     await api.deleteAccountProfile(profile.id);
     selectedIds.value = selectedIds.value.filter((id) => id !== profile.id);
-    hide(profile);
     await search();
     ui.markAccountsChanged();
     ui.notify("账号档案已删除", "success");
@@ -244,10 +219,6 @@ async function removeBatch(): Promise<void> {
   };
   try {
     const deletedCount = await api.deleteAccountProfiles(ids);
-    for (const id of ids) {
-      const profile = items.value.find((item) => item.id === id);
-      if (profile) hide(profile);
-    }
     selectedIds.value = [];
     await load(query.value, needsReviewOnly.value ? true : undefined);
     ui.markAccountsChanged();
@@ -283,7 +254,6 @@ async function submitVault(): Promise<void> {
 async function lockVault(): Promise<void> {
   const result = await lock();
   if (!result) return;
-  revealedPasswords.value = {};
   ui.notify("密码库已锁定", "success");
 }
 
@@ -334,11 +304,6 @@ watch(
     }
   },
 );
-
-onBeforeUnmount(() => {
-  revealTimers.forEach((timer) => globalThis.clearTimeout(timer));
-  revealTimers.clear();
-});
 </script>
 
 <template>
@@ -506,7 +471,6 @@ onBeforeUnmount(() => {
     <div v-if="error" class="error-banner">{{ error }}</div>
     <AccountTable
       :profiles="visibleProfiles"
-      :revealed-passwords="revealedPasswords"
       :vault-unlocked="vaultStatus.unlocked"
       :sort-key="sortKey"
       :sort-direction="sortDirection"
@@ -514,8 +478,6 @@ onBeforeUnmount(() => {
       :reorder-disabled-reason="reorderDisabledReason"
       v-model:selected-ids="selectedIds"
       @edit="openEdit"
-      @reveal="reveal"
-      @hide="hide"
       @copy="copy"
       @copy-account="copyAccount"
       @delete="remove"

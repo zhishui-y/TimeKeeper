@@ -16,7 +16,7 @@ new domain models.
 | Calendar board     | Maps appointments to FullCalendar events          | Emits edit and reschedule requests; never mutates input props      |
 | Appointment drawer | Owns form draft and validation                    | Accepts optional appointment/account choices; emits save/cancel    |
 | Appointment table  | Filters and presents historical records           | Emits edit/duplicate/cancel/delete actions                         |
-| Account table      | Presents account metadata without secrets         | Emits edit/reveal/copy actions                                     |
+| Account table      | Presents account metadata without secrets         | Emits edit/copy/delete/reorder actions                             |
 | Revenue dashboard  | Loads range summary and chart series              | Receives range/granularity; emits filter changes                   |
 | Settings workspace | Coordinates import, notifications, and backups    | Emits commands through typed API only                              |
 
