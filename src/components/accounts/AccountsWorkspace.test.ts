@@ -99,6 +99,10 @@ describe("AccountsWorkspace batch delete feedback", () => {
     const ui = useUiStore(pinia);
     await flushPromises();
 
+    expect(wrapper.text()).toContain("只看暂不可用");
+    expect(wrapper.text()).toContain("0 个暂不可用");
+    expect(wrapper.text()).not.toContain("待完善");
+
     await wrapper.get('input[aria-label="全选当前列表账号"]').setValue(true);
     await buttonWithText(wrapper, "批量删除").trigger("click");
     await flushPromises();
@@ -284,7 +288,7 @@ describe("AccountsWorkspace batch delete feedback", () => {
     wrapper.unmount();
   });
 
-  it("loads, previews, persists, and resets account table column widths", async () => {
+  it("loads, previews, and persists account table column widths without a reset control", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
     vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
       initialized: true,
@@ -319,11 +323,7 @@ describe("AccountsWorkspace batch delete feedback", () => {
       ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS,
       weekly: 248,
     });
-
-    await buttonWithText(wrapper, "恢复默认列宽").trigger("click");
-    await flushPromises();
-    expect(updateWidths).toHaveBeenLastCalledWith(DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS);
-    expect(table.props("columnWidths")).toEqual(DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS);
+    expect(wrapper.text()).not.toContain("恢复默认列宽");
     wrapper.unmount();
   });
 

@@ -227,7 +227,7 @@ useModalFocus({
               </label>
               <label class="review-check">
                 <input v-model="draft.needsReview" type="checkbox" />
-                <span>标记为待完善</span>
+                <span>标记为暂不可用</span>
               </label>
             </section>
           </form>

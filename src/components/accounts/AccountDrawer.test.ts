@@ -20,6 +20,8 @@ describe("AccountDrawer", () => {
     unmount = () => wrapper.unmount();
 
     const saveButton = wrapper.get('button.button--primary[type="button"]');
+    expect(wrapper.text()).toContain("标记为暂不可用");
+    expect(wrapper.text()).not.toContain("待完善");
     expect(saveButton.attributes("disabled")).toBeDefined();
     expect(saveButton.text()).toContain("保存中");
     await saveButton.trigger("click");

@@ -9,7 +9,6 @@ import {
   ShieldCheck,
   Trash2,
   UnlockKeyhole,
-  RotateCcw,
 } from "@lucide/vue";
 import { computed, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
@@ -95,9 +94,6 @@ const visibleProfiles = computed(() =>
   ),
 );
 const activeFilterCount = computed(() => Object.values(accountFilters).filter(Boolean).length);
-const hasCustomColumnWidths = computed(
-  () => !accountTableColumnWidthsEqual(columnWidths.value, DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS),
-);
 const manualReorderEnabled = computed(() => {
   return (
     !savingOrder.value &&
@@ -186,10 +182,6 @@ function commitColumnWidth(columnKey: AccountTableColumnKey, width: number): voi
     [columnKey]: clampAccountTableColumnWidth(columnKey, width),
   };
   void persistColumnWidths(next);
-}
-
-function resetColumnWidths(): void {
-  void persistColumnWidths(cloneAccountTableColumnWidths(DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS));
 }
 
 async function syncWeeklyUsage({ reload = true }: { reload?: boolean } = {}): Promise<void> {
@@ -574,7 +566,7 @@ watch(
         </label>
         <label class="review-filter">
           <input v-model="needsReviewOnly" type="checkbox" @change="search" />
-          只看待完善
+          只看暂不可用
         </label>
         <button class="button button--compact" type="submit">查询</button>
       </form>
@@ -671,7 +663,7 @@ watch(
       <span v-if="visibleProfiles.length === items.length">共 {{ items.length }} 个账号</span>
       <span v-else>显示 {{ visibleProfiles.length }} / 共 {{ items.length }} 个账号</span>
       <span v-if="selectedCount > 0">{{ selectedCount }} 个已选中</span>
-      <span v-else>{{ items.filter((item) => item.needsReview).length }} 个待完善</span>
+      <span v-else>{{ items.filter((item) => item.needsReview).length }} 个暂不可用</span>
       <span
         v-if="batchDeleteFeedback"
         class="account-summary__feedback"
@@ -682,16 +674,6 @@ watch(
         {{ batchDeleteFeedback.message }}
       </span>
       <div class="account-summary__actions">
-        <button
-          class="button button--ghost button--compact"
-          type="button"
-          :disabled="savingColumnWidths || !hasCustomColumnWidths"
-          :title="hasCustomColumnWidths ? '恢复账号表格默认列宽' : '当前已是默认列宽'"
-          @click="resetColumnWidths"
-        >
-          <RotateCcw :size="13" />
-          {{ savingColumnWidths ? "保存列宽中…" : "恢复默认列宽" }}
-        </button>
         <button
           class="button button--ghost button--compact account-summary__clear"
           type="button"
