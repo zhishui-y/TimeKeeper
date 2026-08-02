@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AccountProfile,
+  AccountTableColumnWidths,
+  AccountUsageWeekSyncResult,
   AppSettings,
   Appointment,
   AppointmentMutationResult,
@@ -38,6 +40,11 @@ const nativeApi: ApiClient = {
   createAccountProfile: (input) => invoke<AccountProfile>("create_account_profile", { input }),
   updateAccountProfile: (id, input) =>
     invoke<AccountProfile>("update_account_profile", { id, input }),
+  updateAccountProfileUsage: (id, usageInfo) =>
+    invoke<AccountProfile>("update_account_profile_usage", { id, usageInfo }),
+  clearAccountProfileUsage: () => invoke<number>("clear_account_profile_usage"),
+  syncAccountProfileUsageWeek: () =>
+    invoke<AccountUsageWeekSyncResult>("sync_account_profile_usage_week"),
   deleteAccountProfile: (id) => invoke<void>("delete_account_profile", { id }),
   deleteAccountProfiles: (ids) => invoke<number>("delete_account_profiles", { ids }),
   reorderAccountProfiles: (ids) => invoke<void>("reorder_account_profiles", { ids }),
@@ -63,6 +70,8 @@ const nativeApi: ApiClient = {
   restoreBackup: (path) => invoke<void>("restore_backup", { path }),
   getSettings: () => invoke<AppSettings>("get_settings"),
   updateSettings: (settings) => invoke<AppSettings>("update_settings", { settings }),
+  updateAccountTableColumnWidths: (widths) =>
+    invoke<AccountTableColumnWidths>("update_account_table_column_widths", { widths }),
 
   async selectExcelFile() {
     const { open } = await import("@tauri-apps/plugin-dialog");

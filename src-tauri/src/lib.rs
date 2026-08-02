@@ -144,6 +144,9 @@ pub fn run() {
             accounts::get_account_profile,
             accounts::create_account_profile,
             accounts::update_account_profile,
+            accounts::update_account_profile_usage,
+            accounts::clear_account_profile_usage,
+            accounts::sync_account_profile_usage_week,
             accounts::delete_account_profile,
             accounts::delete_account_profiles,
             accounts::reorder_account_profiles,
@@ -161,6 +164,7 @@ pub fn run() {
             vault::copy_account_password,
             settings::get_settings,
             settings::update_settings,
+            settings::update_account_table_column_widths,
             backup::create_backup,
             backup::restore_backup,
         ])

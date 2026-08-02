@@ -84,6 +84,7 @@ export interface AccountProfile {
   currentScore?: number | null;
   highestScore?: number | null;
   scoreUpdatedAt?: string | null;
+  usageInfo?: string | null;
   notes?: string | null;
   needsReview: boolean;
   importFingerprint?: string | null;
@@ -168,11 +169,31 @@ export interface VaultStatus {
   autoLockMinutes: number;
 }
 
+export interface AccountTableColumnWidths {
+  contactName: number;
+  server: number;
+  characterName: number;
+  specialization: number;
+  gearScore: number;
+  currentScore: number;
+  highestScore: number;
+  scoreUpdatedAt: number;
+  weekly: number;
+  notes: number;
+}
+
+export interface AccountUsageWeekSyncResult {
+  weekStart: string;
+  clearedCount: number;
+}
+
 export interface AppSettings {
   defaultReminderMinutes: number;
   autoLockMinutes: number;
   backupRetention: number;
   lastAutomaticBackupDate?: string | null;
+  accountTableColumnWidths: AccountTableColumnWidths;
+  lastAccountUsageWeekStart?: string | null;
 }
 
 export interface BackupResult {

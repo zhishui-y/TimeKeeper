@@ -1,6 +1,7 @@
 import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 import type { AccountProfile } from "../../types/domain";
+import { DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS } from "../../utils/accountTableColumns";
 import AccountTable from "./AccountTable.vue";
 
 const profiles: AccountProfile[] = [
@@ -15,6 +16,7 @@ const profiles: AccountProfile[] = [
     currentScore: 2100,
     highestScore: 2300,
     scoreUpdatedAt: "2026-07-28",
+    usageInfo: "今晚使用中",
     notes: "晚间优先，赛季末冲分，长备注用于验证列表中的单行省略展示",
     needsReview: false,
     createdAt: "2026-07-28T00:00:00Z",
@@ -31,6 +33,7 @@ const profiles: AccountProfile[] = [
     currentScore: 2000,
     highestScore: 2200,
     scoreUpdatedAt: "2026-07-28",
+    usageInfo: null,
     notes: null,
     needsReview: false,
     createdAt: "2026-07-28T00:00:00Z",
@@ -49,6 +52,11 @@ describe("AccountTable", () => {
         sortDirection: "asc",
         reorderEnabled: true,
         reorderDisabledReason: "",
+        usageDrafts: { "account-1": "今晚使用中", "account-2": "" },
+        savingUsageIds: new Set<string>(),
+        columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+        clearingWeekly: false,
       },
     });
 
@@ -73,6 +81,11 @@ describe("AccountTable", () => {
         sortDirection: "asc",
         reorderEnabled: true,
         reorderDisabledReason: "",
+        usageDrafts: { "account-1": "今晚使用中" },
+        savingUsageIds: new Set<string>(),
+        columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+        clearingWeekly: false,
       },
     });
 
@@ -95,6 +108,11 @@ describe("AccountTable", () => {
         sortDirection: "asc",
         reorderEnabled: true,
         reorderDisabledReason: "",
+        usageDrafts: { "account-1": "今晚使用中", "account-2": "" },
+        savingUsageIds: new Set<string>(),
+        columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+        clearingWeekly: false,
       },
     });
 
@@ -106,8 +124,10 @@ describe("AccountTable", () => {
     expect(wrapper.find(".account-name").exists()).toBe(false);
     expect(wrapper.find(".password-cell").exists()).toBe(false);
     expect(wrapper.find('button[aria-label^="查看密码"]').exists()).toBe(false);
-    expect(wrapper.get('button[aria-label="复制账号 账号一"]').text()).toBe("复制账号");
-    expect(wrapper.get('button[aria-label="复制密码 账号一"]').text()).toBe("复制密码");
+    expect(wrapper.get('button[aria-label="复制账号 账号一"]').text()).toBe("");
+    expect(wrapper.find('button[aria-label="复制账号 账号一"] svg').exists()).toBe(true);
+    expect(wrapper.get('button[aria-label="复制密码 账号一"]').text()).toBe("");
+    expect(wrapper.find('button[aria-label="复制密码 账号一"] svg').exists()).toBe(true);
     expect(firstNotes.classes()).toContain("truncate");
     expect(firstNotes.attributes("title")).toBe(profiles[0]!.notes);
     expect(firstNotes.text()).toBe(profiles[0]!.notes);
@@ -125,10 +145,12 @@ describe("AccountTable", () => {
       "当前分",
       "最高分",
       "更新日期",
+      "本周",
       "备注",
       "",
     ]);
-    expect(rows[0]!.findAll("td")[11]!.classes()).toContain("notes-cell");
+    expect(rows[0]!.findAll("td")[11]!.classes()).toContain("usage-cell");
+    expect(rows[0]!.findAll("td")[12]!.classes()).toContain("notes-cell");
   });
 
   it("emits sortable header selections and exposes the active direction", async () => {
@@ -141,6 +163,11 @@ describe("AccountTable", () => {
         sortDirection: "desc",
         reorderEnabled: false,
         reorderDisabledReason: "恢复默认排序后可拖动",
+        usageDrafts: { "account-1": "今晚使用中", "account-2": "" },
+        savingUsageIds: new Set<string>(),
+        columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+        clearingWeekly: false,
       },
     });
 
@@ -163,6 +190,11 @@ describe("AccountTable", () => {
         sortDirection: "asc",
         reorderEnabled: true,
         reorderDisabledReason: "",
+        usageDrafts: { "account-1": "今晚使用中", "account-2": "" },
+        savingUsageIds: new Set<string>(),
+        columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+        clearingWeekly: false,
       },
     });
     const dataTransfer = {
@@ -183,5 +215,64 @@ describe("AccountTable", () => {
     await rows[1]?.trigger("dragover", { clientY: -1, dataTransfer });
     await rows[1]?.trigger("drop", { clientY: -1, dataTransfer });
     expect(wrapper.emitted("reorder")).toEqual([["account-1", "account-2", "before"]]);
+  });
+
+  it("emits inline usage draft, save, and cancel actions", async () => {
+    const wrapper = mount(AccountTable, {
+      props: {
+        profiles: [profiles[0]!],
+        vaultUnlocked: false,
+        selectedIds: [],
+        sortKey: null,
+        sortDirection: "asc",
+        reorderEnabled: true,
+        reorderDisabledReason: "",
+        usageDrafts: { "account-1": "今晚使用中" },
+        savingUsageIds: new Set<string>(),
+        columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+        clearingWeekly: false,
+      },
+    });
+    const input = wrapper.get('input[aria-label="编辑本周 账号一"]');
+
+    expect(input.attributes("disabled")).toBeUndefined();
+    await input.setValue("朋友使用到周末");
+    expect(wrapper.emitted("updateUsageDraft")).toEqual([["account-1", "朋友使用到周末"]]);
+
+    await wrapper.setProps({ usageDrafts: { "account-1": "朋友使用到周末" } });
+    await input.trigger("blur");
+    expect(wrapper.emitted("saveUsage")).toEqual([[profiles[0], "朋友使用到周末"]]);
+
+    await input.trigger("keydown", { key: "Escape" });
+    expect(wrapper.emitted("cancelUsage")).toEqual([[profiles[0]]]);
+    await wrapper.setProps({ savingUsageIds: new Set(["account-1"]) });
+    expect(input.attributes("disabled")).toBeDefined();
+  });
+
+  it("renders ten resizable content columns and keeps weekly input disabled during clearing", () => {
+    const wrapper = mount(AccountTable, {
+      props: {
+        profiles: [profiles[0]!],
+        vaultUnlocked: false,
+        selectedIds: [],
+        sortKey: null,
+        sortDirection: "asc",
+        reorderEnabled: true,
+        reorderDisabledReason: "",
+        usageDrafts: { "account-1": "今晚使用中" },
+        savingUsageIds: new Set<string>(),
+        columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS, weekly: 240 },
+        savingColumnWidths: false,
+        clearingWeekly: true,
+      },
+    });
+
+    expect(wrapper.findAll('button[aria-label^="调整"]')).toHaveLength(10);
+    expect(wrapper.get("table").attributes("style")).toContain("min-width: 1248px");
+    expect(wrapper.get('input[aria-label="编辑本周 账号一"]').attributes("disabled")).toBeDefined();
+    expect(wrapper.find('th:nth-child(7) button[aria-label^="调整"]').exists()).toBe(false);
+    expect(wrapper.find('th:nth-child(8) button[aria-label^="调整"]').exists()).toBe(false);
+    expect(wrapper.find('th:last-child button[aria-label^="调整"]').exists()).toBe(false);
   });
 });

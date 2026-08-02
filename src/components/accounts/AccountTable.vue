@@ -10,13 +10,18 @@ import {
   TriangleAlert,
 } from "@lucide/vue";
 import { computed, shallowRef, useTemplateRef, watch } from "vue";
-import type { AccountProfile } from "../../types/domain";
+import type { AccountProfile, AccountTableColumnWidths } from "../../types/domain";
+import {
+  accountTableTotalWidth,
+  type AccountTableColumnKey,
+} from "../../utils/accountTableColumns";
 import type {
   AccountDropPlacement,
   AccountProfileSortKey,
   SortDirection,
 } from "../../utils/accounts";
 import { formatShortDate } from "../../utils/formatters";
+import AccountColumnResizeHandle from "./AccountColumnResizeHandle.vue";
 
 interface AccountDragEvent {
   clientY: number;
@@ -36,6 +41,11 @@ const props = defineProps<{
   sortDirection: SortDirection;
   reorderEnabled: boolean;
   reorderDisabledReason: string;
+  usageDrafts: Readonly<Record<string, string>>;
+  savingUsageIds: ReadonlySet<string>;
+  columnWidths: AccountTableColumnWidths;
+  savingColumnWidths: boolean;
+  clearingWeekly: boolean;
 }>();
 const selectedIds = defineModel<string[]>("selectedIds", { required: true });
 
@@ -44,6 +54,12 @@ const emit = defineEmits<{
   copy: [profile: AccountProfile];
   copyAccount: [profile: AccountProfile];
   delete: [profile: AccountProfile];
+  updateUsageDraft: [profileId: string, value: string];
+  saveUsage: [profile: AccountProfile, value: string];
+  cancelUsage: [profile: AccountProfile];
+  previewColumnWidth: [columnKey: AccountTableColumnKey, width: number];
+  commitColumnWidth: [columnKey: AccountTableColumnKey, width: number];
+  cancelColumnResize: [columnKey: AccountTableColumnKey, width: number];
   sort: [sortKey: AccountProfileSortKey];
   reorder: [sourceId: string, targetId: string, placement: AccountDropPlacement];
 }>();
@@ -58,6 +74,7 @@ const allChecked = computed(
     props.profiles.every((profile) => selectedIdSet.value.has(profile.id)),
 );
 const indeterminate = computed(() => selectedIds.value.length > 0 && !allChecked.value);
+const tableMinimumWidth = computed(() => accountTableTotalWidth(props.columnWidths));
 
 watch(indeterminate, (value) => {
   if (allSelectRef.value) {
@@ -126,25 +143,47 @@ function finishDrag(): void {
   draggedId.value = null;
   dropTarget.value = null;
 }
+
+function inputValue(event: unknown): string {
+  return (event as { target?: { value?: string } } | null)?.target?.value ?? "";
+}
+
+function cancelUsage(profile: AccountProfile, event: unknown): void {
+  emit("cancelUsage", profile);
+  (event as { target?: { blur?: () => void } } | null)?.target?.blur?.();
+}
+
+function previewColumnWidth(columnKey: AccountTableColumnKey, width: number): void {
+  emit("previewColumnWidth", columnKey, width);
+}
+
+function commitColumnWidth(columnKey: AccountTableColumnKey, width: number): void {
+  emit("commitColumnWidth", columnKey, width);
+}
+
+function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): void {
+  emit("cancelColumnResize", columnKey, width);
+}
 </script>
 
 <template>
   <div class="data-surface account-table">
     <div v-if="profiles.length" class="table-scroll">
-      <table class="data-table">
+      <table class="data-table" :style="{ minWidth: `${tableMinimumWidth}px` }">
         <colgroup>
           <col style="width: 58px" />
-          <col style="width: 90px" />
-          <col style="width: 86px" />
-          <col style="width: 86px" />
-          <col style="width: 82px" />
-          <col style="width: 68px" />
-          <col style="width: 104px" />
-          <col style="width: 104px" />
-          <col style="width: 62px" />
-          <col style="width: 62px" />
-          <col style="width: 102px" />
-          <col style="width: 160px" />
+          <col :style="{ width: `${columnWidths.contactName}px` }" />
+          <col :style="{ width: `${columnWidths.server}px` }" />
+          <col :style="{ width: `${columnWidths.characterName}px` }" />
+          <col :style="{ width: `${columnWidths.specialization}px` }" />
+          <col :style="{ width: `${columnWidths.gearScore}px` }" />
+          <col style="width: 40px" />
+          <col style="width: 40px" />
+          <col :style="{ width: `${columnWidths.currentScore}px` }" />
+          <col :style="{ width: `${columnWidths.highestScore}px` }" />
+          <col :style="{ width: `${columnWidths.scoreUpdatedAt}px` }" />
+          <col :style="{ width: `${columnWidths.weekly}px` }" />
+          <col :style="{ width: `${columnWidths.notes}px` }" />
           <col style="width: 72px" />
         </colgroup>
         <thead>
@@ -159,7 +198,7 @@ function finishDrag(): void {
                 @click.stop
               />
             </th>
-            <th :aria-sort="ariaSort('contactName')">
+            <th class="resizable-header" :aria-sort="ariaSort('contactName')">
               <button
                 class="sort-button"
                 type="button"
@@ -175,8 +214,17 @@ function finishDrag(): void {
                 />
                 <ArrowUpDown v-else :size="12" />
               </button>
+              <AccountColumnResizeHandle
+                column-key="contactName"
+                label="联系人"
+                :width="columnWidths.contactName"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
             </th>
-            <th :aria-sort="ariaSort('server')">
+            <th class="resizable-header" :aria-sort="ariaSort('server')">
               <button
                 class="sort-button"
                 type="button"
@@ -192,9 +240,29 @@ function finishDrag(): void {
                 />
                 <ArrowUpDown v-else :size="12" />
               </button>
+              <AccountColumnResizeHandle
+                column-key="server"
+                label="服务器"
+                :width="columnWidths.server"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
             </th>
-            <th>角色名</th>
-            <th :aria-sort="ariaSort('specialization')">
+            <th class="resizable-header">
+              角色名
+              <AccountColumnResizeHandle
+                column-key="characterName"
+                label="角色名"
+                :width="columnWidths.characterName"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
+            <th class="resizable-header" :aria-sort="ariaSort('specialization')">
               <button
                 class="sort-button"
                 type="button"
@@ -213,8 +281,17 @@ function finishDrag(): void {
                 />
                 <ArrowUpDown v-else :size="12" />
               </button>
+              <AccountColumnResizeHandle
+                column-key="specialization"
+                label="职业 / 心法"
+                :width="columnWidths.specialization"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
             </th>
-            <th :aria-sort="ariaSort('gearScore')">
+            <th class="resizable-header" :aria-sort="ariaSort('gearScore')">
               <button
                 class="sort-button"
                 type="button"
@@ -230,10 +307,19 @@ function finishDrag(): void {
                 />
                 <ArrowUpDown v-else :size="12" />
               </button>
+              <AccountColumnResizeHandle
+                column-key="gearScore"
+                label="装分"
+                :width="columnWidths.gearScore"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
             </th>
             <th>账号</th>
             <th>密码</th>
-            <th :aria-sort="ariaSort('currentScore')">
+            <th class="resizable-header" :aria-sort="ariaSort('currentScore')">
               <button
                 class="sort-button"
                 type="button"
@@ -249,8 +335,17 @@ function finishDrag(): void {
                 />
                 <ArrowUpDown v-else :size="12" />
               </button>
+              <AccountColumnResizeHandle
+                column-key="currentScore"
+                label="当前分"
+                :width="columnWidths.currentScore"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
             </th>
-            <th :aria-sort="ariaSort('highestScore')">
+            <th class="resizable-header" :aria-sort="ariaSort('highestScore')">
               <button
                 class="sort-button"
                 type="button"
@@ -266,9 +361,52 @@ function finishDrag(): void {
                 />
                 <ArrowUpDown v-else :size="12" />
               </button>
+              <AccountColumnResizeHandle
+                column-key="highestScore"
+                label="最高分"
+                :width="columnWidths.highestScore"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
             </th>
-            <th>更新日期</th>
-            <th>备注</th>
+            <th class="resizable-header">
+              更新日期
+              <AccountColumnResizeHandle
+                column-key="scoreUpdatedAt"
+                label="更新日期"
+                :width="columnWidths.scoreUpdatedAt"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
+            <th class="resizable-header">
+              本周
+              <AccountColumnResizeHandle
+                column-key="weekly"
+                label="本周"
+                :width="columnWidths.weekly"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
+            <th class="resizable-header">
+              备注
+              <AccountColumnResizeHandle
+                column-key="notes"
+                label="备注"
+                :width="columnWidths.notes"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
             <th aria-label="操作" />
           </tr>
         </thead>
@@ -284,6 +422,9 @@ function finishDrag(): void {
               draggedId,
               dropTarget?.id,
               dropTarget?.placement,
+              usageDrafts[profile.id],
+              savingUsageIds.has(profile.id),
+              clearingWeekly,
             ]"
             :class="{
               'needs-review': profile.needsReview,
@@ -332,33 +473,47 @@ function finishDrag(): void {
             <td class="mono-number">{{ profile.gearScore || "—" }}</td>
             <td class="copy-cell">
               <button
-                class="button button--compact copy-button"
+                class="icon-button copy-button"
                 type="button"
                 title="复制账号"
                 :aria-label="`复制账号 ${profile.accountName}`"
                 @click="emit('copyAccount', profile)"
               >
-                <Copy :size="12" />
-                复制账号
+                <Copy :size="15" />
               </button>
             </td>
             <td class="copy-cell">
               <button
-                class="button button--compact copy-button"
+                class="icon-button copy-button"
                 type="button"
                 :disabled="!vaultUnlocked"
                 :title="vaultUnlocked ? '复制密码' : '解锁密码库后可复制密码'"
                 :aria-label="`复制密码 ${profile.accountName}`"
                 @click="emit('copy', profile)"
               >
-                <Copy :size="12" />
-                复制密码
+                <Copy :size="15" />
               </button>
             </td>
             <td class="mono-number score-cell">{{ profile.currentScore ?? "—" }}</td>
             <td class="mono-number score-cell">{{ profile.highestScore ?? "—" }}</td>
             <td class="muted">
               {{ profile.scoreUpdatedAt ? formatShortDate(profile.scoreUpdatedAt) : "—" }}
+            </td>
+            <td class="usage-cell">
+              <input
+                class="usage-input"
+                type="text"
+                :value="usageDrafts[profile.id] ?? ''"
+                :disabled="savingUsageIds.has(profile.id) || clearingWeekly"
+                :aria-busy="savingUsageIds.has(profile.id) || clearingWeekly"
+                :aria-label="`编辑本周 ${profile.accountName}`"
+                :title="usageDrafts[profile.id] || '点击填写本周'"
+                placeholder="点击填写"
+                @input="emit('updateUsageDraft', profile.id, inputValue($event))"
+                @keydown.enter.prevent="emit('saveUsage', profile, usageDrafts[profile.id] ?? '')"
+                @keydown.esc.prevent="cancelUsage(profile, $event)"
+                @blur="emit('saveUsage', profile, usageDrafts[profile.id] ?? '')"
+              />
             </td>
             <td
               class="notes-cell truncate"
@@ -403,8 +558,8 @@ function finishDrag(): void {
   flex: 1;
 }
 
-.account-table .data-table {
-  min-width: 1136px;
+.resizable-header {
+  position: sticky;
 }
 
 .select-cell {
@@ -501,16 +656,47 @@ function finishDrag(): void {
 }
 
 .account-table .copy-cell {
-  padding-inline: 8px;
+  padding-inline: 6px;
+  text-align: center;
 }
 
 .account-table .copy-button {
-  width: 100%;
-  min-height: 28px;
-  gap: 4px;
+  width: 28px;
+  height: 28px;
+  margin-inline: auto;
+}
+
+.usage-cell {
   padding-inline: 6px;
-  border-radius: 7px;
-  font-size: 11px;
+}
+
+.usage-input {
+  width: 100%;
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+  text-overflow: ellipsis;
+}
+
+.usage-input:hover:not(:disabled) {
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.usage-input:focus {
+  border-color: var(--brand-border);
+  outline: 2px solid color-mix(in srgb, var(--brand) 18%, transparent);
+  outline-offset: 1px;
+  background: var(--surface);
+}
+
+.usage-input:disabled {
+  cursor: wait;
+  opacity: 0.58;
 }
 
 .notes-cell {

@@ -1,4 +1,5 @@
-use chrono::{NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Days, FixedOffset, NaiveDate, Utc};
+use serde::Serialize;
 use sqlx::{QueryBuilder, Row, Sqlite, Transaction, sqlite::SqliteRow};
 use tauri::{AppHandle, Manager, Runtime, State};
 use uuid::Uuid;
@@ -8,8 +9,16 @@ use crate::{
     db::{Database, ImportWriteResult},
     importer::LegacyAccountProfile,
     models::{AccountProfile, AccountProfileInput},
+    settings::SettingsState,
     vault::{VaultState, copy_text_to_clipboard, run_blocking_vault_operation},
 };
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsageWeekSyncResult {
+    pub week_start: String,
+    pub cleared_count: u64,
+}
 
 fn optional_text(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
@@ -66,6 +75,7 @@ pub(crate) fn profile_from_row(row: &SqliteRow) -> Result<AccountProfile, String
         current_score: row.try_get("current_score").map_err(db_error)?,
         highest_score: row.try_get("highest_score").map_err(db_error)?,
         score_updated_at: row.try_get("score_updated_at").map_err(db_error)?,
+        usage_info: row.try_get("usage_info").map_err(db_error)?,
         notes: row.try_get("notes").map_err(db_error)?,
         needs_review: row.try_get::<i64, _>("needs_review").map_err(db_error)? != 0,
         import_fingerprint: row.try_get("import_fingerprint").map_err(db_error)?,
@@ -395,6 +405,133 @@ async fn update_account_profile_in_transaction(
         .await
         .map_err(db_error)?;
     profile_from_row(&row)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn update_account_profile_usage(
+    database: State<'_, Database>,
+    backup: State<'_, BackupState>,
+    settings: State<'_, SettingsState>,
+    id: String,
+    usage_info: Option<String>,
+) -> Result<AccountProfile, String> {
+    let _operation_guard = backup.lock_data_operation().await;
+    update_account_profile_usage_for_week_impl(
+        database.inner(),
+        settings.inner(),
+        &id,
+        usage_info,
+        Utc::now(),
+    )
+    .await
+}
+
+pub(crate) async fn update_account_profile_usage_for_week_impl(
+    database: &Database,
+    settings: &SettingsState,
+    id: &str,
+    usage_info: Option<String>,
+    now: DateTime<Utc>,
+) -> Result<AccountProfile, String> {
+    sync_account_profile_usage_week_impl(database, settings, now).await?;
+    update_account_profile_usage_impl(database, id, usage_info).await
+}
+
+pub(crate) async fn update_account_profile_usage_impl(
+    database: &Database,
+    id: &str,
+    usage_info: Option<String>,
+) -> Result<AccountProfile, String> {
+    let usage_info = optional_text(usage_info);
+    let now = Utc::now().to_rfc3339();
+    let result =
+        sqlx::query("UPDATE account_profiles SET usage_info = ?, updated_at = ? WHERE id = ?")
+            .bind(usage_info)
+            .bind(now)
+            .bind(id)
+            .execute(database.pool())
+            .await
+            .map_err(db_error)?;
+
+    if result.rows_affected() == 0 {
+        return Err(format!("账号档案不存在: {id}"));
+    }
+    get_account_profile_impl(database, id).await
+}
+
+fn china_week_start(now: DateTime<Utc>) -> Result<NaiveDate, String> {
+    let offset = FixedOffset::east_opt(8 * 60 * 60).ok_or("无法创建东八区时区")?;
+    let local_date = now.with_timezone(&offset).date_naive();
+    local_date
+        .checked_sub_days(Days::new(
+            local_date.weekday().num_days_from_monday().into(),
+        ))
+        .ok_or_else(|| "无法计算账号本周起始日期".to_string())
+}
+
+pub(crate) async fn clear_account_profile_usage_impl(database: &Database) -> Result<u64, String> {
+    sqlx::query(
+        "UPDATE account_profiles SET usage_info = NULL, updated_at = ? WHERE usage_info IS NOT NULL",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .execute(database.pool())
+    .await
+    .map(|result| result.rows_affected())
+    .map_err(db_error)
+}
+
+pub(crate) async fn sync_account_profile_usage_week_impl(
+    database: &Database,
+    settings: &SettingsState,
+    now: DateTime<Utc>,
+) -> Result<AccountUsageWeekSyncResult, String> {
+    let week_start = china_week_start(now)?;
+    let snapshot = settings.snapshot().map_err(|error| error.to_string())?;
+    let previous_week_start = snapshot
+        .last_account_usage_week_start
+        .as_deref()
+        .map(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d"))
+        .transpose()
+        .map_err(|_| "账号本周起始日期格式无效".to_string())?;
+
+    if previous_week_start.is_some_and(|previous| previous >= week_start) {
+        return Ok(AccountUsageWeekSyncResult {
+            week_start: week_start.format("%Y-%m-%d").to_string(),
+            cleared_count: 0,
+        });
+    }
+
+    let cleared_count = if previous_week_start.is_some() {
+        clear_account_profile_usage_impl(database).await?
+    } else {
+        0
+    };
+    settings
+        .record_account_usage_week_start(week_start)
+        .map_err(|error| error.to_string())?;
+    Ok(AccountUsageWeekSyncResult {
+        week_start: week_start.format("%Y-%m-%d").to_string(),
+        cleared_count,
+    })
+}
+
+#[tauri::command]
+pub async fn clear_account_profile_usage(
+    database: State<'_, Database>,
+    backup: State<'_, BackupState>,
+) -> Result<u64, String> {
+    let _operation_guard = backup.lock_data_operation().await;
+    clear_account_profile_usage_impl(database.inner()).await
+}
+
+#[tauri::command]
+pub async fn sync_account_profile_usage_week(
+    database: State<'_, Database>,
+    backup: State<'_, BackupState>,
+    settings: State<'_, SettingsState>,
+) -> Result<AccountUsageWeekSyncResult, String> {
+    let _operation_guard = backup.lock_data_operation().await;
+    sync_account_profile_usage_week_impl(database.inner(), settings.inner(), Utc::now()).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -785,7 +922,7 @@ pub(crate) async fn find_imported_account_profile_id(
 mod tests {
     use super::*;
     use crate::importer::LegacyAccountProfile;
-    use chrono::NaiveDate;
+    use chrono::{NaiveDate, TimeZone};
 
     fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
         tokio::runtime::Builder::new_current_thread()
@@ -810,6 +947,15 @@ mod tests {
             notes: None,
             needs_review: Some(false),
         }
+    }
+
+    fn test_settings(name: &str) -> (std::path::PathBuf, SettingsState) {
+        let dir = std::env::temp_dir().join(format!(
+            "timekeeper-account-week-{name}-{}",
+            uuid::Uuid::now_v7()
+        ));
+        let settings = SettingsState::load(&dir).unwrap();
+        (dir, settings)
     }
 
     #[test]
@@ -840,6 +986,49 @@ mod tests {
                 get_account_profile_impl(&database, &created.id)
                     .await
                     .is_err()
+            );
+        });
+    }
+
+    #[test]
+    fn updates_only_normalized_usage_info() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let first = create_account_profile_impl(&database, input("usage-account-a"))
+                .await
+                .unwrap();
+            let second = create_account_profile_impl(&database, input("usage-account-b"))
+                .await
+                .unwrap();
+
+            let updated = update_account_profile_usage_impl(
+                &database,
+                &first.id,
+                Some("  今晚朋友使用  ".into()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(updated.usage_info.as_deref(), Some("今晚朋友使用"));
+            assert_eq!(updated.account_name, first.account_name);
+            assert_eq!(updated.contact_name, first.contact_name);
+            assert_eq!(
+                get_account_profile_impl(&database, &second.id)
+                    .await
+                    .unwrap()
+                    .usage_info,
+                None
+            );
+
+            let cleared =
+                update_account_profile_usage_impl(&database, &first.id, Some("   ".into()))
+                    .await
+                    .unwrap();
+            assert_eq!(cleared.usage_info, None);
+            assert!(
+                update_account_profile_usage_impl(&database, "missing-account", None)
+                    .await
+                    .unwrap_err()
+                    .contains("不存在")
             );
         });
     }
@@ -1079,6 +1268,159 @@ mod tests {
             assert_eq!((second.inserted, second.skipped), (0, 1));
             assert_eq!(first.record_id, second.record_id);
             transaction.commit().await.unwrap();
+        });
+    }
+
+    #[test]
+    fn weekly_usage_sync_preserves_the_first_week_and_clears_at_the_next_china_monday() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let (settings_dir, settings) = test_settings("rollover");
+            let first = create_account_profile_impl(&database, input("weekly-account-a"))
+                .await
+                .unwrap();
+            let second = create_account_profile_impl(&database, input("weekly-account-b"))
+                .await
+                .unwrap();
+            update_account_profile_usage_impl(&database, &first.id, Some("本周占用".into()))
+                .await
+                .unwrap();
+            update_account_profile_usage_impl(&database, &second.id, Some("朋友使用".into()))
+                .await
+                .unwrap();
+
+            let sunday = Utc.with_ymd_and_hms(2026, 8, 2, 3, 0, 0).unwrap();
+            let initialized = sync_account_profile_usage_week_impl(&database, &settings, sunday)
+                .await
+                .unwrap();
+            assert_eq!(initialized.week_start, "2026-07-27");
+            assert_eq!(initialized.cleared_count, 0);
+            assert_eq!(
+                get_account_profile_impl(&database, &first.id)
+                    .await
+                    .unwrap()
+                    .usage_info
+                    .as_deref(),
+                Some("本周占用")
+            );
+
+            let monday = Utc.with_ymd_and_hms(2026, 8, 2, 16, 1, 0).unwrap();
+            let cleared = sync_account_profile_usage_week_impl(&database, &settings, monday)
+                .await
+                .unwrap();
+            assert_eq!(cleared.week_start, "2026-08-03");
+            assert_eq!(cleared.cleared_count, 2);
+            assert_eq!(
+                sync_account_profile_usage_week_impl(&database, &settings, monday)
+                    .await
+                    .unwrap()
+                    .cleared_count,
+                0
+            );
+            assert_eq!(
+                get_account_profile_impl(&database, &first.id)
+                    .await
+                    .unwrap()
+                    .usage_info,
+                None
+            );
+            std::fs::remove_dir_all(settings_dir).unwrap();
+        });
+    }
+
+    #[test]
+    fn saving_after_a_week_boundary_clears_stale_rows_before_writing_the_new_value() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let (settings_dir, settings) = test_settings("save-after-rollover");
+            settings
+                .record_account_usage_week_start(NaiveDate::from_ymd_opt(2026, 8, 3).unwrap())
+                .unwrap();
+            let first = create_account_profile_impl(&database, input("new-week-account-a"))
+                .await
+                .unwrap();
+            let second = create_account_profile_impl(&database, input("new-week-account-b"))
+                .await
+                .unwrap();
+            update_account_profile_usage_impl(&database, &first.id, Some("旧内容".into()))
+                .await
+                .unwrap();
+            update_account_profile_usage_impl(&database, &second.id, Some("旧内容".into()))
+                .await
+                .unwrap();
+
+            let next_monday = Utc.with_ymd_and_hms(2026, 8, 9, 16, 1, 0).unwrap();
+            let updated = update_account_profile_usage_for_week_impl(
+                &database,
+                &settings,
+                &first.id,
+                Some("新一周内容".into()),
+                next_monday,
+            )
+            .await
+            .unwrap();
+            assert_eq!(updated.usage_info.as_deref(), Some("新一周内容"));
+            assert_eq!(
+                get_account_profile_impl(&database, &second.id)
+                    .await
+                    .unwrap()
+                    .usage_info,
+                None
+            );
+            assert_eq!(
+                settings
+                    .snapshot()
+                    .unwrap()
+                    .last_account_usage_week_start
+                    .as_deref(),
+                Some("2026-08-10")
+            );
+            std::fs::remove_dir_all(settings_dir).unwrap();
+        });
+    }
+
+    #[test]
+    fn manual_weekly_usage_clear_updates_every_populated_profile_in_one_statement() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let first = create_account_profile_impl(&database, input("manual-clear-a"))
+                .await
+                .unwrap();
+            let second = create_account_profile_impl(&database, input("manual-clear-b"))
+                .await
+                .unwrap();
+            create_account_profile_impl(&database, input("manual-clear-empty"))
+                .await
+                .unwrap();
+            update_account_profile_usage_impl(&database, &first.id, Some("占用".into()))
+                .await
+                .unwrap();
+            update_account_profile_usage_impl(&database, &second.id, Some("备用".into()))
+                .await
+                .unwrap();
+
+            assert_eq!(
+                clear_account_profile_usage_impl(&database).await.unwrap(),
+                2
+            );
+            assert_eq!(
+                clear_account_profile_usage_impl(&database).await.unwrap(),
+                0
+            );
+            assert_eq!(
+                get_account_profile_impl(&database, &first.id)
+                    .await
+                    .unwrap()
+                    .usage_info,
+                None
+            );
+            assert_eq!(
+                get_account_profile_impl(&database, &second.id)
+                    .await
+                    .unwrap()
+                    .usage_info,
+                None
+            );
         });
     }
 }

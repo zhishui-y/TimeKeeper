@@ -1,6 +1,8 @@
 import type {
   AccountProfile,
   AccountProfileInput,
+  AccountTableColumnWidths,
+  AccountUsageWeekSyncResult,
   AppSettings,
   Appointment,
   AppointmentFilters,
@@ -33,6 +35,9 @@ export interface ApiClient {
   getAccountProfile(id: string): Promise<AccountProfile>;
   createAccountProfile(input: AccountProfileInput): Promise<AccountProfile>;
   updateAccountProfile(id: string, input: AccountProfileInput): Promise<AccountProfile>;
+  updateAccountProfileUsage(id: string, usageInfo?: string | null): Promise<AccountProfile>;
+  clearAccountProfileUsage(): Promise<number>;
+  syncAccountProfileUsageWeek(): Promise<AccountUsageWeekSyncResult>;
   deleteAccountProfile(id: string): Promise<void>;
   deleteAccountProfiles(ids: string[]): Promise<number>;
   reorderAccountProfiles(ids: string[]): Promise<void>;
@@ -61,6 +66,9 @@ export interface ApiClient {
   restoreBackup(path: string): Promise<void>;
   getSettings(): Promise<AppSettings>;
   updateSettings(settings: AppSettings): Promise<AppSettings>;
+  updateAccountTableColumnWidths(
+    widths: AccountTableColumnWidths,
+  ): Promise<AccountTableColumnWidths>;
 
   selectExcelFile(): Promise<string | null>;
   selectBackupDestination(): Promise<string | null>;

@@ -52,7 +52,7 @@ struct RequiredColumn {
     primary_key: i64,
 }
 
-const ACCOUNT_PROFILE_COLUMNS: [RequiredColumn; 16] = [
+const ACCOUNT_PROFILE_COLUMNS: [RequiredColumn; 17] = [
     required_column("id", "TEXT", true, None, 1),
     required_column("contact_name", "TEXT", false, None, 0),
     required_column("server", "TEXT", false, None, 0),
@@ -69,6 +69,7 @@ const ACCOUNT_PROFILE_COLUMNS: [RequiredColumn; 16] = [
     required_column("created_at", "TEXT", true, None, 0),
     required_column("updated_at", "TEXT", true, None, 0),
     required_column("sort_order", "INTEGER", true, Some("0"), 0),
+    required_column("usage_info", "TEXT", false, None, 0),
 ];
 
 const APPOINTMENT_COLUMNS: [RequiredColumn; 19] = [
@@ -1575,6 +1576,10 @@ fn prune_automatic_backups(directory: &Path, retention: usize) -> Result<(), Bac
 mod tests {
     use super::*;
     use crate::{
+        accounts::{
+            create_account_profile_impl, get_account_profile_impl,
+            update_account_profile_usage_impl,
+        },
         appointments::{
             create_appointment_impl, delete_appointment_impl, duplicate_appointment_impl,
             get_appointment_impl, insert_imported_appointment, set_appointment_service_status_impl,
@@ -1583,9 +1588,11 @@ mod tests {
         db::Database,
         importer::parse_legacy_workbook,
         models::{
-            AppointmentInput, AppointmentMode, ReportGranularity, ServiceStatus, SettlementStatus,
+            AccountProfileInput, AppointmentInput, AppointmentMode, ReportGranularity,
+            ServiceStatus, SettlementStatus,
         },
         reports::get_revenue_summary_impl,
+        settings::AccountTableColumnWidths,
         vault::VaultState,
     };
 
@@ -2201,8 +2208,19 @@ mod tests {
         let runtime = runtime();
         let password = "correct horse battery staple";
 
-        let (backup, target_id) = runtime.block_on(async {
+        let (backup, target_id, profile_id) = runtime.block_on(async {
             let settings = SettingsState::load(&dir).unwrap();
+            let custom_widths = AccountTableColumnWidths {
+                weekly: 224,
+                notes: 208,
+                ..AccountTableColumnWidths::default()
+            };
+            settings
+                .update_account_table_column_widths(custom_widths)
+                .unwrap();
+            settings
+                .record_account_usage_week_start(NaiveDate::from_ymd_opt(2026, 7, 13).unwrap())
+                .unwrap();
             let vault = VaultState::new(&dir).unwrap();
             assert!(vault.initialize(password.into()).unwrap().unlocked);
             vault
@@ -2212,6 +2230,32 @@ mod tests {
             assert!(vault.unlock(password.into()).unwrap().unlocked);
 
             let database = Database::initialize(&database_path).await.unwrap();
+            let profile = create_account_profile_impl(
+                &database,
+                AccountProfileInput {
+                    contact_name: Some("备份联系人".into()),
+                    server: None,
+                    character_name: None,
+                    specialization: None,
+                    gear_score: None,
+                    account_name: "workflow-account".into(),
+                    password: None,
+                    current_score: None,
+                    highest_score: None,
+                    score_updated_at: None,
+                    notes: None,
+                    needs_review: Some(false),
+                },
+            )
+            .await
+            .unwrap();
+            let profile = update_account_profile_usage_impl(
+                &database,
+                &profile.id,
+                Some("备份时正在使用".into()),
+            )
+            .await
+            .unwrap();
             let mut existing = business_input("2026-07-13", "19:00", "21:00", 0);
             existing.mode = AppointmentMode::Entertainment;
             existing.settlement_status = SettlementStatus::NotApplicable;
@@ -2284,7 +2328,7 @@ mod tests {
             drop(database);
             drop(vault);
             drop(settings);
-            (backup, target.appointment.id)
+            (backup, target.appointment.id, profile.id)
         });
 
         assert!(Path::new(&backup.path).is_file());
@@ -2309,12 +2353,27 @@ mod tests {
             assert_eq!(revenue.settled_minor, 12_000);
             assert_eq!(revenue.unsettled_minor, 0);
 
+            let restored_profile = get_account_profile_impl(&restored_database, &profile_id)
+                .await
+                .unwrap();
+            assert_eq!(
+                restored_profile.usage_info.as_deref(),
+                Some("备份时正在使用")
+            );
+
             let restored_vault = VaultState::new(&dir).unwrap();
             assert!(!restored_vault.status().unwrap().unlocked);
             assert!(restored_vault.unlock(password.into()).unwrap().unlocked);
             assert_eq!(
                 restored_vault.get_secret("workflow-account").unwrap(),
                 "original-secret"
+            );
+            let restored_settings = SettingsState::load(&dir).unwrap().snapshot().unwrap();
+            assert_eq!(restored_settings.account_table_column_widths.weekly, 224);
+            assert_eq!(restored_settings.account_table_column_widths.notes, 208);
+            assert_eq!(
+                restored_settings.last_account_usage_week_start.as_deref(),
+                Some("2026-07-13")
             );
             restored_database.pool().close().await;
         });

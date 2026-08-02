@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
+use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use thiserror::Error;
@@ -16,11 +17,72 @@ const SETTINGS_RECOVERY_FILE_NAME: &str = "settings.previous.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct AccountTableColumnWidths {
+    pub contact_name: u32,
+    pub server: u32,
+    pub character_name: u32,
+    pub specialization: u32,
+    pub gear_score: u32,
+    pub current_score: u32,
+    pub highest_score: u32,
+    pub score_updated_at: u32,
+    pub weekly: u32,
+    pub notes: u32,
+}
+
+impl Default for AccountTableColumnWidths {
+    fn default() -> Self {
+        Self {
+            contact_name: 90,
+            server: 86,
+            character_name: 86,
+            specialization: 82,
+            gear_score: 68,
+            current_score: 62,
+            highest_score: 62,
+            score_updated_at: 102,
+            weekly: 160,
+            notes: 160,
+        }
+    }
+}
+
+impl AccountTableColumnWidths {
+    fn validate(&self) -> Result<(), SettingsError> {
+        let widths = [
+            ("联系人", self.contact_name, 72),
+            ("服务器", self.server, 72),
+            ("角色名", self.character_name, 72),
+            ("职业 / 心法", self.specialization, 80),
+            ("装分", self.gear_score, 60),
+            ("当前分", self.current_score, 60),
+            ("最高分", self.highest_score, 60),
+            ("更新日期", self.score_updated_at, 92),
+            ("本周", self.weekly, 100),
+            ("备注", self.notes, 100),
+        ];
+        for (label, width, minimum) in widths {
+            if !(minimum..=480).contains(&width) {
+                return Err(SettingsError::Validation(format!(
+                    "账号表格{label}列宽必须在{minimum}到480像素之间"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub default_reminder_minutes: u32,
     pub auto_lock_minutes: u32,
     pub backup_retention: u32,
     pub last_automatic_backup_date: Option<String>,
+    #[serde(default)]
+    pub account_table_column_widths: AccountTableColumnWidths,
+    #[serde(default)]
+    pub last_account_usage_week_start: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -30,6 +92,8 @@ impl Default for AppSettings {
             auto_lock_minutes: 15,
             backup_retention: 30,
             last_automatic_backup_date: None,
+            account_table_column_widths: AccountTableColumnWidths::default(),
+            last_account_usage_week_start: None,
         }
     }
 }
@@ -53,6 +117,17 @@ impl AppSettings {
             chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| {
                 SettingsError::Validation("自动备份日期必须使用 YYYY-MM-DD 格式".into())
             })?;
+        }
+        self.account_table_column_widths.validate()?;
+        if let Some(date) = &self.last_account_usage_week_start {
+            let date = NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| {
+                SettingsError::Validation("账号本周起始日期必须使用 YYYY-MM-DD 格式".into())
+            })?;
+            if date.weekday().num_days_from_monday() != 0 {
+                return Err(SettingsError::Validation(
+                    "账号本周起始日期必须是周一".into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -110,6 +185,8 @@ impl SettingsState {
 
         // This value is maintained only after a backup has actually succeeded.
         proposed.last_automatic_backup_date = current.last_automatic_backup_date.clone();
+        // This value advances only after weekly account usage synchronization succeeds.
+        proposed.last_account_usage_week_start = current.last_account_usage_week_start.clone();
         proposed.validate()?;
         write_settings_atomic(&self.path, &self.recovery_path, &proposed)?;
         *current = proposed.clone();
@@ -123,6 +200,36 @@ impl SettingsState {
         let mut current = self.lock()?;
         let mut updated = current.clone();
         updated.last_automatic_backup_date = Some(date.format("%Y-%m-%d").to_string());
+        write_settings_atomic(&self.path, &self.recovery_path, &updated)?;
+        *current = updated.clone();
+        Ok(updated)
+    }
+
+    pub(crate) fn update_account_table_column_widths(
+        &self,
+        widths: AccountTableColumnWidths,
+    ) -> Result<AccountTableColumnWidths, SettingsError> {
+        widths.validate()?;
+        let mut current = self.lock()?;
+        let mut updated = current.clone();
+        updated.account_table_column_widths = widths.clone();
+        write_settings_atomic(&self.path, &self.recovery_path, &updated)?;
+        *current = updated;
+        Ok(widths)
+    }
+
+    pub(crate) fn record_account_usage_week_start(
+        &self,
+        date: NaiveDate,
+    ) -> Result<AppSettings, SettingsError> {
+        if date.weekday().num_days_from_monday() != 0 {
+            return Err(SettingsError::Validation(
+                "账号本周起始日期必须是周一".into(),
+            ));
+        }
+        let mut current = self.lock()?;
+        let mut updated = current.clone();
+        updated.last_account_usage_week_start = Some(date.format("%Y-%m-%d").to_string());
         write_settings_atomic(&self.path, &self.recovery_path, &updated)?;
         *current = updated.clone();
         Ok(updated)
@@ -163,6 +270,18 @@ pub async fn update_settings(
             Err(error.to_string())
         }
     }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn update_account_table_column_widths(
+    widths: AccountTableColumnWidths,
+    state: State<'_, SettingsState>,
+    backup: State<'_, BackupState>,
+) -> Result<AccountTableColumnWidths, String> {
+    let _operation_guard = backup.lock_data_operation().await;
+    state
+        .update_account_table_column_widths(widths)
+        .map_err(|error| error.to_string())
 }
 
 fn load_with_recovery(path: &Path, recovery_path: &Path) -> Result<AppSettings, SettingsError> {
@@ -318,6 +437,65 @@ mod tests {
                 .as_deref(),
             Some("2026-07-13")
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn loads_legacy_settings_with_default_account_table_preferences() {
+        let dir = test_dir("legacy-account-table-preferences");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(SETTINGS_FILE_NAME),
+            serde_json::to_vec(&serde_json::json!({
+                "defaultReminderMinutes": 45,
+                "autoLockMinutes": 20,
+                "backupRetention": 14,
+                "lastAutomaticBackupDate": null
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let loaded = SettingsState::load(&dir).unwrap().snapshot().unwrap();
+        assert_eq!(
+            loaded.account_table_column_widths,
+            AccountTableColumnWidths::default()
+        );
+        assert_eq!(loaded.last_account_usage_week_start, None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn validates_and_persists_account_table_column_widths_independently() {
+        let dir = test_dir("account-table-widths");
+        let state = SettingsState::load(&dir).unwrap();
+        state
+            .record_account_usage_week_start(NaiveDate::from_ymd_opt(2026, 7, 27).unwrap())
+            .unwrap();
+
+        let widths = AccountTableColumnWidths {
+            weekly: 240,
+            notes: 220,
+            ..AccountTableColumnWidths::default()
+        };
+        assert_eq!(
+            state
+                .update_account_table_column_widths(widths.clone())
+                .unwrap(),
+            widths
+        );
+        let reloaded = SettingsState::load(&dir).unwrap().snapshot().unwrap();
+        assert_eq!(reloaded.account_table_column_widths, widths);
+        assert_eq!(
+            reloaded.last_account_usage_week_start.as_deref(),
+            Some("2026-07-27")
+        );
+
+        let invalid = AccountTableColumnWidths {
+            weekly: 99,
+            ..AccountTableColumnWidths::default()
+        };
+        assert!(state.update_account_table_column_widths(invalid).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
 }

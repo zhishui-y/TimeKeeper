@@ -269,6 +269,72 @@ describe("browser mock API", () => {
     await mockApi.reorderAccountProfiles(before.map((profile) => profile.id));
   });
 
+  it("updates non-secret account usage while the vault is locked", async () => {
+    const profile = (await mockApi.listAccountProfiles())[0]!;
+    await mockApi.lockVault();
+
+    const updated = await mockApi.updateAccountProfileUsage(profile.id, "  今晚使用中  ");
+    expect(updated).toMatchObject({
+      id: profile.id,
+      accountName: profile.accountName,
+      usageInfo: "今晚使用中",
+    });
+    await expect(mockApi.updateAccountProfileUsage(profile.id, "   ")).resolves.toMatchObject({
+      usageInfo: null,
+    });
+  });
+
+  it("persists validated account table widths in browser demo mode", async () => {
+    const previous = (await mockApi.getSettings()).accountTableColumnWidths;
+    const widths = { ...previous, contactName: 72, weekly: 224 };
+
+    await expect(mockApi.updateAccountTableColumnWidths(widths)).resolves.toEqual(widths);
+    await expect(mockApi.getSettings()).resolves.toMatchObject({
+      accountTableColumnWidths: widths,
+    });
+    expect(localStorage.getItem("timekeeper.demo.accountTableColumnWidths")).toBe(
+      JSON.stringify(widths),
+    );
+    await expect(mockApi.updateAccountTableColumnWidths({ ...widths, weekly: 99 })).rejects.toThrow(
+      "列宽超出允许范围",
+    );
+
+    await mockApi.updateAccountTableColumnWidths(previous);
+  });
+
+  it("preserves the first weekly usage marker then clears at China Monday", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-02T12:00:00Z"));
+    const profile = (await mockApi.listAccountProfiles())[0]!;
+    await mockApi.updateAccountProfileUsage(profile.id, "周日安排");
+    const populatedCount = (await mockApi.listAccountProfiles()).filter(
+      (account) => account.usageInfo != null,
+    ).length;
+
+    await expect(mockApi.syncAccountProfileUsageWeek()).resolves.toMatchObject({
+      weekStart: "2026-07-27",
+      clearedCount: 0,
+    });
+
+    vi.setSystemTime(new Date("2026-08-02T16:00:00Z"));
+    await expect(mockApi.syncAccountProfileUsageWeek()).resolves.toMatchObject({
+      weekStart: "2026-08-03",
+      clearedCount: populatedCount,
+    });
+    await expect(mockApi.getAccountProfile(profile.id)).resolves.toMatchObject({
+      usageInfo: null,
+    });
+    await expect(mockApi.syncAccountProfileUsageWeek()).resolves.toMatchObject({
+      clearedCount: 0,
+    });
+
+    await mockApi.updateAccountProfileUsage(profile.id, "周一安排");
+    await expect(mockApi.clearAccountProfileUsage()).resolves.toBe(1);
+    await expect(mockApi.getAccountProfile(profile.id)).resolves.toMatchObject({
+      usageInfo: null,
+    });
+  });
+
   it("restores the in-memory demo data captured by a backup", async () => {
     const created = await mockApi.createAppointment(
       businessInput("2099-08-03", "10:00", "11:00", "备份恢复回归", 8_800),

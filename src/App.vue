@@ -153,7 +153,7 @@ onUnmounted(() => {
     </Transition>
 
     <VaultGate
-      v-if="!vaultReady || !vault.status.value.unlocked"
+      v-if="!vaultReady || !vault.status.value.initialized"
       :status="vault.status.value"
       :loading="vault.loading.value"
       :ready="vaultReady"

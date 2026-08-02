@@ -108,6 +108,7 @@ mod tests {
             .await
             .unwrap();
             assert!(profile_columns.iter().any(|name| name == "sort_order"));
+            assert!(profile_columns.iter().any(|name| name == "usage_info"));
         });
     }
 
@@ -160,6 +161,49 @@ mod tests {
                     .await
                     .is_err()
             );
+        });
+    }
+
+    #[test]
+    fn usage_info_migration_preserves_existing_profiles() {
+        run_async(async {
+            let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:")
+                .await
+                .unwrap();
+            sqlx::raw_sql(include_str!("../migrations/0001_initial.sql"))
+                .execute(&mut connection)
+                .await
+                .unwrap();
+            sqlx::raw_sql(include_str!(
+                "../migrations/0002_account_profile_sort_order.sql"
+            ))
+            .execute(&mut connection)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO account_profiles (
+                    id, account_name, needs_review, sort_order, created_at, updated_at
+                 ) VALUES ('existing-account', 'existing-name', 0, 0, ?, ?)",
+            )
+            .bind("2026-08-02T00:00:00Z")
+            .bind("2026-08-02T00:00:00Z")
+            .execute(&mut connection)
+            .await
+            .unwrap();
+
+            sqlx::raw_sql(include_str!(
+                "../migrations/0003_account_profile_usage_info.sql"
+            ))
+            .execute(&mut connection)
+            .await
+            .unwrap();
+
+            let row = sqlx::query("SELECT account_name, usage_info FROM account_profiles")
+                .fetch_one(&mut connection)
+                .await
+                .unwrap();
+            assert_eq!(row.get::<String, _>("account_name"), "existing-name");
+            assert_eq!(row.get::<Option<String>, _>("usage_info"), None);
         });
     }
 }

@@ -22,6 +22,7 @@ import type {
 } from "../../types/domain";
 import type { AppNotificationPermission } from "../../api/types";
 import { formatFileSize } from "../../utils/formatters";
+import { DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS } from "../../utils/accountTableColumns";
 import OperationProgress from "./OperationProgress.vue";
 import ExcelImportScopeSelector from "./ExcelImportScopeSelector.vue";
 import VaultSettingsPanel from "./VaultSettingsPanel.vue";
@@ -35,6 +36,8 @@ const settings = reactive<AppSettings>({
   autoLockMinutes: 15,
   backupRetention: 30,
   lastAutomaticBackupDate: null,
+  accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
+  lastAccountUsageWeekStart: null,
 });
 const loadingSettings = shallowRef(false);
 const importPath = shallowRef("");

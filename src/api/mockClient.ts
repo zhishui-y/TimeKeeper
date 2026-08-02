@@ -1,6 +1,8 @@
 import { differenceInMinutes, endOfWeek, format, parseISO, startOfWeek } from "date-fns";
 import type {
   AccountProfile,
+  AccountTableColumnWidths,
+  AccountUsageWeekSyncResult,
   AppSettings,
   Appointment,
   AppointmentConflict,
@@ -12,6 +14,12 @@ import type {
   ServiceStatus,
   VaultStatus,
 } from "../types/domain";
+import {
+  ACCOUNT_TABLE_COLUMN_KEYS,
+  DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS,
+  MAX_ACCOUNT_TABLE_COLUMN_WIDTH,
+  MIN_ACCOUNT_TABLE_COLUMN_WIDTHS,
+} from "../utils/accountTableColumns";
 import { MIN_MASTER_PASSWORD_CHARACTERS, isMasterPasswordLongEnough } from "../utils/security";
 import { combineDateTime } from "../utils/appointment";
 import { demoAccounts, demoAppointments, demoPasswords } from "./mockData";
@@ -28,11 +36,43 @@ let accounts = structuredClone(demoAccounts).sort((a, b) => {
 const passwords = new Map(demoPasswords);
 let vault: VaultStatus = { initialized: true, unlocked: true, autoLockMinutes: 15 };
 let vaultPassword: string | null = null;
+const ACCOUNT_TABLE_WIDTHS_STORAGE_KEY = "timekeeper.demo.accountTableColumnWidths";
+
+function accountTableColumnWidthsAreValid(widths: AccountTableColumnWidths): boolean {
+  return ACCOUNT_TABLE_COLUMN_KEYS.every((key) => {
+    const width = widths[key];
+    return (
+      Number.isInteger(width) &&
+      width >= MIN_ACCOUNT_TABLE_COLUMN_WIDTHS[key] &&
+      width <= MAX_ACCOUNT_TABLE_COLUMN_WIDTH
+    );
+  });
+}
+
+function loadStoredAccountTableColumnWidths(): AccountTableColumnWidths {
+  try {
+    const stored = globalThis.localStorage?.getItem(ACCOUNT_TABLE_WIDTHS_STORAGE_KEY);
+    if (!stored) return { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS };
+    const widths = JSON.parse(stored) as AccountTableColumnWidths;
+    return accountTableColumnWidthsAreValid(widths)
+      ? widths
+      : { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS };
+  } catch {
+    return { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS };
+  }
+}
+
+function storeAccountTableColumnWidths(widths: AccountTableColumnWidths): void {
+  globalThis.localStorage?.setItem(ACCOUNT_TABLE_WIDTHS_STORAGE_KEY, JSON.stringify(widths));
+}
+
 let settings: AppSettings = {
   defaultReminderMinutes: 30,
   autoLockMinutes: 15,
   backupRetention: 30,
   lastAutomaticBackupDate: format(new Date(), "yyyy-MM-dd"),
+  accountTableColumnWidths: loadStoredAccountTableColumnWidths(),
+  lastAccountUsageWeekStart: null,
 };
 
 interface MockBackupSnapshot {
@@ -50,6 +90,41 @@ let lastBackupPath: string | null = null;
 function makeId(prefix: string): string {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   return `${prefix}-${random}`;
+}
+
+function currentChinaWeekStart(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value);
+  const monday = new Date(Date.UTC(value("year"), value("month") - 1, value("day")));
+  monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+  return monday.toISOString().slice(0, 10);
+}
+
+function syncMockAccountUsageWeek(): AccountUsageWeekSyncResult {
+  const weekStart = currentChinaWeekStart();
+  const previous = settings.lastAccountUsageWeekStart;
+  if (!previous) {
+    settings.lastAccountUsageWeekStart = weekStart;
+    return { weekStart, clearedCount: 0 };
+  }
+  if (previous >= weekStart) return { weekStart, clearedCount: 0 };
+
+  let clearedCount = 0;
+  const timestamp = new Date().toISOString();
+  for (const account of accounts) {
+    if (account.usageInfo == null) continue;
+    account.usageInfo = null;
+    account.updatedAt = timestamp;
+    clearedCount += 1;
+  }
+  settings.lastAccountUsageWeekStart = weekStart;
+  return { weekStart, clearedCount };
 }
 
 function accountSnapshot(accountProfileId?: string | null): Appointment["accountSnapshot"] {
@@ -360,6 +435,7 @@ export const mockApi: ApiClient = {
       currentScore: input.currentScore ?? null,
       highestScore: input.highestScore ?? null,
       scoreUpdatedAt: input.scoreUpdatedAt ?? null,
+      usageInfo: null,
       notes: input.notes?.trim() || null,
       needsReview: input.needsReview ?? false,
       createdAt: timestamp,
@@ -389,6 +465,27 @@ export const mockApi: ApiClient = {
     });
     if (input.password) passwords.set(id, input.password);
     return structuredClone(existing);
+  },
+  async updateAccountProfileUsage(id, usageInfo) {
+    syncMockAccountUsageWeek();
+    const existing = getAccountOrThrow(id);
+    existing.usageInfo = usageInfo?.trim() || null;
+    existing.updatedAt = new Date().toISOString();
+    return structuredClone(existing);
+  },
+  async clearAccountProfileUsage() {
+    let clearedCount = 0;
+    const timestamp = new Date().toISOString();
+    for (const account of accounts) {
+      if (account.usageInfo == null) continue;
+      account.usageInfo = null;
+      account.updatedAt = timestamp;
+      clearedCount += 1;
+    }
+    return clearedCount;
+  },
+  async syncAccountProfileUsageWeek() {
+    return syncMockAccountUsageWeek();
   },
   async deleteAccountProfile(id) {
     getAccountOrThrow(id);
@@ -629,6 +726,7 @@ export const mockApi: ApiClient = {
     if (!backupSnapshot || path !== lastBackupPath) {
       throw new Error("未找到可恢复的演示备份，请先创建备份");
     }
+    storeAccountTableColumnWidths(backupSnapshot.settings.accountTableColumnWidths);
     appointments = structuredClone(backupSnapshot.appointments);
     accounts = structuredClone(backupSnapshot.accounts);
     passwords.clear();
@@ -641,9 +739,24 @@ export const mockApi: ApiClient = {
     return structuredClone(settings);
   },
   async updateSettings(nextSettings) {
-    settings = structuredClone(nextSettings);
+    if (!accountTableColumnWidthsAreValid(nextSettings.accountTableColumnWidths)) {
+      throw new Error("账号表格列宽超出允许范围");
+    }
+    storeAccountTableColumnWidths(nextSettings.accountTableColumnWidths);
+    settings = {
+      ...structuredClone(nextSettings),
+      lastAccountUsageWeekStart: settings.lastAccountUsageWeekStart,
+    };
     vault = { ...vault, autoLockMinutes: settings.autoLockMinutes };
     return structuredClone(settings);
+  },
+  async updateAccountTableColumnWidths(widths) {
+    if (!accountTableColumnWidthsAreValid(widths)) {
+      throw new Error("账号表格列宽超出允许范围");
+    }
+    settings.accountTableColumnWidths = structuredClone(widths);
+    storeAccountTableColumnWidths(widths);
+    return structuredClone(settings.accountTableColumnWidths);
   },
   async selectExcelFile() {
     return "C:\\Users\\14620\\Desktop\\account.xlsm";

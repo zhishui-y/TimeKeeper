@@ -31,6 +31,9 @@ can start automatically but are never completed automatically.
 - `get_account_profile(id) -> AccountProfile`
 - `create_account_profile(input) -> AccountProfile`
 - `update_account_profile(id, input) -> AccountProfile`
+- `update_account_profile_usage(id, usageInfo?) -> AccountProfile`
+- `clear_account_profile_usage() -> number`
+- `sync_account_profile_usage_week() -> AccountUsageWeekSyncResult`
 - `delete_account_profile(id) -> void`
 - `delete_account_profiles(ids) -> number`
 - `reorder_account_profiles(ids) -> void`
@@ -46,6 +49,13 @@ can start automatically but are never completed automatically.
 Passwords never appear in account list/detail responses. Password writes and
 SQLite profile writes use compensating rollback so a failed operation cannot
 leave a visible profile without its secret.
+
+`update_account_profile_usage` first synchronizes the current China-local week, then trims free text,
+stores blank content as `null`, and updates only the non-secret usage field and profile timestamp.
+`sync_account_profile_usage_week` records the current week without clearing on first use; later China
+Monday boundaries clear all non-null usage values atomically and advance the stored week marker.
+`clear_account_profile_usage` performs the same all-account SQL update on demand. These operations
+remain available while the vault is locked and never access Stronghold.
 
 Changing the master password requires an unlocked vault and the current
 password. Rust re-encrypts and verifies the complete Stronghold snapshot before
@@ -63,6 +73,17 @@ must contain at least 4 Unicode characters; 8 or more are recommended.
 - `restore_backup(path) -> void` (successful restore requests app restart)
 - `get_settings() -> AppSettings`
 - `update_settings(settings) -> AppSettings`
+- `update_account_table_column_widths(widths) -> AccountTableColumnWidths`
+
+`AppSettings.accountTableColumnWidths` stores the ten resizable account metadata widths. The dedicated
+update command validates each value against its column minimum and the 480px maximum. Rust owns
+`lastAccountUsageWeekStart`; generic settings updates cannot overwrite this weekly cleanup marker.
+Older settings files that omit either field load default widths and a missing week marker, preserving
+existing weekly content until the first later week transition.
+
+Backup restore requires the current account-profile schema, including the
+`usage_info` column. Backups created before migration `0003` are rejected by
+schema validation rather than being upgraded during restore.
 
 `DashboardSummary.pendingCount` counts business appointments whose service is completed but whose
 settlement status is still unsettled. Scheduled, in-progress, cancelled, entertainment, and settled

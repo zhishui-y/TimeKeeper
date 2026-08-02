@@ -165,6 +165,7 @@ pub struct AccountProfile {
     pub current_score: Option<i64>,
     pub highest_score: Option<i64>,
     pub score_updated_at: Option<String>,
+    pub usage_info: Option<String>,
     pub notes: Option<String>,
     pub needs_review: bool,
     pub import_fingerprint: Option<String>,
