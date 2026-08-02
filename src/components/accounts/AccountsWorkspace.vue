@@ -1,16 +1,5 @@
 <script setup lang="ts">
-import {
-  Eraser,
-  LoaderCircle,
-  ListFilter,
-  LockKeyhole,
-  Plus,
-  RefreshCw,
-  Search,
-  ShieldCheck,
-  Trash2,
-  UnlockKeyhole,
-} from "@lucide/vue";
+import { Eraser, LoaderCircle, X } from "@lucide/vue";
 import { computed, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAccounts } from "../../composables/useAccounts";
@@ -42,10 +31,19 @@ import {
 import AccountDrawer from "./AccountDrawer.vue";
 import AccountRoleDataRefreshFeedback from "./AccountRoleDataRefreshFeedback.vue";
 import AccountTable from "./AccountTable.vue";
+import AccountToolbar from "./AccountToolbar.vue";
 
 const ui = useUiStore();
 const { items, loading, error, load } = useAccounts({ immediate: false });
-const { status: vaultStatus, load: loadVault, unlock, initialize, lock } = useVault();
+const {
+  status: vaultStatus,
+  loading: vaultLoading,
+  error: vaultError,
+  load: loadVault,
+  unlock,
+  initialize,
+  lock,
+} = useVault();
 const query = shallowRef("");
 const needsReviewOnly = shallowRef(false);
 const accountFilters = reactive<AccountProfileFilters>({
@@ -79,7 +77,6 @@ const batchDeleteFeedback = shallowRef<{
   message: string;
   tone: "neutral" | "success" | "warning" | "danger";
 } | null>(null);
-const masterPassword = shallowRef("");
 let weeklySyncTimer: ReturnType<typeof globalThis.setInterval> | undefined;
 let weeklySyncErrorReported = false;
 const contactOptions = computed(() => uniqueAccountValues(items.value, "contactName"));
@@ -116,25 +113,8 @@ const reorderDisabledReason = computed(() => {
   if (savingOrder.value) return "正在保存账号顺序";
   return "清除搜索和筛选并恢复默认排序后可拖动";
 });
-const sortLabels: Record<AccountProfileSortKey, string> = {
-  contactName: "联系人",
-  server: "服务器",
-  specialization: "职业 / 心法",
-  gearScore: "装分",
-  currentScore: "当前分",
-  highestScore: "最高分",
-};
-
 async function refreshRoleData(ids: readonly string[]): Promise<void> {
-  const result = await roleDataRefresh.refresh(ids);
-  if (!result) {
-    if (roleDataRefresh.error.value) ui.notify(roleDataRefresh.error.value, "danger");
-    return;
-  }
-  ui.notify(
-    `角色数据更新完成：更新 ${result.updatedCount}，无战绩 ${result.noRecordCount}，跳过 ${result.skippedCount}，失败 ${result.failedCount}`,
-    result.failedCount > 0 ? "warning" : "success",
-  );
+  await roleDataRefresh.refresh(ids);
 }
 
 function refreshVisibleRoleData(): void {
@@ -449,12 +429,11 @@ async function removeBatch(): Promise<void> {
   }
 }
 
-async function submitVault(): Promise<void> {
+async function submitVault(password: string): Promise<void> {
   const result = vaultStatus.value.initialized
-    ? await unlock(masterPassword.value)
-    : await initialize(masterPassword.value);
+    ? await unlock(password)
+    : await initialize(password);
   if (result) {
-    masterPassword.value = "";
     ui.notify("密码库已解锁", "success");
   }
 }
@@ -548,175 +527,32 @@ watch(
 
 <template>
   <div class="accounts-workspace page-stack">
-    <section class="vault-strip" :class="{ 'is-locked': !vaultStatus.unlocked }">
-      <div class="vault-strip__state">
-        <ShieldCheck v-if="vaultStatus.unlocked" :size="18" />
-        <LockKeyhole v-else :size="18" />
-        <div>
-          <strong>{{
-            vaultStatus.unlocked
-              ? "密码库已解锁"
-              : vaultStatus.initialized
-                ? "密码库已锁定"
-                : "请初始化密码库"
-          }}</strong>
-          <span>{{
-            vaultStatus.unlocked
-              ? vaultStatus.autoLockMinutes === 0
-                ? "已关闭自动锁定"
-                : `${vaultStatus.autoLockMinutes}分钟无操作后自动锁定`
-              : "账号密码需要解锁后查看或修改"
-          }}</span>
-        </div>
-      </div>
-      <button
-        v-if="vaultStatus.unlocked"
-        class="button button--compact"
-        type="button"
-        @click="lockVault"
-      >
-        <LockKeyhole :size="14" />锁定
-      </button>
-      <form v-else class="vault-strip__unlock" @submit.prevent="submitVault">
-        <input
-          v-model="masterPassword"
-          class="input"
-          type="password"
-          :autocomplete="vaultStatus.initialized ? 'current-password' : 'new-password'"
-          :placeholder="vaultStatus.initialized ? '输入主密码' : '设置主密码'"
-        />
-        <button class="button button--primary button--compact" type="submit">
-          <UnlockKeyhole :size="14" />{{ vaultStatus.initialized ? "解锁" : "初始化" }}
-        </button>
-      </form>
-    </section>
-
-    <div class="page-toolbar">
-      <form class="account-filters" @submit.prevent="search">
-        <label class="search-field">
-          <Search class="search-field__icon" :size="15" />
-          <input v-model="query" class="input" placeholder="搜索联系人、区服、角色或账号" />
-        </label>
-        <label class="review-filter">
-          <input v-model="needsReviewOnly" type="checkbox" @change="search" />
-          只看暂不可用
-        </label>
-        <button class="button button--compact" type="submit">查询</button>
-      </form>
-      <div class="account-actions">
-        <button
-          class="button button--ghost"
-          type="button"
-          :disabled="roleDataRefresh.busy.value || visibleProfiles.length === 0"
-          :aria-busy="roleDataRefresh.busy.value"
-          title="更新当前搜索和筛选后显示的账号"
-          @click="refreshVisibleRoleData"
-        >
-          <LoaderCircle
-            v-if="roleDataRefresh.busy.value"
-            class="account-actions__spinner"
-            :size="15"
-          />
-          <RefreshCw v-else :size="15" />
-          更新当前列表
-        </button>
-        <button
-          class="button button--ghost"
-          type="button"
-          :disabled="roleDataRefresh.busy.value || selectedCount === 0"
-          title="更新选中的账号"
-          @click="refreshSelectedRoleData"
-        >
-          <RefreshCw :size="15" />更新选中
-        </button>
-        <button
-          class="button button--ghost"
-          type="button"
-          :disabled="selectedCount === 0 || !vaultStatus.unlocked || deletingAccounts"
-          :aria-busy="deletingAccounts"
-          :title="
-            !vaultStatus.unlocked
-              ? '删除账号前需要解锁密码库'
-              : deletingAccounts
-                ? '正在删除选中的账号'
-                : selectedCount === 0
-                  ? '请先选择账号'
-                  : '永久删除选中的账号'
-          "
-          @click="removeBatch"
-        >
-          <LoaderCircle v-if="deletingAccounts" class="account-actions__spinner" :size="15" />
-          <Trash2 v-else :size="15" />
-          {{ deletingAccounts ? "正在删除…" : "批量删除" }}
-        </button>
-        <button
-          class="button button--primary"
-          type="button"
-          :disabled="!vaultStatus.unlocked"
-          @click="openCreate"
-        >
-          <Plus :size="15" />新建账号
-        </button>
-      </div>
-    </div>
-    <div class="account-filter-strip" aria-label="账号筛选">
-      <span class="account-filter-strip__title">
-        <ListFilter :size="14" />
-        筛选
-      </span>
-      <label class="account-filter-control">
-        <span>联系人</span>
-        <select v-model="accountFilters.contactName" class="select" aria-label="按联系人筛选账号">
-          <option value="">全部</option>
-          <option v-for="contact in contactOptions" :key="contact" :value="contact">
-            {{ contact }}
-          </option>
-        </select>
-      </label>
-      <label class="account-filter-control">
-        <span>服务器</span>
-        <select v-model="accountFilters.server" class="select" aria-label="按服务器筛选账号">
-          <option value="">全部</option>
-          <option v-for="server in serverOptions" :key="server" :value="server">
-            {{ server }}
-          </option>
-        </select>
-      </label>
-      <label class="account-filter-control">
-        <span>职业 / 心法</span>
-        <select
-          v-model="accountFilters.specialization"
-          class="select"
-          aria-label="按职业或心法筛选账号"
-        >
-          <option value="">全部</option>
-          <option
-            v-for="specialization in specializationOptions"
-            :key="specialization"
-            :value="specialization"
-          >
-            {{ specialization }}
-          </option>
-        </select>
-      </label>
-      <span class="account-filter-strip__sort">
-        {{
-          sortKey
-            ? `已按${sortLabels[sortKey]}${sortDirection === "asc" ? "升序" : "降序"}`
-            : manualReorderEnabled
-              ? "拖动左侧手柄调整默认顺序"
-              : reorderDisabledReason
-        }}
-      </span>
-      <button
-        v-if="activeFilterCount > 0 || sortKey"
-        class="button button--ghost button--compact"
-        type="button"
-        @click="resetListView"
-      >
-        重置
-      </button>
-    </div>
+    <AccountToolbar
+      v-model:query="query"
+      v-model:needs-review-only="needsReviewOnly"
+      v-model:contact-name="accountFilters.contactName"
+      v-model:server="accountFilters.server"
+      v-model:specialization="accountFilters.specialization"
+      :contact-options="contactOptions"
+      :server-options="serverOptions"
+      :specialization-options="specializationOptions"
+      :visible-count="visibleProfiles.length"
+      :selected-count="selectedCount"
+      :vault-unlocked="vaultStatus.unlocked"
+      :vault-loading="vaultLoading"
+      :vault-error="vaultError"
+      :refresh-busy="roleDataRefresh.busy.value"
+      :deleting="deletingAccounts"
+      :can-reset-view="activeFilterCount > 0 || sortKey !== null"
+      @search="search"
+      @reset-view="resetListView"
+      @refresh-visible="refreshVisibleRoleData"
+      @refresh-selected="refreshSelectedRoleData"
+      @delete-selected="removeBatch"
+      @create="openCreate"
+      @lock="lockVault"
+      @unlock="submitVault"
+    />
     <div class="account-summary">
       <span v-if="visibleProfiles.length === items.length">共 {{ items.length }} 个账号</span>
       <span v-else>显示 {{ visibleProfiles.length }} / 共 {{ items.length }} 个账号</span>
@@ -749,13 +585,22 @@ watch(
     </div>
     <div v-if="loading" class="loading-line" />
     <div v-if="error" class="error-banner">{{ error }}</div>
-    <div v-if="roleDataRefresh.error.value" class="error-banner" role="alert">
-      {{ roleDataRefresh.error.value }}
+    <div v-if="roleDataRefresh.error.value" class="error-banner role-refresh-error" role="alert">
+      <span>{{ roleDataRefresh.error.value }}</span>
+      <button
+        class="icon-button"
+        type="button"
+        aria-label="关闭角色数据更新错误"
+        @click="roleDataRefresh.clearResult"
+      >
+        <X :size="15" />
+      </button>
     </div>
     <AccountRoleDataRefreshFeedback
       v-if="roleDataRefresh.result.value"
       :result="roleDataRefresh.result.value"
       :profiles="items"
+      @close="roleDataRefresh.clearResult"
     />
     <AccountTable
       :profiles="visibleProfiles"
@@ -802,167 +647,19 @@ watch(
   gap: 12px;
 }
 
-.vault-strip {
-  position: relative;
-  display: flex;
-  min-height: 62px;
-  flex: 0 0 62px;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--brand) 24%, var(--line));
-  border-radius: var(--radius-lg, 14px);
-  color: var(--brand-strong);
-  background:
-    linear-gradient(110deg, color-mix(in srgb, var(--brand-soft) 84%, white), transparent 72%),
-    var(--surface);
-  box-shadow: var(--shadow-sm, 0 8px 24px rgba(31, 49, 42, 0.06));
-}
-
-.vault-strip::after {
-  position: absolute;
-  top: -42px;
-  right: 18%;
-  width: 132px;
-  height: 132px;
-  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
-  border-radius: 50%;
-  content: "";
-  pointer-events: none;
-}
-
-.vault-strip.is-locked {
-  border-color: color-mix(in srgb, var(--amber) 30%, var(--line));
-  color: #815414;
-  background:
-    linear-gradient(110deg, color-mix(in srgb, var(--amber-soft) 86%, white), transparent 72%),
-    var(--surface);
-}
-
-.vault-strip__state {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 11px;
-}
-
-.vault-strip__state > svg {
-  box-sizing: content-box;
-  padding: 8px;
-  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, white 72%, transparent);
-}
-
-.vault-strip__state div {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.vault-strip__state strong {
-  font-size: 12px;
-  letter-spacing: 0.01em;
-}
-
-.vault-strip__state span {
-  font-size: 10px;
-  opacity: 0.72;
-}
-
-.vault-strip__unlock {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.vault-strip__unlock .input {
-  width: 180px;
-  height: 30px;
-}
-
-.account-filters {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-
-.account-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .account-actions__spinner {
   animation: account-action-spin 900ms linear infinite;
 }
 
-.account-filter-strip {
+.role-refresh-error {
   display: flex;
-  min-height: 42px;
   align-items: center;
-  gap: 10px;
-  padding: 5px 10px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface) 94%, var(--surface-soft));
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.account-filter-strip__title {
-  display: inline-flex;
+.role-refresh-error .icon-button {
   flex: 0 0 auto;
-  align-items: center;
-  gap: 5px;
-  color: var(--brand-strong);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.account-filter-control {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-  color: var(--ink-muted);
-  font-size: 10px;
-  white-space: nowrap;
-}
-
-.account-filter-control .select {
-  width: 118px;
-  height: 30px;
-  padding-inline: 8px 24px;
-  font-size: 11px;
-}
-
-.account-filter-strip__sort {
-  margin-left: auto;
-  color: var(--ink-muted);
-  font-size: 10px;
-  white-space: nowrap;
-}
-
-.accounts-workspace > .page-toolbar {
-  min-height: 54px;
-  padding: 7px 9px 7px 11px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg, 14px);
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
-  box-shadow: var(--shadow-xs, 0 3px 14px rgba(31, 49, 42, 0.04));
-}
-
-.review-filter {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--ink-muted);
-  font-size: 12px;
-}
-
-.review-filter input {
-  accent-color: var(--amber);
 }
 
 .account-summary {
@@ -1013,36 +710,6 @@ watch(
 @keyframes account-action-spin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-@media (max-width: 1180px) {
-  .vault-strip {
-    padding-inline: 13px;
-  }
-
-  .vault-strip__state span {
-    display: none;
-  }
-
-  .account-filters .search-field {
-    width: 210px;
-  }
-
-  .account-filter-strip {
-    gap: 7px;
-  }
-
-  .account-filter-control {
-    gap: 3px;
-  }
-
-  .account-filter-control .select {
-    width: 104px;
-  }
-
-  .account-filter-strip__sort {
-    display: none;
   }
 }
 </style>

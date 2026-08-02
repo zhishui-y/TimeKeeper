@@ -1,10 +1,15 @@
 <script setup lang="ts">
+import { X } from "@lucide/vue";
 import { computed } from "vue";
 import type { AccountProfile, AccountRoleDataRefreshResult } from "../../types/domain";
 
 const props = defineProps<{
   result: AccountRoleDataRefreshResult;
   profiles: readonly AccountProfile[];
+}>();
+
+const emit = defineEmits<{
+  close: [];
 }>();
 
 const accountLabels = computed(
@@ -22,12 +27,22 @@ const statusLabels = {
 
 <template>
   <section class="role-refresh-feedback" aria-live="polite">
-    <div class="role-refresh-feedback__summary">
-      <strong>角色数据更新完成</strong>
-      <span>更新 {{ result.updatedCount }}</span>
-      <span>无战绩 {{ result.noRecordCount }}</span>
-      <span>跳过 {{ result.skippedCount }}</span>
-      <span>失败 {{ result.failedCount }}</span>
+    <div class="role-refresh-feedback__header">
+      <div class="role-refresh-feedback__summary">
+        <strong>角色数据更新完成</strong>
+        <span>更新 {{ result.updatedCount }}</span>
+        <span>无战绩 {{ result.noRecordCount }}</span>
+        <span>跳过 {{ result.skippedCount }}</span>
+        <span>失败 {{ result.failedCount }}</span>
+      </div>
+      <button
+        class="icon-button"
+        type="button"
+        aria-label="关闭角色数据更新信息"
+        @click="emit('close')"
+      >
+        <X :size="15" />
+      </button>
     </div>
     <ul v-if="nonSuccessItems.length" class="role-refresh-feedback__details">
       <li v-for="item in nonSuccessItems" :key="item.accountId">
@@ -56,6 +71,17 @@ const statusLabels = {
   gap: 7px 14px;
   color: var(--ink-muted);
   font-size: 12px;
+}
+
+.role-refresh-feedback__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.role-refresh-feedback__header .icon-button {
+  flex: 0 0 auto;
 }
 
 .role-refresh-feedback__summary strong {

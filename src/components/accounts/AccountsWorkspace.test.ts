@@ -101,7 +101,7 @@ describe("AccountsWorkspace batch delete feedback", () => {
     const ui = useUiStore(pinia);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("只看暂不可用");
+    expect(wrapper.text()).toContain("暂不可用");
     expect(wrapper.text()).toContain("0 个暂不可用");
     expect(wrapper.text()).not.toContain("待完善");
 
@@ -443,6 +443,7 @@ describe("AccountsWorkspace batch delete feedback", () => {
 
     const pinia = createPinia();
     const wrapper = mount(AccountsWorkspace, { global: { plugins: [pinia] } });
+    const ui = useUiStore(pinia);
     await flushPromises();
     await wrapper.get('select[aria-label="按服务器筛选账号"]').setValue("梦江南");
     await buttonWithText(wrapper, "更新当前列表").trigger("click");
@@ -472,7 +473,40 @@ describe("AccountsWorkspace batch delete feedback", () => {
     expect(wrapper.text()).toContain("角色数据更新完成");
     expect(wrapper.text()).toContain("无战绩 1");
     expect(wrapper.text()).toContain("无角色战绩");
-    expect(useUiStore(pinia).accountRevision).toBe(1);
+    expect(ui.accountRevision).toBe(1);
+    expect(ui.toast).toBeNull();
+    await wrapper.get('button[aria-label="关闭角色数据更新信息"]').trigger("click");
+    expect(wrapper.text()).not.toContain("角色数据更新完成");
+    wrapper.unmount();
+  });
+
+  it("keeps request errors inline without a duplicate toast and allows closing them", async () => {
+    vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
+    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
+      initialized: true,
+      unlocked: true,
+      autoLockMinutes: 15,
+    });
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
+    vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
+      weekStart: "2026-07-27",
+      clearedCount: 0,
+    });
+    vi.spyOn(mockApi, "refreshAccountProfileRoleData").mockRejectedValue(
+      new Error("角色服务器暂不可用"),
+    );
+
+    const pinia = createPinia();
+    const wrapper = mount(AccountsWorkspace, { global: { plugins: [pinia] } });
+    const ui = useUiStore(pinia);
+    await flushPromises();
+    await buttonWithText(wrapper, "更新当前列表").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get('[role="alert"]').text()).toContain("角色服务器暂不可用");
+    expect(ui.toast).toBeNull();
+    await wrapper.get('button[aria-label="关闭角色数据更新错误"]').trigger("click");
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
     wrapper.unmount();
   });
 
