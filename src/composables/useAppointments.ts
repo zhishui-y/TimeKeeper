@@ -30,11 +30,18 @@ export function useAppointments(
   }
 
   function fetchAppointments(requestedFilters: AppointmentFilters): Promise<Appointment[]> {
+    if (!requestedFilters.from || !requestedFilters.to) {
+      return Promise.reject(new Error("预约范围查询必须同时提供开始日期和结束日期"));
+    }
     const key = requestKey(requestedFilters);
     const existing = inFlight.get(key);
     if (existing) return existing;
 
-    const request = api.listAppointments(requestedFilters);
+    const request = api.listAppointments({
+      ...requestedFilters,
+      from: requestedFilters.from,
+      to: requestedFilters.to,
+    });
     inFlight.set(key, request);
     const clear = () => {
       if (inFlight.get(key) === request) inFlight.delete(key);

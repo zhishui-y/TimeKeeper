@@ -139,7 +139,7 @@ describe("SettingsWorkspace operation progress", () => {
       skippedDuplicates: 8,
       skippedAppointmentDuplicates: 8,
       skippedProfileDuplicates: 0,
-      warnings: [],
+      warnings: ["预约已导入，但通知调度失败：测试错误"],
     });
     const pinia = createPinia();
     const wrapper = mount(SettingsWorkspace, {
@@ -161,6 +161,8 @@ describe("SettingsWorkspace operation progress", () => {
       accounts: false,
     });
     expect(wrapper.text()).toContain("去重跳过 8 条预约、0 个账号");
+    expect(wrapper.text()).toContain("预约已导入，但通知调度失败：测试错误");
+    expect(ui.toast?.tone).toBe("warning");
     expect(ui.dataRevision).toBe(1);
     expect(ui.accountRevision).toBe(0);
     wrapper.unmount();
@@ -202,7 +204,9 @@ describe("SettingsWorkspace operation progress", () => {
     await buttonWithText(wrapper, "导出完整备份").trigger("click");
     await flushPromises();
 
-    expect(wrapper.get('[role="status"]').text()).toContain("正在导出完整备份");
+    const progressText = wrapper.get('[role="status"]').text();
+    expect(progressText).toContain("正在导出完整备份");
+    expect(progressText).toContain("成对的旧密码迁移文件");
     expect(buttonWithText(wrapper, "正在导出").attributes("disabled")).toBeDefined();
     expect(buttonWithText(wrapper, "从备份恢复").attributes("disabled")).toBeDefined();
 

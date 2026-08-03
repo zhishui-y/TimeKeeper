@@ -30,7 +30,7 @@ function appointment(serviceStatus: Appointment["serviceStatus"] = "scheduled"):
       gearScore: "19.8万",
       server: "梦江南",
       accountName: "demo-account",
-      passwordAvailable: false,
+      password: null,
     },
     amountMinor: 8_000,
     paymentMethod: "支付宝",
@@ -42,13 +42,22 @@ function appointment(serviceStatus: Appointment["serviceStatus"] = "scheduled"):
 function settings(): AppSettings {
   return {
     defaultReminderMinutes: 30,
-    autoLockMinutes: 15,
     backupRetention: 30,
     lastAutomaticBackupDate: null,
     accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
     appointmentTableColumnWidths: { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS },
     lastAccountUsageWeekStart: null,
     accountRoleDataServerUrl: DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
+  };
+}
+
+function appointmentPage(items: Appointment[]) {
+  return {
+    items,
+    totalCount: items.length,
+    page: 1,
+    pageSize: 100,
+    totalPages: items.length ? 1 : 0,
   };
 }
 
@@ -66,13 +75,12 @@ describe("AppointmentsWorkspace", () => {
     document.body.innerHTML = "";
   });
 
-  it("copies account and YY channel without a vault flow, then persists table widths", async () => {
+  it("copies account and YY channel, then persists table widths", async () => {
     const target = appointment();
-    vi.spyOn(mockApi, "listAppointments").mockResolvedValue([target]);
+    vi.spyOn(mockApi, "listAppointmentPage").mockResolvedValue(appointmentPage([target]));
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
     const copyAccount = vi.spyOn(mockApi, "copyAppointmentAccountName").mockResolvedValue();
     const copyVoice = vi.spyOn(mockApi, "copyAppointmentVoiceChannel").mockResolvedValue();
-    const unlockVault = vi.spyOn(mockApi, "unlockVault");
     const updateWidths = vi
       .spyOn(mockApi, "updateAppointmentTableColumnWidths")
       .mockImplementation(async (widths) => widths);
@@ -88,7 +96,6 @@ describe("AppointmentsWorkspace", () => {
     await wrapper.get('button[aria-label="复制YY频道 794676"]').trigger("click");
     await flushPromises();
     expect(copyVoice).toHaveBeenCalledWith(target.id);
-    expect(unlockVault).not.toHaveBeenCalled();
     expect(useUiStore(pinia).toast?.message).toBe("YY频道号已复制");
 
     const table = wrapper.findComponent(AppointmentTable);
@@ -104,9 +111,9 @@ describe("AppointmentsWorkspace", () => {
     wrapper.unmount();
   });
 
-  it("shows a YY channel copy error without opening the vault dialog", async () => {
+  it("shows a YY channel copy error", async () => {
     const target = appointment();
-    vi.spyOn(mockApi, "listAppointments").mockResolvedValue([target]);
+    vi.spyOn(mockApi, "listAppointmentPage").mockResolvedValue(appointmentPage([target]));
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
     vi.spyOn(mockApi, "copyAppointmentVoiceChannel").mockRejectedValue(
       new Error("该预约未填写YY频道号"),
@@ -123,7 +130,7 @@ describe("AppointmentsWorkspace", () => {
   });
 
   it("rolls column widths back when persistence fails", async () => {
-    vi.spyOn(mockApi, "listAppointments").mockResolvedValue([appointment()]);
+    vi.spyOn(mockApi, "listAppointmentPage").mockResolvedValue(appointmentPage([appointment()]));
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
     vi.spyOn(mockApi, "updateAppointmentTableColumnWidths").mockRejectedValue(
       new Error("保存列宽失败"),
@@ -147,10 +154,10 @@ describe("AppointmentsWorkspace", () => {
     const scheduled = appointment();
     const cancelled = appointment("cancelled");
     const list = vi
-      .spyOn(mockApi, "listAppointments")
-      .mockResolvedValueOnce([scheduled])
-      .mockResolvedValueOnce([cancelled])
-      .mockResolvedValueOnce([cancelled]);
+      .spyOn(mockApi, "listAppointmentPage")
+      .mockResolvedValueOnce(appointmentPage([scheduled]))
+      .mockResolvedValueOnce(appointmentPage([cancelled]))
+      .mockResolvedValueOnce(appointmentPage([cancelled]));
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
     const cancel = vi.spyOn(mockApi, "setAppointmentServiceStatus").mockResolvedValue({
       ...scheduled,
@@ -172,6 +179,48 @@ describe("AppointmentsWorkspace", () => {
     await flushPromises();
     expect(remove).toHaveBeenCalledWith(cancelled.id);
     expect(list).toHaveBeenCalledTimes(3);
+    wrapper.unmount();
+  });
+
+  it("uses one token plus exclusions when selecting all filtered results", async () => {
+    const target = appointment();
+    vi.spyOn(mockApi, "listAppointmentPage").mockResolvedValue({
+      items: [target],
+      totalCount: 10_000,
+      page: 1,
+      pageSize: 100,
+      totalPages: 100,
+    });
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
+    const createSelection = vi.spyOn(mockApi, "createAppointmentSelection").mockResolvedValue({
+      token: "all-filtered",
+      totalCount: 10_000,
+      expiresAt: "2099-08-03T00:00:00Z",
+    });
+    const remove = vi.spyOn(mockApi, "deleteAppointments").mockResolvedValue({
+      matchedCount: 9_999,
+      deletedCount: 9_999,
+    });
+    vi.spyOn(globalThis, "confirm").mockReturnValue(true);
+    const wrapper = mount(AppointmentsWorkspace, { global: { plugins: [createPinia()] } });
+    await flushPromises();
+
+    await wrapper.get('input[aria-label="全选全部筛选结果"]').setValue(true);
+    await flushPromises();
+    expect(createSelection).toHaveBeenCalledWith({});
+    expect(wrapper.text()).toContain("10000 条已选中");
+
+    await wrapper.get('input[aria-label="选择该预约"]').setValue(false);
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("批量删除"))!
+      .trigger("click");
+    await flushPromises();
+    expect(remove).toHaveBeenCalledWith({
+      kind: "token",
+      token: "all-filtered",
+      excludedIds: [target.id],
+    });
     wrapper.unmount();
   });
 });

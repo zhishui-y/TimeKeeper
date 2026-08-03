@@ -49,7 +49,7 @@ function checked(event: unknown): boolean {
         <span class="scope-option__icon"><ContactRound :size="17" /></span>
         <span class="scope-option__copy">
           <strong>账号档案</strong>
-          <small>资料与本地加密密码</small>
+          <small>资料与本地业务密码</small>
         </span>
         <span class="scope-option__check"><Check :size="13" /></span>
       </label>

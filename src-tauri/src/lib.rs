@@ -1,5 +1,6 @@
 mod accounts;
 mod accounts_remote;
+mod app_access;
 mod appointments;
 mod backup;
 mod db;
@@ -106,9 +107,6 @@ pub fn run() {
 
             let settings = settings::SettingsState::load(&data_dir).map_err(setup_error)?;
             let vault = vault::VaultState::new(&data_dir).map_err(setup_error)?;
-            vault
-                .set_auto_lock_minutes(settings.snapshot().map_err(setup_error)?.auto_lock_minutes)
-                .map_err(setup_error)?;
             let database = tauri::async_runtime::block_on(db::initialize_database(&data_dir))
                 .map_err(setup_error)?;
             let account_role_data_refresh =
@@ -126,15 +124,18 @@ pub fn run() {
             app.manage(backup);
             app.manage(settings);
             app.manage(vault);
+            app.manage(app_access::AppAccessState::new());
             app.manage(notification_state);
             app.manage(importer::ImportState::default());
             app.manage(account_role_data_refresh);
             setup_tray(app).map_err(setup_error)?;
-            vault::spawn_auto_lock_task(app.handle().clone());
+            backup::spawn_automatic_backup_task(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             appointments::list_appointments,
+            appointments::list_appointment_page,
+            appointments::create_appointment_selection,
             appointments::list_contact_presets,
             appointments::get_appointment,
             appointments::create_appointment,
@@ -144,6 +145,7 @@ pub fn run() {
             appointments::delete_appointments,
             appointments::copy_appointment_account_name,
             appointments::copy_appointment_voice_channel,
+            appointments::copy_appointment_account_password,
             appointments::sync_appointment_service_statuses,
             appointments::set_appointment_service_status,
             appointments::settle_appointment,
@@ -159,19 +161,19 @@ pub fn run() {
             accounts::reorder_account_profiles,
             accounts::copy_account_name,
             accounts::copy_account_character_name,
+            accounts::copy_account_password,
             accounts::refresh_account_profile_role_data,
             reports::get_dashboard_summary,
             reports::get_revenue_summary,
             importer::preview_excel_import,
             importer::commit_excel_import,
-            vault::vault_status,
-            vault::initialize_vault,
-            vault::unlock_vault,
-            vault::change_vault_password,
-            vault::lock_vault,
-            vault::reveal_account_password,
-            vault::copy_account_password,
-            vault::copy_appointment_account_password,
+            app_access::app_access_status,
+            app_access::initialize_app_access,
+            app_access::unlock_app_access,
+            app_access::lock_app_access,
+            app_access::change_app_access_password,
+            app_access::reset_app_access_password,
+            app_access::migrate_legacy_credentials,
             settings::get_settings,
             settings::update_settings,
             settings::update_account_table_column_widths,
@@ -181,4 +183,71 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run TimeKeeper");
+}
+
+#[cfg(test)]
+mod access_boundary_tests {
+    use super::app_access::AppAccessState;
+
+    const BUSINESS_COMMAND_GROUPS: &[(&str, &str)] = &[
+        ("appointments", include_str!("appointments.rs")),
+        ("accounts", include_str!("accounts.rs")),
+        ("reports", include_str!("reports.rs")),
+        ("excelImport", include_str!("importer.rs")),
+        ("settings", include_str!("settings.rs")),
+        ("backup", include_str!("backup.rs")),
+    ];
+
+    fn command_blocks(source: &str) -> impl Iterator<Item = &str> {
+        let mut starts = source
+            .match_indices("#[tauri::command")
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        starts.push(source.len());
+        starts
+            .windows(2)
+            .map(|range| &source[range[0]..range[1]])
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    fn command_name(block: &str) -> &str {
+        let marker = if block.contains("pub async fn ") {
+            "pub async fn "
+        } else {
+            "pub fn "
+        };
+        let start = block.find(marker).expect("command must be public") + marker.len();
+        let tail = &block[start..];
+        let end = tail
+            .find(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+            .unwrap_or(tail.len());
+        &tail[..end]
+    }
+
+    #[test]
+    fn locked_process_and_every_business_command_group_keep_the_guard() {
+        let access = AppAccessState::new();
+        assert_eq!(
+            access.require_unlocked().unwrap_err(),
+            "应用已锁定，请先输入入口密码"
+        );
+
+        for (group, source) in BUSINESS_COMMAND_GROUPS {
+            let blocks = command_blocks(source).collect::<Vec<_>>();
+            assert!(
+                !blocks.is_empty(),
+                "命令分组 {group} 没有发现 Tauri command"
+            );
+            for block in blocks {
+                let name = command_name(block);
+                let body_start = block.find('{').expect("command must have a body");
+                let guard_prefix = &block[body_start..block.len().min(body_start + 1_200)];
+                assert!(
+                    guard_prefix.contains("require_unlocked()?"),
+                    "命令分组 {group} 的 {name} 缺少 Rust 入口锁检查"
+                );
+            }
+        }
+    }
 }

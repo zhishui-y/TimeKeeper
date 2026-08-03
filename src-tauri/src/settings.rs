@@ -11,7 +11,8 @@ use tauri::State;
 use thiserror::Error;
 
 use crate::{
-    accounts_remote::validate_account_role_data_server_url, backup::BackupState, vault::VaultState,
+    accounts_remote::validate_account_role_data_server_url, app_access::AppAccessState,
+    backup::BackupState,
 };
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
@@ -146,7 +147,6 @@ impl AppointmentTableColumnWidths {
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub default_reminder_minutes: u32,
-    pub auto_lock_minutes: u32,
     pub backup_retention: u32,
     pub last_automatic_backup_date: Option<String>,
     #[serde(default)]
@@ -163,7 +163,6 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             default_reminder_minutes: 30,
-            auto_lock_minutes: 15,
             backup_retention: 30,
             last_automatic_backup_date: None,
             account_table_column_widths: AccountTableColumnWidths::default(),
@@ -182,11 +181,6 @@ impl AppSettings {
     pub(crate) fn validate(&self) -> Result<(), SettingsError> {
         if self.default_reminder_minutes > 7 * 24 * 60 {
             return Err(SettingsError::Validation("默认提醒时间不能超过7天".into()));
-        }
-        if self.auto_lock_minutes > 24 * 60 {
-            return Err(SettingsError::Validation(
-                "自动锁定时间必须为0（不自动锁定）或1到1440分钟".into(),
-            ));
         }
         if !(1..=365).contains(&self.backup_retention) {
             return Err(SettingsError::Validation(
@@ -343,7 +337,11 @@ impl SettingsState {
 }
 
 #[tauri::command]
-pub fn get_settings(state: State<'_, SettingsState>) -> Result<AppSettings, String> {
+pub fn get_settings(
+    state: State<'_, SettingsState>,
+    access: State<'_, AppAccessState>,
+) -> Result<AppSettings, String> {
+    access.require_unlocked()?;
     state.snapshot().map_err(|error| error.to_string())
 }
 
@@ -351,28 +349,16 @@ pub fn get_settings(state: State<'_, SettingsState>) -> Result<AppSettings, Stri
 pub async fn update_settings(
     mut settings: AppSettings,
     state: State<'_, SettingsState>,
-    vault: State<'_, VaultState>,
     backup: State<'_, BackupState>,
+    access: State<'_, AppAccessState>,
 ) -> Result<AppSettings, String> {
+    access.require_unlocked()?;
     let _operation_guard = backup.lock_data_operation().await;
     settings.normalize();
     settings.validate().map_err(|error| error.to_string())?;
-
-    let previous_auto_lock = state
-        .snapshot()
-        .map_err(|error| error.to_string())?
-        .auto_lock_minutes;
-    vault
-        .set_auto_lock_minutes(settings.auto_lock_minutes)
-        .map_err(|error| error.to_string())?;
-
-    match state.update_from_frontend(settings) {
-        Ok(updated) => Ok(updated),
-        Err(error) => {
-            let _ = vault.set_auto_lock_minutes(previous_auto_lock);
-            Err(error.to_string())
-        }
-    }
+    state
+        .update_from_frontend(settings)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -380,7 +366,9 @@ pub async fn update_account_table_column_widths(
     widths: AccountTableColumnWidths,
     state: State<'_, SettingsState>,
     backup: State<'_, BackupState>,
+    access: State<'_, AppAccessState>,
 ) -> Result<AccountTableColumnWidths, String> {
+    access.require_unlocked()?;
     let _operation_guard = backup.lock_data_operation().await;
     state
         .update_account_table_column_widths(widths)
@@ -392,7 +380,9 @@ pub async fn update_appointment_table_column_widths(
     widths: AppointmentTableColumnWidths,
     state: State<'_, SettingsState>,
     backup: State<'_, BackupState>,
+    access: State<'_, AppAccessState>,
 ) -> Result<AppointmentTableColumnWidths, String> {
+    access.require_unlocked()?;
     let _operation_guard = backup.lock_data_operation().await;
     state
         .update_appointment_table_column_widths(widths)
@@ -480,42 +470,6 @@ mod tests {
 
         let reloaded = SettingsState::load(&dir).unwrap();
         assert_eq!(reloaded.snapshot().unwrap(), AppSettings::default());
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn accepts_disabled_auto_lock_and_rejects_unsafe_ranges() {
-        let disabled = AppSettings {
-            auto_lock_minutes: 0,
-            ..AppSettings::default()
-        };
-        disabled.validate().unwrap();
-
-        let invalid = AppSettings {
-            auto_lock_minutes: 1441,
-            ..AppSettings::default()
-        };
-        assert!(matches!(
-            invalid.validate(),
-            Err(SettingsError::Validation(_))
-        ));
-    }
-
-    #[test]
-    fn persists_disabled_auto_lock() {
-        let dir = test_dir("disabled-auto-lock");
-        let state = SettingsState::load(&dir).unwrap();
-        let disabled = AppSettings {
-            auto_lock_minutes: 0,
-            ..AppSettings::default()
-        };
-
-        state.update_from_frontend(disabled.clone()).unwrap();
-
-        assert_eq!(
-            SettingsState::load(&dir).unwrap().snapshot().unwrap(),
-            disabled
-        );
         fs::remove_dir_all(dir).unwrap();
     }
 

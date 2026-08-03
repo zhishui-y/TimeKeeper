@@ -5,6 +5,8 @@ import { appointmentToInput } from "../utils/appointment";
 import { DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS } from "../utils/appointmentTableColumns";
 import { mockApi } from "./mockClient";
 
+const allAppointmentDates = { from: "2000-01-01", to: "2100-12-31" } as const;
+
 function businessInput(
   serviceDate: string,
   startTime: string,
@@ -90,17 +92,17 @@ describe("browser mock API", () => {
     vi.unstubAllGlobals();
   });
 
-  it("copies an appointment account name without unlocking the vault", async () => {
+  it("copies an appointment account name through the ID command", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
-    const target = (await mockApi.listAppointments()).find((item) => item.account?.accountName);
+    const target = (await mockApi.listAppointments(allAppointmentDates)).find(
+      (item) => item.account?.accountName,
+    );
     expect(target?.account?.accountName).toBeTruthy();
 
-    await mockApi.lockVault();
     await mockApi.copyAppointmentAccountName(target!.id);
 
     expect(writeText).toHaveBeenCalledWith(target!.account!.accountName);
-    await mockApi.initializeVault("test-password");
     vi.unstubAllGlobals();
   });
 
@@ -124,7 +126,6 @@ describe("browser mock API", () => {
     });
 
     try {
-      await mockApi.lockVault();
       await expect(mockApi.copyAppointmentVoiceChannel(yy.appointment.id)).resolves.toBeUndefined();
       expect(writeText).toHaveBeenCalledWith("794676");
       expect(setTimeout).not.toHaveBeenCalled();
@@ -138,12 +139,10 @@ describe("browser mock API", () => {
         "预约不存在",
       );
     } finally {
-      await mockApi.deleteAppointments([
-        yy.appointment.id,
-        qq.appointment.id,
-        emptyYy.appointment.id,
-      ]);
-      await mockApi.initializeVault("test-password");
+      await mockApi.deleteAppointments({
+        kind: "explicit",
+        ids: [yy.appointment.id, qq.appointment.id, emptyYy.appointment.id],
+      });
       vi.unstubAllGlobals();
     }
   });
@@ -253,9 +252,15 @@ describe("browser mock API", () => {
       createdIds.push(pending.appointment.id, settled.appointment.id, entertainment.appointment.id);
 
       expect(
-        await mockApi.listAppointments({ progressStatus: "pending_settlement" }),
+        await mockApi.listAppointments({
+          ...allAppointmentDates,
+          progressStatus: "pending_settlement",
+        }),
       ).toContainEqual(expect.objectContaining({ id: pending.appointment.id }));
-      const completed = await mockApi.listAppointments({ progressStatus: "completed" });
+      const completed = await mockApi.listAppointments({
+        ...allAppointmentDates,
+        progressStatus: "completed",
+      });
       expect(completed).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ id: settled.appointment.id }),
@@ -264,7 +269,7 @@ describe("browser mock API", () => {
       );
       expect(completed.some((item) => item.id === pending.appointment.id)).toBe(false);
     } finally {
-      await mockApi.deleteAppointments(createdIds);
+      await mockApi.deleteAppointments({ kind: "explicit", ids: createdIds });
     }
   });
 
@@ -320,7 +325,6 @@ describe("browser mock API", () => {
   });
 
   it("keeps an appointment account independent after its source profile is deleted", async () => {
-    await mockApi.unlockVault("test-password");
     const account = await mockApi.createAccountProfile({
       accountName: `snapshot-account-${Date.now()}`,
       password: "snapshot-secret",
@@ -338,7 +342,7 @@ describe("browser mock API", () => {
     expect(unlinked.account).toMatchObject({
       accountName: account.accountName,
       server: "历史区服",
-      passwordAvailable: true,
+      password: "snapshot-secret",
     });
 
     await mockApi.updateAppointment(unlinked.id, {
@@ -350,7 +354,6 @@ describe("browser mock API", () => {
   });
 
   it("batch deletes account profiles without rewriting embedded appointment accounts", async () => {
-    await mockApi.unlockVault("test-password");
     const suffix = Date.now();
     const first = await mockApi.createAccountProfile({
       accountName: `batch-account-a-${suffix}`,
@@ -370,9 +373,8 @@ describe("browser mock API", () => {
     ).resolves.toBe(2);
     await expect(mockApi.getAccountProfile(first.id)).rejects.toThrow("账号档案不存在");
     await expect(mockApi.getAccountProfile(second.id)).rejects.toThrow("账号档案不存在");
-    await expect(mockApi.revealAccountPassword(first.id)).rejects.toThrow("尚未保存密码");
     await expect(mockApi.getAppointment(linked.appointment.id)).resolves.toMatchObject({
-      account: { accountName: first.accountName, passwordAvailable: true },
+      account: { accountName: first.accountName, password: "batch-secret-a" },
     });
     await expect(mockApi.deleteAccountProfiles(["unknown-account"])).resolves.toBe(0);
   });
@@ -392,9 +394,8 @@ describe("browser mock API", () => {
     await mockApi.reorderAccountProfiles(before.map((profile) => profile.id));
   });
 
-  it("updates non-secret account usage while the vault is locked", async () => {
+  it("updates account usage without a feature-level unlock flow", async () => {
     const profile = (await mockApi.listAccountProfiles())[0]!;
-    await mockApi.lockVault();
 
     const updated = await mockApi.updateAccountProfileUsage(profile.id, "  今晚使用中  ");
     expect(updated).toMatchObject({
@@ -507,8 +508,7 @@ describe("browser mock API", () => {
     });
   });
 
-  it("stores a one-time appointment secret outside response DTOs and returns safe contact presets", async () => {
-    await mockApi.unlockVault("test-password");
+  it("returns one-time appointment passwords with appointment DTOs", async () => {
     const suffix = Date.now();
     const contactName = `模板联系人-${suffix}`;
     const first = await mockApi.createAppointment({
@@ -529,9 +529,9 @@ describe("browser mock API", () => {
 
     expect(first.appointment.account).toMatchObject({
       accountName: `temporary-${suffix}`,
-      passwordAvailable: true,
+      password: "one-time-secret",
     });
-    expect(JSON.stringify(first.appointment)).not.toContain("one-time-secret");
+    expect(JSON.stringify(first.appointment)).toContain("one-time-secret");
 
     const presets = await mockApi.listContactPresets(contactName, 10);
     expect(presets).toHaveLength(1);
@@ -540,9 +540,9 @@ describe("browser mock API", () => {
       contactName,
       voicePlatform: "yy",
       voiceChannel: "123456",
-      account: { passwordAvailable: true },
+      account: { password: "one-time-secret" },
     });
-    expect(JSON.stringify(presets)).not.toContain("one-time-secret");
+    expect(JSON.stringify(presets)).toContain("one-time-secret");
   });
 
   it("restores the in-memory demo data captured by a backup", async () => {
@@ -559,9 +559,40 @@ describe("browser mock API", () => {
       contactName: "备份恢复回归",
       settlementStatus: "unsettled",
     });
-    await expect(mockApi.vaultStatus()).resolves.toMatchObject({
+    await expect(mockApi.appAccessStatus()).resolves.toMatchObject({
       initialized: true,
       unlocked: false,
     });
+  });
+
+  it("paginates filtered appointments and deletes a token snapshot with exclusions", async () => {
+    const suffix = Date.now();
+    const query = `分页-${suffix}`;
+    const created = await Promise.all(
+      ["09:00", "10:00", "11:00"].map((startTime, index) =>
+        mockApi.createAppointment(
+          businessInput("2099-09-01", startTime, `${12 + index}:00`, `${query}-${index}`, 1_000),
+        ),
+      ),
+    );
+    const ids = created.map((result) => result.appointment.id);
+
+    const secondPage = await mockApi.listAppointmentPage({ query }, 2, 2);
+    expect(secondPage).toMatchObject({ totalCount: 3, page: 2, pageSize: 2, totalPages: 2 });
+    expect(secondPage.items).toHaveLength(1);
+
+    const snapshot = await mockApi.createAppointmentSelection({ query });
+    expect(snapshot.totalCount).toBe(3);
+    const result = await mockApi.deleteAppointments({
+      kind: "token",
+      token: snapshot.token,
+      excludedIds: [ids[0]!],
+    });
+    expect(result).toEqual({ matchedCount: 2, deletedCount: 2 });
+    await expect(
+      mockApi.deleteAppointments({ kind: "token", token: snapshot.token, excludedIds: [] }),
+    ).rejects.toThrow("已过期");
+
+    await mockApi.deleteAppointments({ kind: "explicit", ids: [ids[0]!] });
   });
 });

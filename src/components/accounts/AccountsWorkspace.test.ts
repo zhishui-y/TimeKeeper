@@ -4,7 +4,6 @@ import { createPinia } from "pinia";
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockApi } from "../../api/mockClient";
-import { useVault } from "../../composables/useVault";
 import { useUiStore } from "../../stores/ui";
 import type { AccountProfile, AppSettings } from "../../types/domain";
 import { DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS } from "../../utils/accountTableColumns";
@@ -38,6 +37,7 @@ const profiles: AccountProfile[] = [
     specialization: "冰心",
     gearScore: "128000",
     accountName: "账号一",
+    password: "secret-1",
     currentScore: 2100,
     highestScore: 2300,
     scoreUpdatedAt: "2026-07-28",
@@ -55,6 +55,7 @@ const profiles: AccountProfile[] = [
     specialization: "花间",
     gearScore: "126000",
     accountName: "账号二",
+    password: "secret-2",
     currentScore: 2000,
     highestScore: 2200,
     scoreUpdatedAt: "2026-07-28",
@@ -68,7 +69,6 @@ const profiles: AccountProfile[] = [
 
 const settingsFixture: AppSettings = {
   defaultReminderMinutes: 30,
-  autoLockMinutes: 15,
   backupRetention: 30,
   lastAutomaticBackupDate: null,
   accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
@@ -86,16 +86,10 @@ describe("AccountsWorkspace batch delete feedback", () => {
   it("shows progress immediately and an inline success result after deletion", async () => {
     const pendingDelete = deferred<number>();
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
-      initialized: true,
-      unlocked: true,
-      autoLockMinutes: 15,
-    });
     const deleteProfiles = vi
       .spyOn(mockApi, "deleteAccountProfiles")
       .mockReturnValue(pendingDelete.promise);
     vi.spyOn(globalThis, "confirm").mockReturnValue(true);
-    await useVault().load();
 
     const pinia = createPinia();
     const wrapper = mount(AccountsWorkspace, {
@@ -128,23 +122,23 @@ describe("AccountsWorkspace batch delete feedback", () => {
 
   it("filters account profiles and sorts numeric columns in both directions", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
-      initialized: true,
-      unlocked: true,
-      autoLockMinutes: 15,
-    });
-    await useVault().load();
 
     const wrapper = mount(AccountsWorkspace, {
       global: { plugins: [createPinia()] },
     });
     await flushPromises();
 
+    await wrapper.get('button[aria-label="显示账号一 的密码"]').trigger("click");
+    expect(wrapper.text()).toContain("secret-1");
+
     await wrapper.get('select[aria-label="按服务器筛选账号"]').setValue("唯我独尊");
     expect(wrapper.findAll(".data-table tbody tr")).toHaveLength(1);
     expect(wrapper.get(".account-summary").text()).toContain("显示 1 / 共 2 个账号");
+    expect(wrapper.text()).not.toContain("secret-1");
 
     await wrapper.get('select[aria-label="按服务器筛选账号"]').setValue("");
+    expect(wrapper.text()).not.toContain("secret-1");
+    expect(wrapper.text()).toContain("••••••");
     const currentScoreSort = wrapper.get('[data-sort-key="currentScore"]');
     await currentScoreSort.trigger("click");
     expect(
@@ -160,18 +154,12 @@ describe("AccountsWorkspace batch delete feedback", () => {
 
   it("persists drag order and copies the selected account name", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
-      initialized: true,
-      unlocked: true,
-      autoLockMinutes: 15,
-    });
     const reorder = vi.spyOn(mockApi, "reorderAccountProfiles").mockResolvedValue();
     const copyAccountName = vi.spyOn(mockApi, "copyAccountName").mockResolvedValue();
     const copyAccountCharacterName = vi
       .spyOn(mockApi, "copyAccountCharacterName")
       .mockResolvedValue();
     const copyAccountPassword = vi.spyOn(mockApi, "copyAccountPassword").mockResolvedValue();
-    await useVault().load();
 
     const pinia = createPinia();
     const wrapper = mount(AccountsWorkspace, {
@@ -196,14 +184,14 @@ describe("AccountsWorkspace batch delete feedback", () => {
     expect(copyAccountCharacterName).toHaveBeenCalledWith("account-2");
     expect(ui.toast?.message).toBe("角色名已复制");
 
-    await wrapper.get('button[aria-label="复制密码 账号二"]').trigger("click");
+    await wrapper.get('button[aria-label="复制账号二 的密码"]').trigger("click");
     await flushPromises();
     expect(copyAccountPassword).toHaveBeenCalledWith("account-2");
     expect(ui.toast?.message).toBe("密码已复制，剪贴板将在30秒后清空");
     wrapper.unmount();
   });
 
-  it("saves trimmed usage while the vault is locked", async () => {
+  it("saves trimmed usage without a feature-level unlock", async () => {
     const updated = { ...profiles[0]!, usageInfo: "朋友使用到周末" };
     const cleared = { ...updated, usageInfo: null };
     const listProfiles = vi
@@ -211,16 +199,10 @@ describe("AccountsWorkspace batch delete feedback", () => {
       .mockResolvedValueOnce(profiles)
       .mockResolvedValueOnce([updated, profiles[1]!])
       .mockResolvedValue([cleared, profiles[1]!]);
-    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
-      initialized: true,
-      unlocked: false,
-      autoLockMinutes: 15,
-    });
     const updateUsage = vi
       .spyOn(mockApi, "updateAccountProfileUsage")
       .mockResolvedValueOnce(updated)
       .mockResolvedValueOnce(cleared);
-    await useVault().load();
 
     const pinia = createPinia();
     const wrapper = mount(AccountsWorkspace, {
@@ -233,8 +215,8 @@ describe("AccountsWorkspace batch delete feedback", () => {
 
     expect(usageInput.attributes("disabled")).toBeUndefined();
     expect(
-      wrapper.get('button[aria-label="复制密码 账号一"]').attributes("disabled"),
-    ).toBeDefined();
+      wrapper.get('button[aria-label="复制账号一 的密码"]').attributes("disabled"),
+    ).toBeUndefined();
     await emptyUsageInput.trigger("focus");
     await emptyUsageInput.setValue("取消这次输入");
     await emptyUsageInput.trigger("keydown", { key: "Escape" });
@@ -266,16 +248,10 @@ describe("AccountsWorkspace batch delete feedback", () => {
 
   it("prevents duplicate usage saves and restores the original value on failure", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
-      initialized: true,
-      unlocked: false,
-      autoLockMinutes: 15,
-    });
     const pendingUpdate = deferred<AccountProfile>();
     const updateUsage = vi
       .spyOn(mockApi, "updateAccountProfileUsage")
       .mockReturnValue(pendingUpdate.promise);
-    await useVault().load();
 
     const pinia = createPinia();
     const wrapper = mount(AccountsWorkspace, {
@@ -303,11 +279,6 @@ describe("AccountsWorkspace batch delete feedback", () => {
 
   it("loads, previews, and persists account table column widths without a reset control", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
-      initialized: true,
-      unlocked: true,
-      autoLockMinutes: 15,
-    });
     vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
       weekStart: "2026-07-27",
       clearedCount: 0,
@@ -342,11 +313,6 @@ describe("AccountsWorkspace batch delete feedback", () => {
 
   it("rolls column widths back when persistence fails", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
-      initialized: true,
-      unlocked: true,
-      autoLockMinutes: 15,
-    });
     vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
       weekStart: "2026-07-27",
       clearedCount: 0,
@@ -371,11 +337,6 @@ describe("AccountsWorkspace batch delete feedback", () => {
 
   it("confirms and clears weekly content for all accounts while preserving drafts on failure", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
-      initialized: true,
-      unlocked: false,
-      autoLockMinutes: 15,
-    });
     vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
       weekStart: "2026-07-27",
       clearedCount: 0,
@@ -415,11 +376,6 @@ describe("AccountsWorkspace batch delete feedback", () => {
 
   it("reloads and reports an automatic weekly rollover", async () => {
     const listProfiles = vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
-      initialized: true,
-      unlocked: true,
-      autoLockMinutes: 15,
-    });
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
     vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
       weekStart: "2026-08-03",
@@ -438,11 +394,6 @@ describe("AccountsWorkspace batch delete feedback", () => {
     const pendingRefresh =
       deferred<Awaited<ReturnType<typeof mockApi.refreshAccountProfileRoleData>>>();
     const listProfiles = vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
-      initialized: true,
-      unlocked: true,
-      autoLockMinutes: 15,
-    });
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
     vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
       weekStart: "2026-07-27",
@@ -498,11 +449,6 @@ describe("AccountsWorkspace batch delete feedback", () => {
 
   it("keeps request errors in the summary dialog without a duplicate toast", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
-      initialized: true,
-      unlocked: true,
-      autoLockMinutes: 15,
-    });
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
     vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
       weekStart: "2026-07-27",
@@ -534,11 +480,6 @@ describe("AccountsWorkspace batch delete feedback", () => {
 
   it("supports selected and single-row role data refresh targets", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
-      initialized: true,
-      unlocked: true,
-      autoLockMinutes: 15,
-    });
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
     vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
       weekStart: "2026-07-27",

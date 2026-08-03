@@ -1,17 +1,42 @@
 # Native command contract
 
-All command payloads and responses use camelCase JSON. Rust DTOs use
-`#[serde(rename_all = "camelCase")]` and match `src/types/domain.ts`.
+所有 command payload 与 response 使用 camelCase JSON；Rust DTO 使用
+`#[serde(rename_all = "camelCase")]` 并与 `src/types/domain.ts` 一致。
+
+除本节列出的入口命令外，所有业务 command 必须在 Rust 边界检查
+`AppAccessState.require_unlocked()`。进程启动默认锁定，前端隐藏页面不是权限边界。
+
+## App access
+
+- `app_access_status() -> AppAccessStatus`
+- `initialize_app_access(password) -> AppAccessStatus`
+- `unlock_app_access(password) -> AppAccessStatus`
+- `lock_app_access() -> AppAccessStatus`
+- `change_app_access_password(currentPassword, newPassword) -> AppAccessStatus`
+- `reset_app_access_password(newPassword, confirmationText) -> AppAccessStatus`
+- `migrate_legacy_credentials(password) -> LegacyCredentialMigrationResult`
+
+`AppAccessStatus` 包含 `initialized`、`unlocked` 与
+`legacyMigrationPendingCount`。初始化、解锁、修改、重置的 Argon2id 工作都在阻塞任务执行。
+修改密码要求当前进程已解锁并再次验证当前密码；新密码至少 4 个 Unicode 字符，界面建议 8 位
+以上。重置要求 `confirmationText === "重置"`，前端还必须要求两次新密码一致；重置只替换
+verifier，不触碰业务表或凭据表。
+
+`migrate_legacy_credentials` 以只读方式验证旧 Stronghold。尚无入口 verifier 时，成功使用的旧密码
+同时初始化为入口密码；已有入口密码时，必须先解锁进程。结果包含 `migratedCount`、
+`missingCount`、`pendingCount`。缺失 key 保留队列，已有新凭据不覆盖并清除对应旧队列项。
 
 ## Appointments
 
 - `list_appointments(filters) -> Appointment[]`
+- `list_appointment_page(filters, page?, pageSize?) -> AppointmentPage`
+- `create_appointment_selection(filters) -> AppointmentSelectionSnapshot`
 - `get_appointment(id) -> Appointment`
 - `create_appointment(input) -> AppointmentMutationResult`
 - `update_appointment(id, input) -> AppointmentMutationResult`
 - `duplicate_appointment(id, serviceDate?) -> AppointmentMutationResult`
 - `delete_appointment(id) -> void`
-- `delete_appointments(ids) -> number`
+- `delete_appointments(selection) -> AppointmentDeleteResult`
 - `list_contact_presets(query?, limit=10) -> ContactPreset[]`
 - `copy_appointment_account_name(id) -> void`
 - `copy_appointment_voice_channel(id) -> void`
@@ -20,53 +45,43 @@ All command payloads and responses use camelCase JSON. Rust DTOs use
 - `set_appointment_service_status(id, status) -> Appointment`
 - `settle_appointment(id, amountMinor, paymentMethod?) -> Appointment`
 
-Conflict detection excludes cancelled appointments and the record being edited.
-It only compares records with both a start and end timestamp. Conflicts warn but
-do not block writes.
+`list_appointments` 是范围读取接口：`filters.from` 与 `filters.to` 必须同时提供，供今日工作台和
+日历可见区间使用。`list_appointment_page` 用于历史记录，页码从 1 开始，默认每页 100、最大 200；
+返回 `items`、`totalCount`、`page`、`pageSize`、`totalPages`。计数与页面行在同一只读事务取得，
+排序固定为 `serviceDate DESC, startsAt DESC, createdAt DESC, id DESC`。
 
-`Appointment.account` is either absent or an embedded value containing
-`specialization`, `gearScore`, `server`, `accountName`, and
-`passwordAvailable`. `AppointmentInput.account` is a tagged union:
+`create_appointment_selection` 返回准确 ID 快照的 `token`、`totalCount`、`expiresAt`，有效 10 分钟。
+`delete_appointments.selection` 是以下 tagged union：
 
-- `null` stores no account.
-- `{ kind: "profile", profileId }` copies the current profile metadata and
-  password without persisting the profile ID.
-- `{ kind: "embedded", details, credential }` stores the supplied metadata;
-  `credential` is one of `keep`, `replace { password }`, or
-  `copyFromAppointment { sourceAppointmentId }`.
+- `{ kind: "explicit", ids }`
+- `{ kind: "token", token, excludedIds }`
 
-Temporary embedded accounts require a non-empty account name and a replacement
-password. Existing passwords never appear in appointment/detail/preset
-responses. `voicePlatform` accepts `yy`, `qq`, or `null`; `voiceChannel` is a
-digit-only string allowed only for YY and is cleared for QQ or no voice.
+删除返回 `matchedCount` 与 `deletedCount`。显式 ID 去空、去重；token 过期、未知或成功使用后均不可
+再次使用。后端在同一事务中以每批 500 个 ID 删除，凭据外键级联；成功提交后通知状态一次加锁
+批量取消。取消预约仍调用进度命令，不等同于永久删除。
 
-`copy_appointment_account_name` copies the embedded non-secret account name without requiring an
-unlocked vault or scheduling clipboard cleanup. It rejects missing appointments and appointments
-without an embedded account. `copy_appointment_voice_channel` reloads `voicePlatform` and
-`voiceChannel` from SQLite, accepts only YY appointments with a non-empty digit-only channel, and
-copies the channel without opening Stronghold or scheduling clipboard cleanup. `list_contact_presets`
-excludes cancelled appointments, selects only the newest appointment per contact, and returns at most
-10 safe templates. Empty `query`
-orders all contacts by appointment date/time/creation time; non-empty `query`
-uses contact-name fuzzy matching. A preset may expose `passwordAvailable` and a
-`sourceAppointmentId`, but never a password. `copy_appointment_account_password`
-requires an unlocked vault and clears the clipboard after 30 seconds.
+`Appointment.account` 为 `null` 或内嵌 `specialization`、`gearScore`、`server`、
+`accountName`、`password: string | null`。`AppointmentInput.account` 为：
 
-`sync_appointment_service_statuses` uses the current China-local time and is idempotent. Scheduled
-appointments become in progress when their start time is reached. Scheduled or in-progress
-appointments become completed when their end time is reached. Appointments without an end time
-can start automatically but are never completed automatically. For business appointments, an
-automatically completed service is exposed as the unified `pending_settlement` progress until it is
-settled. `settle_appointment` atomically sets both `serviceStatus=completed` and
-`settlementStatus=settled`, which is exposed as unified `completed` progress.
+- `null`：不保存账号。
+- `{ kind: "profile", profileId }`：在 Rust 事务中复制当前档案元数据与密码，不保存档案 ID。
+- `{ kind: "embedded", details, credential }`：保存一次性账号；`credential` 为 `keep`、
+  `replace { password }` 或 `copyFromAppointment { sourceAppointmentId }`。
 
-`AppointmentFilters.progressStatus` accepts `scheduled`, `in_progress`, `pending_settlement`,
-`completed`, or `cancelled`. Pending settlement selects completed, unsettled business appointments;
-completed selects completed entertainment appointments or non-cancelled settled business
-appointments. The legacy `serviceStatus` and `settlementStatus` filter fields remain accepted and
-are combined with this projection when supplied.
+已有预约的 `keep` 保留当前凭据；明确替换、复制或移除与预约元数据同事务提交。新增一次性账号
+要求非空账号名和替换密码。`voicePlatform` 接受 `yy`、`qq` 或 `null`；只有 YY 可保存纯数字
+`voiceChannel`。
 
-## Accounts and vault
+冲突检查排除取消预约与正在编辑的自身，只比较开始和结束都存在的记录；冲突只警告不阻止保存。
+跨天结束时间在规范化后进入次日。`sync_appointment_service_statuses` 使用北京时间且幂等；无结束
+时间的预约可自动开始但不自动完成。业务“已完成服务、未结算”投影为 `pending_settlement`，结算
+命令原子写入服务完成与已结算状态。
+
+联系人预设只取每个联系人最新的非取消预约，最多 10 条；可返回账号密码本身以便显示/复用，
+也保留 `sourceAppointmentId` 供 `copyFromAppointment` 协议使用。三种复制 command 都从 SQLite
+重读当前值；只有密码复制使用 30 秒内容匹配清理。
+
+## Accounts
 
 - `list_account_profiles(query?, needsReview?) -> AccountProfile[]`
 - `get_account_profile(id) -> AccountProfile`
@@ -80,114 +95,54 @@ are combined with this projection when supplied.
 - `reorder_account_profiles(ids) -> void`
 - `copy_account_name(id) -> void`
 - `copy_account_character_name(id) -> void`
-- `refresh_account_profile_role_data(ids) -> AccountRoleDataRefreshResult`
-- `vault_status() -> VaultStatus`
-- `initialize_vault(password) -> VaultStatus`
-- `unlock_vault(password) -> VaultUnlockResult`
-- `change_vault_password(currentPassword, newPassword) -> VaultStatus`
-- `lock_vault() -> VaultStatus`
-- `reveal_account_password(id) -> string`
 - `copy_account_password(id) -> void`
+- `refresh_account_profile_role_data(ids) -> AccountRoleDataRefreshResult`
 
-Passwords never appear in account list/detail responses. Password writes and
-SQLite profile writes use compensating rollback so a failed operation cannot
-leave a visible profile without its secret.
+`AccountProfile.password` 是 `string | null`，列表与详情均返回。创建、修改、明确移除和删除时，
+档案元数据与凭据同一个 SQLite 事务提交；凭据通过外键级联删除。复制密码在 Rust 重读并执行
+30 秒剪贴板清理。
 
-`VaultUnlockResult` contains the normal vault status and may include
-`appointmentPasswordMigration` with `migratedCount`, `missingCount`, and
-`pendingCount`. On the first successful unlock after migration `0004`, Rust
-copies available legacy profile passwords to appointment-specific Stronghold
-entries. Missing sources are reported without dropping the appointment; pending
-items remain retryable. Appointment password creation, replacement, duplication,
-deletion, and Excel import use the same blocking-worker and compensation rules.
+本周用途按北京时间周一边界同步；第一次只记录周起始，之后跨周在一个事务内清空非空内容。
+角色刷新对 ID 去空、去重并保留首次顺序；缺服务器或角色名为 `skipped`，服务端无记录为
+`noRecord`，网络/解析/大小/日期错误为 `failed`。最多 3 个并发，成功项在全部请求结束后一次事务
+写入；失败项保留旧值，最高分只增不降，不改写预约快照或密码。
 
-`update_account_profile_usage` first synchronizes the current China-local week, then trims free text,
-stores blank content as `null`, and updates only the non-secret usage field and profile timestamp.
-`sync_account_profile_usage_week` records the current week without clearing on first use; later China
-Monday boundaries clear all non-null usage values atomically and advance the stored week marker.
-`clear_account_profile_usage` performs the same all-account SQL update on demand. These operations
-remain available while the vault is locked and never access Stronghold.
-
-`refresh_account_profile_role_data` trims and de-duplicates IDs while preserving first-input order.
-Profiles missing a server or character name are `skipped`; `ok=false` responses are `noRecord`;
-HTTP, network, JSON, response-size, date, and field failures are `failed`. Only `updated` items are
-written, after every request finishes, in one transaction. The command overwrites `gearScore`,
-`currentScore`, and the China-local `scoreUpdatedAt`; `highestScore` can only increase. It does not
-update other profile fields, Stronghold data, or appointment snapshots. At most three requests run
-concurrently, with 5-second connect and 15-second total timeouts and no automatic retry. The result
-contains request and status counts plus one ordered item per de-duplicated input ID.
-
-Changing the master password requires an unlocked vault and the current
-password. Rust re-encrypts and verifies the complete Stronghold snapshot before
-replacing the in-memory session. Existing backup files retain the master
-password that was active when each backup was created. New master passwords
-must contain at least 4 Unicode characters; 8 or more are recommended.
-
-## Reports, import, backup, and settings
+## Reports
 
 - `get_dashboard_summary(date) -> DashboardSummary`
 - `get_revenue_summary(from, to, granularity) -> RevenueSummary`
+
+Dashboard 只统计非取消业务预约的已结金额，待结数量只包含服务已完成但未结算的业务预约。
+收益查询要求 `from`/`to` 同时填写或同时为空；同时为空时从最早的非取消、正数、已结业务收入
+推导到北京时间今天，无收入时两端都为今天。金额始终使用人民币分整数。
+
+## Excel import
+
 - `preview_excel_import(path, baseYear) -> ExcelImportPreview`
 - `commit_excel_import(previewToken, selection) -> ExcelImportResult`
+
+预览 token 仅存 Rust 内存，30 分钟过期；解析出的密码不出现在响应。`selection.appointments` 与
+`selection.accounts` 独立控制提交，至少选一个。缺少 `account` sheet 时允许预约导入但拒绝仅账号
+提交。账号、预约和凭据在一个 SQLite 事务提交，稳定指纹按数据类型独立跳过。提交后只调度本次
+新增预约的通知。
+
+唯一纯 ASCII 数字备注识别为 YY 频道；冲突数字备注继续作为普通备注并产生警告。负金额原值写入
+备注，账单金额为空、结算状态为未结，并返回行警告。
+
+## Backup and settings
+
 - `create_backup(destination?) -> BackupResult`
-- `restore_backup(path) -> void` (successful restore requests app restart)
+- `restore_backup(path) -> void`（暂存成功后请求应用重启）
 - `get_settings() -> AppSettings`
 - `update_settings(settings) -> AppSettings`
 - `update_account_table_column_widths(widths) -> AccountTableColumnWidths`
 - `update_appointment_table_column_widths(widths) -> AppointmentTableColumnWidths`
 
-`AppSettings.accountTableColumnWidths` stores the ten resizable account metadata widths. The dedicated
-update command validates each value against its column minimum and the 480px maximum. Rust owns
-`lastAccountUsageWeekStart`; generic settings updates cannot overwrite this weekly cleanup marker.
-Older settings files that omit either field load default widths and a missing week marker, preserving
-existing weekly content until the first later week transition.
+新建备份写格式 v2：`database.sqlite3` 与 `settings.json` 必选；仅当旧凭据迁移队列不为空时，
+`vault.hold` 与 `vault.salt` 成对必选。恢复接受 v1/v2，先校验清单、文件哈希、数据库、设置和
+可选 Stronghold 对，再创建当前 v2 预恢复备份。替换在重启早期执行并保留失败回滚；v1 数据库由
+正常 migration 升级。
 
-`AppSettings.appointmentTableColumnWidths` stores the ten resizable appointment data widths. Its
-dedicated update command validates each value against its column minimum and the 480px maximum.
-The `voice` field sits between `account` and `mode`, defaults to 88px, and has a 72px minimum. It uses
-a field-level default so settings that already contain customized appointment widths but predate the
-voice column retain every existing value. The former `settlementStatus` width is ignored because the
-table now uses one progress column. The final width field is `notes`; settings written by the
-earlier payment-method column used `paymentMethod` and are accepted as a backward-compatible alias.
-Older settings files that omit the entire field load the default appointment widths. Account and
-appointment table width commands update only their own field and preserve every other setting.
-
-`AppSettings.accountRoleDataServerUrl` is a non-secret absolute HTTP(S) base URL stored in
-`settings.json` and included in full backups. It cannot contain credentials, query parameters, or a
-fragment. Older settings files receive the active macro URL as their default.
-
-Backup restore requires the exact migration `0004` schema, including embedded
-appointment account columns, voice columns, and the
-`appointment_password_backfill` table. It also rejects the removed profile
-foreign key, old account snapshot columns, and stale indexes. Backups created
-before migration `0004` are rejected by schema validation rather than being
-upgraded during restore.
-
-`DashboardSummary.pendingCount` counts business appointments whose service is completed but whose
-settlement status is still unsettled. Scheduled, in-progress, cancelled, entertainment, and settled
-appointments are excluded.
-
-`AppSettings.autoLockMinutes` accepts `0` to disable idle auto-lock, or a value
-from `1` through `1440` minutes. Manual lock and locking caused by closing the
-application remain available when idle auto-lock is disabled.
-
-Excel preview tokens are in-memory, expire after 30 minutes, and contain parsed
-secret values only on the Rust side. `selection.appointments` and `selection.accounts`
-independently control which data is committed, and at least one must be selected.
-`ExcelImportPreview.yyChannelCount` reports appointment rows whose unique pure-ASCII-digit note was
-recognized as a YY channel. The `记录` sheet remains required. A missing `account` sheet is a preview
-warning and permits appointment import, but an accounts-only commit fails explicitly.
-Each appointment row writes its four account fields directly into the appointment
-and its password to an appointment-specific Stronghold entry; it does not match or
-persist an account-profile relationship. A row with an account but no password is
-imported with `passwordAvailable=false` and a warning. Appointments and account
-profiles use separate stable row fingerprints; repeated rows are skipped
-independently and reported by data type.
-Legacy negative amounts cannot enter the non-negative appointment billing field. Their original
-value is retained in appointment notes, the billing amount is left empty, settlement becomes
-unsettled, and preview returns a row warning instead of aborting the whole transaction.
-
-`get_revenue_summary` requires both dates for a bounded report. Passing both `from` and `to` as
-empty strings resolves the range from the earliest non-cancelled, positively settled business
-appointment through the current China-local date. If no income exists, both dates resolve to today.
-Passing only one empty date is invalid.
+`AppSettings` 不再包含 `autoLockMinutes`。入口锁没有空闲计时器；托盘恢复保持解锁，手动锁定和
+进程重启仍生效。表格列宽命令只更新各自字段并保留其余设置；角色数据服务器 URL 必须是无凭据、
+无 query、无 fragment 的绝对 HTTP(S) 基础 URL。

@@ -1,7 +1,7 @@
 use chrono::{DateTime, Datelike, Days, FixedOffset, NaiveDate, Utc};
 use serde::Serialize;
 use sqlx::{QueryBuilder, Row, Sqlite, Transaction, sqlite::SqliteRow};
-use tauri::{AppHandle, Manager, Runtime, State};
+use tauri::State;
 use uuid::Uuid;
 
 use crate::{
@@ -9,12 +9,13 @@ use crate::{
         AccountRoleDataRefreshResult, AccountRoleDataRefreshState,
         commit_account_role_data_refresh, prepare_account_role_data_refresh,
     },
+    app_access::AppAccessState,
     backup::BackupState,
     db::{Database, ImportWriteResult},
     importer::LegacyAccountProfile,
     models::{AccountProfile, AccountProfileInput},
     settings::SettingsState,
-    vault::{VaultState, copy_text_to_clipboard, run_blocking_vault_operation},
+    vault::{copy_sensitive_text_to_clipboard, copy_text_to_clipboard},
 };
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -37,14 +38,6 @@ fn validate_input(mut input: AccountProfileInput) -> Result<AccountProfileInput,
         return Err("账号不能为空".into());
     }
 
-    if input
-        .password
-        .as_deref()
-        .is_some_and(|value| !value.is_empty())
-    {
-        return Err("密码必须由 vault 安全层写入，不能写入 SQLite".into());
-    }
-
     if input.current_score.is_some_and(|score| score < 0)
         || input.highest_score.is_some_and(|score| score < 0)
     {
@@ -57,7 +50,7 @@ fn validate_input(mut input: AccountProfileInput) -> Result<AccountProfileInput,
     input.specialization = optional_text(input.specialization);
     input.gear_score = optional_text(input.gear_score);
     input.notes = optional_text(input.notes);
-    input.password = None;
+    input.password = input.password.filter(|password| !password.is_empty());
     input.score_updated_at = optional_text(input.score_updated_at);
     if let Some(date) = input.score_updated_at.as_deref() {
         NaiveDate::parse_from_str(date, "%Y-%m-%d")
@@ -76,6 +69,7 @@ pub(crate) fn profile_from_row(row: &SqliteRow) -> Result<AccountProfile, String
         specialization: row.try_get("specialization").map_err(db_error)?,
         gear_score: row.try_get("gear_score").map_err(db_error)?,
         account_name: row.try_get("account_name").map_err(db_error)?,
+        password: row.try_get::<Option<String>, _>("password").unwrap_or(None),
         current_score: row.try_get("current_score").map_err(db_error)?,
         highest_score: row.try_get("highest_score").map_err(db_error)?,
         score_updated_at: row.try_get("score_updated_at").map_err(db_error)?,
@@ -106,9 +100,11 @@ async fn rollback_transaction(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn list_account_profiles(
     database: State<'_, Database>,
+    access: State<'_, AppAccessState>,
     query: Option<String>,
     needs_review: Option<bool>,
 ) -> Result<Vec<AccountProfile>, String> {
+    access.require_unlocked()?;
     list_account_profiles_impl(database.inner(), query, needs_review).await
 }
 
@@ -117,27 +113,33 @@ pub(crate) async fn list_account_profiles_impl(
     query: Option<String>,
     needs_review: Option<bool>,
 ) -> Result<Vec<AccountProfile>, String> {
-    let mut builder = QueryBuilder::<Sqlite>::new("SELECT * FROM account_profiles WHERE 1 = 1");
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "SELECT profile.*, credential.password AS password
+         FROM account_profiles AS profile
+         LEFT JOIN account_profile_credentials AS credential
+           ON credential.profile_id = profile.id
+         WHERE 1 = 1",
+    );
 
     if let Some(query) = optional_text(query) {
         let pattern = format!("%{}%", query.to_lowercase());
         builder
-            .push(" AND (lower(account_name) LIKE ")
+            .push(" AND (lower(profile.account_name) LIKE ")
             .push_bind(pattern.clone())
-            .push(" OR lower(coalesce(contact_name, '')) LIKE ")
+            .push(" OR lower(coalesce(profile.contact_name, '')) LIKE ")
             .push_bind(pattern.clone())
-            .push(" OR lower(coalesce(server, '')) LIKE ")
+            .push(" OR lower(coalesce(profile.server, '')) LIKE ")
             .push_bind(pattern.clone())
-            .push(" OR lower(coalesce(character_name, '')) LIKE ")
+            .push(" OR lower(coalesce(profile.character_name, '')) LIKE ")
             .push_bind(pattern)
             .push(")");
     }
     if let Some(needs_review) = needs_review {
         builder
-            .push(" AND needs_review = ")
+            .push(" AND profile.needs_review = ")
             .push_bind(if needs_review { 1_i64 } else { 0_i64 });
     }
-    builder.push(" ORDER BY sort_order ASC, account_name COLLATE NOCASE");
+    builder.push(" ORDER BY profile.sort_order ASC, profile.account_name COLLATE NOCASE");
 
     builder
         .build()
@@ -152,8 +154,10 @@ pub(crate) async fn list_account_profiles_impl(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_account_profile(
     database: State<'_, Database>,
+    access: State<'_, AppAccessState>,
     id: String,
 ) -> Result<AccountProfile, String> {
+    access.require_unlocked()?;
     get_account_profile_impl(database.inner(), &id).await
 }
 
@@ -161,28 +165,33 @@ pub(crate) async fn get_account_profile_impl(
     database: &Database,
     id: &str,
 ) -> Result<AccountProfile, String> {
-    let row = sqlx::query("SELECT * FROM account_profiles WHERE id = ?")
-        .bind(id)
-        .fetch_optional(database.pool())
-        .await
-        .map_err(db_error)?
-        .ok_or_else(|| format!("账号档案不存在: {id}"))?;
+    let row = sqlx::query(
+        "SELECT profile.*, credential.password AS password
+         FROM account_profiles AS profile
+         LEFT JOIN account_profile_credentials AS credential
+           ON credential.profile_id = profile.id
+         WHERE profile.id = ?",
+    )
+    .bind(id)
+    .fetch_optional(database.pool())
+    .await
+    .map_err(db_error)?
+    .ok_or_else(|| format!("账号档案不存在: {id}"))?;
     profile_from_row(&row)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn create_account_profile<R: Runtime>(
+pub async fn create_account_profile(
     database: State<'_, Database>,
     backup: State<'_, BackupState>,
-    app: AppHandle<R>,
-    mut input: AccountProfileInput,
+    access: State<'_, AppAccessState>,
+    input: AccountProfileInput,
 ) -> Result<AccountProfile, String> {
+    access.require_unlocked()?;
     let _operation_guard = backup.lock_data_operation().await;
-    let password = input
-        .password
-        .take()
-        .filter(|password| !password.is_empty())
-        .ok_or_else(|| "新建账号档案时密码不能为空".to_string())?;
+    if input.password.as_deref().is_none_or(str::is_empty) {
+        return Err("新建账号档案时密码不能为空".into());
+    }
     let mut transaction = database.pool().begin().await.map_err(db_error)?;
     let profile = match insert_account_profile(&mut transaction, input).await {
         Ok(profile) => profile,
@@ -193,22 +202,7 @@ pub async fn create_account_profile<R: Runtime>(
         }
     };
 
-    let worker_app = app.clone();
-    let profile_id = profile.id.clone();
-    if let Err(error) = run_blocking_vault_operation(move || {
-        worker_app
-            .state::<VaultState>()
-            .set_secret(&profile_id, password)
-    })
-    .await
-    {
-        let error = format!("保存账号密码失败：{error}");
-        return Err(rollback_transaction(transaction, error, "回滚未提交的账号元数据失败").await);
-    }
-
-    transaction.commit().await.map_err(|error| {
-        format!("提交账号元数据失败：{error}；为避免出现可见账号但密码缺失，已保留保险库中的密码")
-    })?;
+    transaction.commit().await.map_err(db_error)?;
     Ok(profile)
 }
 
@@ -234,7 +228,8 @@ async fn insert_account_profile(
     transaction: &mut Transaction<'_, Sqlite>,
     input: AccountProfileInput,
 ) -> Result<AccountProfile, String> {
-    let input = validate_input(input)?;
+    let mut input = validate_input(input)?;
+    let password = input.password.take();
     let id = Uuid::now_v7().to_string();
     let now = Utc::now().to_rfc3339();
 
@@ -271,27 +266,39 @@ async fn insert_account_profile(
     .await
     .map_err(db_error)?;
 
-    let row = sqlx::query("SELECT * FROM account_profiles WHERE id = ?")
-        .bind(&id)
-        .fetch_one(&mut **transaction)
-        .await
-        .map_err(db_error)?;
+    if let Some(password) = password {
+        sqlx::query("INSERT INTO account_profile_credentials (profile_id, password) VALUES (?, ?)")
+            .bind(&id)
+            .bind(password)
+            .execute(&mut **transaction)
+            .await
+            .map_err(db_error)?;
+    }
+
+    let row = sqlx::query(
+        "SELECT profile.*, credential.password AS password
+         FROM account_profiles AS profile
+         LEFT JOIN account_profile_credentials AS credential
+           ON credential.profile_id = profile.id
+         WHERE profile.id = ?",
+    )
+    .bind(&id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(db_error)?;
     profile_from_row(&row)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn update_account_profile<R: Runtime>(
+pub async fn update_account_profile(
     database: State<'_, Database>,
     backup: State<'_, BackupState>,
-    app: AppHandle<R>,
+    access: State<'_, AppAccessState>,
     id: String,
-    mut input: AccountProfileInput,
+    input: AccountProfileInput,
 ) -> Result<AccountProfile, String> {
+    access.require_unlocked()?;
     let _operation_guard = backup.lock_data_operation().await;
-    let password = input
-        .password
-        .take()
-        .filter(|password| !password.is_empty());
     let mut transaction = database.pool().begin().await.map_err(db_error)?;
     let profile = match update_account_profile_in_transaction(&mut transaction, &id, input).await {
         Ok(profile) => profile,
@@ -300,51 +307,7 @@ pub async fn update_account_profile<R: Runtime>(
         }
     };
 
-    let Some(password) = password else {
-        transaction.commit().await.map_err(db_error)?;
-        return Ok(profile);
-    };
-
-    let worker_app = app.clone();
-    let secret_id = id.clone();
-    let previous = match run_blocking_vault_operation(move || {
-        worker_app
-            .state::<VaultState>()
-            .set_secret(&secret_id, password)
-    })
-    .await
-    {
-        Ok(previous) => previous,
-        Err(error) => {
-            let error = format!("更新账号密码失败：{error}");
-            return Err(rollback_transaction(transaction, error, "回滚未提交的账号更新失败").await);
-        }
-    };
-
-    if let Err(error) = transaction.commit().await {
-        let primary_error = format!("提交账号档案更新失败：{error}");
-        if let Some(previous_password) = previous {
-            let worker_app = app.clone();
-            let secret_id = id.clone();
-            if let Err(rollback_error) = run_blocking_vault_operation(move || {
-                worker_app
-                    .state::<VaultState>()
-                    .set_secret(&secret_id, previous_password)
-                    .map(|_| ())
-            })
-            .await
-            {
-                return Err(format!(
-                    "{primary_error}；恢复原账号密码也失败：{rollback_error}"
-                ));
-            }
-            return Err(primary_error);
-        }
-        return Err(format!(
-            "{primary_error}；原保险库中没有旧密码，为避免可见账号缺少密码，已保留新密码"
-        ));
-    }
-
+    transaction.commit().await.map_err(db_error)?;
     Ok(profile)
 }
 
@@ -370,7 +333,8 @@ async fn update_account_profile_in_transaction(
     id: &str,
     input: AccountProfileInput,
 ) -> Result<AccountProfile, String> {
-    let input = validate_input(input)?;
+    let mut input = validate_input(input)?;
+    let password = input.password.take();
     let now = Utc::now().to_rfc3339();
     let result = sqlx::query(
         "UPDATE account_profiles SET
@@ -403,11 +367,37 @@ async fn update_account_profile_in_transaction(
     if result.rows_affected() == 0 {
         return Err(format!("账号档案不存在: {id}"));
     }
-    let row = sqlx::query("SELECT * FROM account_profiles WHERE id = ?")
+    if let Some(password) = password {
+        sqlx::query(
+            "INSERT INTO account_profile_credentials (profile_id, password)
+             VALUES (?, ?)
+             ON CONFLICT(profile_id) DO UPDATE SET password = excluded.password",
+        )
         .bind(id)
-        .fetch_one(&mut **transaction)
+        .bind(password)
+        .execute(&mut **transaction)
         .await
         .map_err(db_error)?;
+        sqlx::query(
+            "DELETE FROM legacy_credential_migration
+             WHERE target_kind = 'account_profile' AND target_id = ?",
+        )
+        .bind(id)
+        .execute(&mut **transaction)
+        .await
+        .map_err(db_error)?;
+    }
+    let row = sqlx::query(
+        "SELECT profile.*, credential.password AS password
+         FROM account_profiles AS profile
+         LEFT JOIN account_profile_credentials AS credential
+           ON credential.profile_id = profile.id
+         WHERE profile.id = ?",
+    )
+    .bind(id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(db_error)?;
     profile_from_row(&row)
 }
 
@@ -416,9 +406,11 @@ pub async fn update_account_profile_usage(
     database: State<'_, Database>,
     backup: State<'_, BackupState>,
     settings: State<'_, SettingsState>,
+    access: State<'_, AppAccessState>,
     id: String,
     usage_info: Option<String>,
 ) -> Result<AccountProfile, String> {
+    access.require_unlocked()?;
     let _operation_guard = backup.lock_data_operation().await;
     update_account_profile_usage_for_week_impl(
         database.inner(),
@@ -523,7 +515,9 @@ pub(crate) async fn sync_account_profile_usage_week_impl(
 pub async fn clear_account_profile_usage(
     database: State<'_, Database>,
     backup: State<'_, BackupState>,
+    access: State<'_, AppAccessState>,
 ) -> Result<u64, String> {
+    access.require_unlocked()?;
     let _operation_guard = backup.lock_data_operation().await;
     clear_account_profile_usage_impl(database.inner()).await
 }
@@ -533,22 +527,23 @@ pub async fn sync_account_profile_usage_week(
     database: State<'_, Database>,
     backup: State<'_, BackupState>,
     settings: State<'_, SettingsState>,
+    access: State<'_, AppAccessState>,
 ) -> Result<AccountUsageWeekSyncResult, String> {
+    access.require_unlocked()?;
     let _operation_guard = backup.lock_data_operation().await;
     sync_account_profile_usage_week_impl(database.inner(), settings.inner(), Utc::now()).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn delete_account_profile<R: Runtime>(
+pub async fn delete_account_profile(
     database: State<'_, Database>,
     backup: State<'_, BackupState>,
-    app: AppHandle<R>,
+    access: State<'_, AppAccessState>,
     id: String,
 ) -> Result<(), String> {
+    access.require_unlocked()?;
     let _operation_guard = backup.lock_data_operation().await;
-    let deleted =
-        delete_account_profiles_with_vault(database.inner(), &app, std::slice::from_ref(&id))
-            .await?;
+    let deleted = delete_account_profiles_impl(database.inner(), std::slice::from_ref(&id)).await?;
     if deleted == 0 {
         return Err(format!("账号档案不存在: {id}"));
     }
@@ -556,22 +551,25 @@ pub async fn delete_account_profile<R: Runtime>(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn delete_account_profiles<R: Runtime>(
+pub async fn delete_account_profiles(
     database: State<'_, Database>,
     backup: State<'_, BackupState>,
-    app: AppHandle<R>,
+    access: State<'_, AppAccessState>,
     ids: Vec<String>,
 ) -> Result<usize, String> {
+    access.require_unlocked()?;
     let _operation_guard = backup.lock_data_operation().await;
-    delete_account_profiles_with_vault(database.inner(), &app, &ids).await
+    delete_account_profiles_impl(database.inner(), &ids).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn reorder_account_profiles(
     database: State<'_, Database>,
     backup: State<'_, BackupState>,
+    access: State<'_, AppAccessState>,
     ids: Vec<String>,
 ) -> Result<(), String> {
+    access.require_unlocked()?;
     let _operation_guard = backup.lock_data_operation().await;
     reorder_account_profiles_impl(database.inner(), &ids).await
 }
@@ -617,7 +615,12 @@ pub(crate) async fn reorder_account_profiles_impl(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn copy_account_name(database: State<'_, Database>, id: String) -> Result<(), String> {
+pub async fn copy_account_name(
+    database: State<'_, Database>,
+    access: State<'_, AppAccessState>,
+    id: String,
+) -> Result<(), String> {
+    access.require_unlocked()?;
     let account_name =
         sqlx::query_scalar::<_, String>("SELECT account_name FROM account_profiles WHERE id = ?")
             .bind(&id)
@@ -650,10 +653,34 @@ pub(crate) async fn get_account_character_name_impl(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn copy_account_character_name(
     database: State<'_, Database>,
+    access: State<'_, AppAccessState>,
     id: String,
 ) -> Result<(), String> {
+    access.require_unlocked()?;
     let character_name = get_account_character_name_impl(&database, &id).await?;
     copy_text_to_clipboard(character_name).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn copy_account_password(
+    database: State<'_, Database>,
+    access: State<'_, AppAccessState>,
+    id: String,
+) -> Result<(), String> {
+    access.require_unlocked()?;
+    let password = sqlx::query_scalar::<_, String>(
+        "SELECT credential.password
+         FROM account_profiles AS profile
+         JOIN account_profile_credentials AS credential
+           ON credential.profile_id = profile.id
+         WHERE profile.id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(database.pool())
+    .await
+    .map_err(db_error)?
+    .ok_or_else(|| format!("账号档案不存在或尚未保存密码: {id}"))?;
+    copy_sensitive_text_to_clipboard(password).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -662,8 +689,10 @@ pub async fn refresh_account_profile_role_data(
     backup: State<'_, BackupState>,
     settings: State<'_, SettingsState>,
     refresh: State<'_, AccountRoleDataRefreshState>,
+    access: State<'_, AppAccessState>,
     ids: Vec<String>,
 ) -> Result<AccountRoleDataRefreshResult, String> {
+    access.require_unlocked()?;
     let _refresh_guard = refresh.try_start()?;
     let base_url = settings
         .snapshot()
@@ -688,7 +717,6 @@ pub(crate) async fn delete_account_profile_impl(
     Ok(())
 }
 
-#[cfg(test)]
 pub(crate) async fn delete_account_profiles_impl(
     database: &Database,
     ids: &[String],
@@ -752,6 +780,23 @@ async fn delete_account_profiles_in_transaction(
     }
     existing_ids.sort_unstable();
 
+    let mut migration_builder = QueryBuilder::<Sqlite>::new(
+        "DELETE FROM legacy_credential_migration
+         WHERE target_kind = 'account_profile' AND target_id IN (",
+    );
+    {
+        let mut separated = migration_builder.separated(", ");
+        for id in &existing_ids {
+            separated.push_bind(id);
+        }
+    }
+    migration_builder.push(")");
+    migration_builder
+        .build()
+        .execute(&mut **transaction)
+        .await
+        .map_err(db_error)?;
+
     let mut delete_builder =
         QueryBuilder::<Sqlite>::new("DELETE FROM account_profiles WHERE id IN (");
     {
@@ -770,118 +815,6 @@ async fn delete_account_profiles_in_transaction(
         return Err("账号批量删除数量与预期不一致，操作已取消".into());
     }
     Ok(existing_ids)
-}
-
-async fn remove_account_secrets<R: Runtime>(
-    app: &AppHandle<R>,
-    ids: &[String],
-) -> Result<Vec<(String, String)>, String> {
-    let worker_app = app.clone();
-    let ids = ids.to_vec();
-    run_blocking_vault_operation(move || {
-        let vault = worker_app.state::<VaultState>();
-        let mut removed = Vec::new();
-
-        for id in ids {
-            match vault.remove_secret(&id) {
-                Ok(Some(password)) => removed.push((id, password)),
-                Ok(None) => {}
-                Err(error) => {
-                    let primary_error = error.to_string();
-                    let mut rollback_errors = Vec::new();
-                    for (removed_id, password) in removed.drain(..).rev() {
-                        if let Err(rollback_error) = vault.set_secret(&removed_id, password) {
-                            rollback_errors.push(rollback_error.to_string());
-                        }
-                    }
-                    let message = if rollback_errors.is_empty() {
-                        format!("清理账号密码失败，已恢复此前清理的密码：{primary_error}")
-                    } else {
-                        format!(
-                            "清理账号密码失败，且恢复此前密码时发生错误：{primary_error}；{}",
-                            rollback_errors.join("；")
-                        )
-                    };
-                    return Err(crate::vault::VaultError::Operation(message));
-                }
-            }
-        }
-
-        Ok(removed)
-    })
-    .await
-}
-
-async fn restore_account_secrets<R: Runtime>(
-    app: &AppHandle<R>,
-    secrets: Vec<(String, String)>,
-) -> Result<(), String> {
-    if secrets.is_empty() {
-        return Ok(());
-    }
-
-    let worker_app = app.clone();
-    run_blocking_vault_operation(move || {
-        let vault = worker_app.state::<VaultState>();
-        let mut errors = Vec::new();
-        for (id, password) in secrets {
-            if let Err(error) = vault.set_secret(&id, password) {
-                errors.push(error.to_string());
-            }
-        }
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(crate::vault::VaultError::Operation(errors.join("；")))
-        }
-    })
-    .await
-}
-
-async fn delete_account_profiles_with_vault<R: Runtime>(
-    database: &Database,
-    app: &AppHandle<R>,
-    ids: &[String],
-) -> Result<usize, String> {
-    let ids = normalize_account_ids(ids);
-    if ids.is_empty() {
-        return Ok(0);
-    }
-
-    let mut transaction = database.pool().begin().await.map_err(db_error)?;
-    let deleted_ids = match delete_account_profiles_in_transaction(&mut transaction, &ids).await {
-        Ok(deleted_ids) => deleted_ids,
-        Err(error) => {
-            return Err(
-                rollback_transaction(transaction, error, "回滚未提交的账号批量删除失败").await,
-            );
-        }
-    };
-    if deleted_ids.is_empty() {
-        transaction.rollback().await.map_err(db_error)?;
-        return Ok(0);
-    }
-
-    let removed_secrets = match remove_account_secrets(app, &deleted_ids).await {
-        Ok(secrets) => secrets,
-        Err(error) => {
-            return Err(
-                rollback_transaction(transaction, error, "回滚未提交的账号批量删除失败").await,
-            );
-        }
-    };
-
-    if let Err(error) = transaction.commit().await {
-        let primary_error = format!("提交账号批量删除失败：{error}");
-        return match restore_account_secrets(app, removed_secrets).await {
-            Ok(()) => Err(format!("{primary_error}；已恢复保险库中的账号密码")),
-            Err(restore_error) => Err(format!(
-                "{primary_error}；恢复保险库中的账号密码也失败：{restore_error}"
-            )),
-        };
-    }
-
-    Ok(deleted_ids.len())
 }
 
 pub(crate) async fn insert_imported_account_profile(
@@ -1197,15 +1130,75 @@ mod tests {
     }
 
     #[test]
-    fn refuses_to_silently_discard_passwords() {
+    fn stores_profile_passwords_in_the_same_sqlite_transaction() {
         run_async(async {
             let database = Database::in_memory().await.unwrap();
-            let mut profile = input("secure-account");
-            profile.password = Some("secret".into());
-            let error = create_account_profile_impl(&database, profile)
+            let mut profile_input = input("secure-account");
+            profile_input.password = Some("secret".into());
+            let profile = create_account_profile_impl(&database, profile_input)
                 .await
-                .unwrap_err();
-            assert!(error.contains("vault"));
+                .unwrap();
+            assert_eq!(profile.password.as_deref(), Some("secret"));
+            assert_eq!(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT password FROM account_profile_credentials WHERE profile_id = ?",
+                )
+                .bind(&profile.id)
+                .fetch_one(database.pool())
+                .await
+                .unwrap(),
+                "secret"
+            );
+        });
+    }
+
+    #[test]
+    fn deleting_a_profile_cascades_its_credential_and_clears_legacy_queue() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let mut profile_input = input("delete-secret-account");
+            profile_input.password = Some("secret".into());
+            let profile = create_account_profile_impl(&database, profile_input)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO legacy_credential_migration (
+                    target_kind, target_id, source_kind, source_id
+                 ) VALUES ('account_profile', ?, 'account_profile', ?)",
+            )
+            .bind(&profile.id)
+            .bind(&profile.id)
+            .execute(database.pool())
+            .await
+            .unwrap();
+
+            assert_eq!(
+                delete_account_profiles_impl(&database, std::slice::from_ref(&profile.id))
+                    .await
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM account_profile_credentials WHERE profile_id = ?",
+                )
+                .bind(&profile.id)
+                .fetch_one(database.pool())
+                .await
+                .unwrap(),
+                0
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM legacy_credential_migration
+                     WHERE target_kind = 'account_profile' AND target_id = ?",
+                )
+                .bind(&profile.id)
+                .fetch_one(database.pool())
+                .await
+                .unwrap(),
+                0
+            );
         });
     }
 

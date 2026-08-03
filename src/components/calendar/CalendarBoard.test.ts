@@ -104,6 +104,18 @@ describe("CalendarBoard", () => {
     expect(wrapper.emitted("reschedule")).toBeUndefined();
   });
 
+  it("emits an inclusive query range from FullCalendar's exclusive end", () => {
+    const { wrapper, options } = mountBoard();
+
+    options.datesSet?.({
+      start: new Date(2026, 6, 27),
+      end: new Date(2026, 7, 3),
+      view: { title: "2026年7月27日 – 8月2日", type: "timeGridWeek" },
+    } as never);
+
+    expect(wrapper.emitted("rangeChange")).toEqual([["2026-07-27", "2026-08-02"]]);
+  });
+
   it("shows the active appointment count in compact day headings", async () => {
     const { wrapper } = mountBoard();
     await wrapper.setProps({

@@ -21,7 +21,7 @@ const emit = defineEmits<{
 const selectedProfile = computed(() =>
   props.accounts.find((account) => account.id === model.value.profileId),
 );
-const canCopyExistingPassword = computed(() => Boolean(model.value.passwordAvailable));
+const canCopyExistingPassword = computed(() => model.value.hasPassword);
 
 function profileOptionLabel(account: AccountProfile): string {
   return [
@@ -45,7 +45,7 @@ function selectKind(kind: AppointmentAccountDraft["kind"]): void {
     credentialKind: "replace",
     password: "",
     sourceAppointmentId: "",
-    passwordAvailable: false,
+    hasPassword: false,
   };
 }
 
@@ -167,9 +167,7 @@ function chooseNewPassword(): void {
       <div v-if="model.credentialKind === 'keep'" class="credential-note">
         <span>
           {{
-            model.passwordAvailable
-              ? "保留这条预约已有的密码"
-              : "这条预约当前没有密码，保存时保持不变"
+            model.hasPassword ? "保留这条预约已有的密码" : "这条预约当前没有密码，保存时保持不变"
           }}
         </span>
         <button
@@ -177,7 +175,7 @@ function chooseNewPassword(): void {
           type="button"
           @click="chooseNewPassword"
         >
-          {{ model.passwordAvailable ? "更换密码" : "补充密码" }}
+          {{ model.hasPassword ? "更换密码" : "补充密码" }}
         </button>
       </div>
       <div v-else-if="model.credentialKind === 'copyFromAppointment'" class="credential-note">
@@ -197,7 +195,7 @@ function chooseNewPassword(): void {
           type="password"
           :value="model.password"
           autocomplete="new-password"
-          placeholder="仅写入本条预约的加密保险库"
+          placeholder="仅保存到本条预约，不跟随账号档案更新"
           @input="replacePassword(($event.target as HTMLInputElement).value)"
         />
       </label>

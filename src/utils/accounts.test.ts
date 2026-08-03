@@ -17,6 +17,7 @@ function profile(id: string, overrides: Partial<AccountProfile> = {}): AccountPr
     specialization: null,
     gearScore: null,
     accountName: `account-${id}`,
+    password: overrides.password ?? null,
     currentScore: null,
     highestScore: null,
     scoreUpdatedAt: null,

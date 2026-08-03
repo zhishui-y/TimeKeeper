@@ -10,7 +10,7 @@
 
 - 产品名称为“时约管家”，项目名为 `TimeKeeper`，定位是 Windows 本地单机桌面应用。
 - 第一版解决预约排班、账号档案、密码保护、收益回顾、Excel 迁移、提醒和备份。
-- 第一版只有两个领域模型：`Appointment` 和 `AccountProfile`。设置、导入预览、保险库状态和备份清单属于基础设施 DTO，不要提前拆成新的领域模型。
+- 第一版只有两个领域模型：`Appointment` 和 `AccountProfile`。设置、导入预览、入口状态和备份清单属于基础设施 DTO，不要提前拆成新的领域模型。
 - 第一版不做云同步、移动端、多用户、周期预约、部分结算、退款账本和独立客户模型。
 
 开始修改前先阅读：
@@ -24,10 +24,10 @@
 - 技术栈固定为 Tauri 2、Vue 3、TypeScript、Vite、SQLite 和 Rust。
 - Vue 使用 Composition API、`<script setup lang="ts">`、Pinia 和 Vue Router。
 - 路由页面只负责组合；业务状态、数据加载和副作用放在对应 composable；纯日期和格式化逻辑放在 utility。
-- 前端只能通过有类型的 Tauri command 或浏览器演示客户端访问数据，不得直接执行 SQL、读取 Stronghold 或操作正式应用数据目录。
-- SQLite、Excel 解析、Stronghold、备份文件和敏感剪贴板操作必须留在 Rust 端。
+- 前端只能通过有类型的 Tauri command 或浏览器演示客户端访问数据，不得直接执行 SQL、读取旧 Stronghold 或操作正式应用数据目录。
+- SQLite、Excel 解析、旧 Stronghold 兼容读取、备份文件和敏感剪贴板操作必须留在 Rust 端。
 - Rust DTO 使用 camelCase JSON，并与 `src/types/domain.ts` 保持一致。
-- 扩展既有命令分组和模块，不要绕过 `appointments`、`accounts`、`reports`、`vault`、`excelImport`、`backup`、`settings` 的边界。
+- 扩展既有命令分组和模块，不要绕过 `appointments`、`accounts`、`reports`、`appAccess`、`legacyVault`、`excelImport`、`backup`、`settings` 的边界。
 
 ## Domain invariants
 
@@ -38,18 +38,20 @@
 - 日期必填；结束时间不能脱离开始时间存在；结束时间早于开始时间时按跨天处理。
 - 只有日期的预约进入待定时段；取消预约不参与冲突检查；时间冲突只警告，不阻止保存。
 - 预约可以保留账号的非敏感快照，但不得复制密码；历史快照不随账号档案更新。
-- `AccountProfile` 的密码是核心数据，但不得出现在账号列表、详情 DTO、日志、错误信息、备份清单或 Excel 预览响应中。
+- `AccountProfile.password` 与 `AppointmentAccount.password` 是 `string | null`，可随业务 DTO 返回；但不得出现在日志、错误信息、备份清单、Excel 预览响应或测试快照中。
 - 旧 Excel 数据字段不完整时允许导入并标记待完善，不能为满足强类型而静默丢弃记录。
 
 ## Security and user data
 
-- 密码只存入 Stronghold，账号元数据存入 SQLite。不要把真实密码写入源码、测试快照、日志或提交记录。
-- 不得降低 Argon2、scrypt 或 Stronghold 的安全参数来换取速度。开发模式的依赖级优化只能改变编译优化级别，不能改变算法、工作因子或保险库格式。
-- 主密码派生和 Stronghold 读写属于阻塞计算，必须在后台阻塞任务中执行，不能占用 Tauri UI 线程。
+- 业务密码明文存入 SQLite 的独立凭据表；入口密码只保存 Argon2id PHC verifier。入口密码不是数据加密，不抵御拥有本机文件读取权限的攻击者。
+- 不得降低 Argon2 或旧 Stronghold 的安全参数来换取速度。开发模式的依赖级优化只能改变编译优化级别，不能改变算法、工作因子或旧保险库格式。
+- 入口密码派生与旧 Stronghold 兼容读取属于阻塞计算，必须在后台阻塞任务中执行，不能占用 Tauri UI 线程。
+- 所有业务 Tauri command 必须在 Rust 边界调用 `AppAccessState.require_unlocked()`；入口状态、初始化、解锁和无损重置命令除外。
+- 新增、修改、删除及 Excel 提交中的业务数据和凭据必须在同一个 SQLite 事务中完成。新密码优先，旧凭据迁移不得覆盖。
 - 未经用户明确要求，绝不删除、移动、重建或覆盖正式应用数据目录中的数据库、`vault.hold`、`vault.salt` 或备份。
-- 保险库、备份和恢复测试必须使用独立临时目录；测试结束后只能清理本次测试创建的路径。
+- 旧保险库、备份和恢复测试必须使用独立临时目录；测试结束后只能清理本次测试创建的路径。
 - 恢复备份前必须先校验清单并保存当前版本；失败时不得覆盖现有数据。
-- 查看密码只允许短时显示；复制密码后按既定时限清理剪贴板。
+- 密码默认使用共享固定掩码组件显示；切页、筛选、导航和锁定后恢复掩码。复制密码后按既定时限清理剪贴板。
 
 ## Implementation practice
 
@@ -109,7 +111,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --release --manifest-path src-tauri/Cargo.toml
 ```
 
-- 修改保险库时必须使用临时保险库运行真实初始化、锁定和解锁回归；不要用正式保险库做测试。
+- 修改旧凭据迁移时必须使用临时保险库运行真实初始化、锁定、解锁和只读迁移回归；不要用正式保险库做测试。
 - 修改用户界面或交互时，在功能稳定后使用 Playwright 检查受影响页面。涉及响应式布局、全局壳层、弹窗、抽屉或导航时检查 `1440x900`、`1280x720` 和 `1100x700`；纯文案、颜色或不影响布局的交互修改可只检查一个代表性视口。
 - Windows 通知和安装行为只能在安装后的应用中作最终验收；开发模式结果不能替代安装版验收。
 - 开发启动命令为 `pnpm tauri dev`。启动前先检查是否已有开发服务，避免重复占用端口或启动多个桌面进程。

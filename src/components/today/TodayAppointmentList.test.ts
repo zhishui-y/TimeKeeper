@@ -30,7 +30,7 @@ describe("TodayAppointmentList", () => {
         gearScore: "794676",
         server: "梦江南",
         accountName: "demo-account",
-        passwordAvailable: true,
+        password: "demo-secret",
       },
       voicePlatform: "yy",
       voiceChannel: "27364886",
@@ -47,7 +47,7 @@ describe("TodayAppointmentList", () => {
               gearScore: null,
               server: null,
               accountName: "no-password",
-              passwordAvailable: false,
+              password: null,
             },
             voicePlatform: "yy",
             voiceChannel: null,
@@ -66,13 +66,13 @@ describe("TodayAppointmentList", () => {
       .find(".appointment-account-summary")
       .findAll(".appointment-account-summary__line");
     expect(accountLines[0]!.text()).toBe("莫问·794676");
-    expect(accountLines[1]!.text()).toBe("梦江南··");
+    expect(accountLines[1]!.text()).toContain("梦江南··••••••");
     expect(rows[0]!.get(".appointment-row__voice").text()).toBe("27364886");
     expect(rows[0]!.get(".appointment-row__notes").text()).toBe("备注：优先安排晚间时段");
     expect(rows[0]!.get(".appointment-row__notes").attributes("title")).toBe("优先安排晚间时段");
 
     await wrapper.get('button[aria-label="复制账号 demo-account"]').trigger("click");
-    await wrapper.get('button[aria-label="复制密码 测试联系人"]').trigger("click");
+    await wrapper.get('button[aria-label="复制测试联系人 的预约密码"]').trigger("click");
     await wrapper.get('button[aria-label="复制YY频道 27364886"]').trigger("click");
     expect(wrapper.emitted("copyAccount")).toEqual([[target]]);
     expect(wrapper.emitted("copyPassword")).toEqual([[target]]);
@@ -81,9 +81,9 @@ describe("TodayAppointmentList", () => {
       false,
     );
 
-    expect(rows[1]!.get('button[aria-label="复制密码 测试联系人"]').attributes("disabled")).toBe(
-      "",
-    );
+    expect(
+      rows[1]!.get('button[aria-label="复制测试联系人 的预约密码"]').attributes("disabled"),
+    ).toBe("");
     expect(rows[1]!.get(".appointment-row__voice").text()).toBe("—");
     expect(rows[1]!.get(".appointment-row__notes").text()).toBe("备注：—");
     expect(rows[2]!.get(".appointment-account-summary__empty").text()).toBe("未使用账号");

@@ -5,6 +5,7 @@ use sqlx::Row;
 use tauri::State;
 
 use crate::{
+    app_access::AppAccessState,
     appointments::get_appointment_impl,
     db::Database,
     models::{
@@ -107,8 +108,10 @@ async fn sum_minor(database: &Database, sql: &str, values: &[&str]) -> Result<i6
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_dashboard_summary(
     database: State<'_, Database>,
+    access: State<'_, AppAccessState>,
     date: String,
 ) -> Result<DashboardSummary, String> {
+    access.require_unlocked()?;
     get_dashboard_summary_impl(database.inner(), &date).await
 }
 
@@ -199,10 +202,12 @@ async fn get_dashboard_summary_at(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_revenue_summary(
     database: State<'_, Database>,
+    access: State<'_, AppAccessState>,
     from: String,
     to: String,
     granularity: ReportGranularity,
 ) -> Result<RevenueSummary, String> {
+    access.require_unlocked()?;
     get_revenue_summary_impl(database.inner(), &from, &to, granularity).await
 }
 

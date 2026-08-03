@@ -33,15 +33,6 @@ export function appointmentToInput(appointment: Appointment): AppointmentInput {
   };
 }
 
-export function appointmentMutationNeedsVault(
-  input: AppointmentInput,
-  existing?: Appointment | null,
-): boolean {
-  if (!input.account) return Boolean(existing?.account?.passwordAvailable);
-  if (input.account.kind === "profile") return true;
-  return input.account.credential.kind !== "keep";
-}
-
 export function rescheduledInput(
   appointment: Appointment,
   startsAt: Date,

@@ -13,6 +13,7 @@ import {
 } from "@lucide/vue";
 import { computed, onMounted, reactive, shallowRef, watch } from "vue";
 import { api, errorMessage, isTauri } from "../../api/client";
+import { useAppAccessStore } from "../../stores/appAccess";
 import { useUiStore } from "../../stores/ui";
 import type {
   AppSettings,
@@ -32,15 +33,15 @@ import {
 import AccountRoleDataServerPanel from "./AccountRoleDataServerPanel.vue";
 import OperationProgress from "./OperationProgress.vue";
 import ExcelImportScopeSelector from "./ExcelImportScopeSelector.vue";
-import VaultSettingsPanel from "./VaultSettingsPanel.vue";
+import AppAccessSettingsPanel from "./AppAccessSettingsPanel.vue";
 
 type ImportOperation = "preview" | "commit";
 type BackupOperation = "export" | "restore";
 
 const ui = useUiStore();
+const access = useAppAccessStore();
 const settings = reactive<AppSettings>({
   defaultReminderMinutes: 30,
-  autoLockMinutes: 15,
   backupRetention: 30,
   lastAutomaticBackupDate: null,
   accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
@@ -58,7 +59,6 @@ const importOperation = shallowRef<ImportOperation | null>(null);
 const backupOperation = shallowRef<BackupOperation | null>(null);
 const lastBackup = shallowRef<BackupResult | null>(null);
 const notificationPermission = shallowRef<AppNotificationPermission>("default");
-const vaultPanel = shallowRef<InstanceType<typeof VaultSettingsPanel> | null>(null);
 
 const importBusy = computed(() => importOperation.value !== null);
 const hasImportSelection = computed(() => importSelection.appointments || importSelection.accounts);
@@ -96,7 +96,7 @@ const backupProgress = computed(() => {
   if (backupOperation.value === "export") {
     return {
       title: "正在导出完整备份",
-      detail: "正在快照数据库，并打包设置与本地加密密码库。",
+      detail: "正在快照数据库与设置；如仍有待迁移密码，会一并保留成对的旧密码迁移文件。",
     };
   }
   if (backupOperation.value === "restore") {
@@ -124,7 +124,6 @@ async function saveSettings(): Promise<void> {
   try {
     Object.assign(settings, await api.updateSettings({ ...settings }));
     ui.setAppointmentDefaultReminderMinutes(settings.defaultReminderMinutes);
-    await vaultPanel.value?.refresh();
     ui.notify("设置已保存", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
@@ -175,7 +174,11 @@ async function commitImport(): Promise<void> {
     importPreview.value = null;
     if (selection.appointments) ui.markDataChanged();
     if (selection.accounts) ui.markAccountsChanged();
-    ui.notify("Excel 账本导入完成", "success");
+    if (importResult.value.warnings.length > 0) {
+      ui.notify(`Excel 账本已导入，并有 ${importResult.value.warnings.length} 条提示`, "warning");
+    } else {
+      ui.notify("Excel 账本导入完成", "success");
+    }
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
   } finally {
@@ -218,7 +221,8 @@ async function restoreBackup(): Promise<void> {
     await api.restoreBackup(path);
     if (!isTauri) {
       ui.markDataChanged();
-      await Promise.all([loadSettings(), vaultPanel.value?.refresh()]);
+      await loadSettings();
+      await access.bootstrap();
     }
     ui.notify(
       isTauri ? "备份已恢复，正在重启应用" : "演示模式：备份校验与恢复流程已完成",
@@ -360,6 +364,9 @@ onMounted(() => {
                 }}
                 个账号，共 {{ importResult.skippedDuplicates }} 条重复数据。</span
               >
+              <ul v-if="importResult.warnings.length" class="warning-list">
+                <li v-for="warning in importResult.warnings" :key="warning">{{ warning }}</li>
+              </ul>
             </div>
           </div>
         </div>
@@ -398,19 +405,16 @@ onMounted(() => {
         </div>
       </section>
 
-      <section class="settings-section settings-section--vault">
+      <section class="settings-section settings-section--access">
         <header class="settings-section__header">
           <div class="settings-section__icon"><ShieldCheck :size="19" /></div>
           <div>
-            <h2>密码库</h2>
-            <p>密码只在本地加密存储，忘记主密码后无法恢复。</p>
+            <h2>应用入口</h2>
+            <p>入口密码用于防止他人随手打开应用；忘记后可以无损重置。</p>
           </div>
         </header>
         <div class="settings-section__body">
-          <VaultSettingsPanel
-            ref="vaultPanel"
-            v-model:auto-lock-minutes="settings.autoLockMinutes"
-          />
+          <AppAccessSettingsPanel />
         </div>
       </section>
 
@@ -543,7 +547,7 @@ onMounted(() => {
   grid-row: 2;
 }
 
-.settings-section--vault {
+.settings-section--access {
   grid-column: 1 / -1;
   grid-row: 4;
 }

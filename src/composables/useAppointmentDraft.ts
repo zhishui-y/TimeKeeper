@@ -27,7 +27,7 @@ export interface AppointmentAccountDraft {
   credentialKind: AppointmentCredentialDraftKind;
   password: string;
   sourceAppointmentId: string;
-  passwordAvailable: boolean;
+  hasPassword: boolean;
 }
 
 export interface AppointmentDraft {
@@ -68,7 +68,7 @@ function emptyAccountDraft(): AppointmentAccountDraft {
     credentialKind: "replace",
     password: "",
     sourceAppointmentId: "",
-    passwordAvailable: false,
+    hasPassword: false,
   };
 }
 
@@ -82,13 +82,13 @@ function profileAccountDraft(): AppointmentAccountDraft {
 function embeddedAccountDraft(
   details: AppointmentAccountDetails,
   options: {
-    passwordAvailable: boolean;
+    hasPassword: boolean;
     sourceAppointmentId?: string;
     editing?: boolean;
   },
 ): AppointmentAccountDraft {
   const canKeep = Boolean(options.editing);
-  const canCopy = Boolean(options.sourceAppointmentId && options.passwordAvailable);
+  const canCopy = Boolean(options.sourceAppointmentId && options.hasPassword);
   return {
     kind: "embedded",
     profileId: "",
@@ -101,7 +101,7 @@ function embeddedAccountDraft(
     credentialKind: canKeep ? "keep" : canCopy ? "copyFromAppointment" : "replace",
     password: "",
     sourceAppointmentId: canCopy ? options.sourceAppointmentId! : "",
-    passwordAvailable: options.passwordAvailable,
+    hasPassword: options.hasPassword,
   };
 }
 
@@ -164,7 +164,7 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
       account: appointment
         ? appointment.account
           ? embeddedAccountDraft(appointment.account, {
-              passwordAvailable: appointment.account.passwordAvailable,
+              hasPassword: Boolean(appointment.account.password),
               editing: true,
             })
           : emptyAccountDraft()
@@ -239,7 +239,7 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
       settlementStatus: preset.mode === "business" ? "unsettled" : "not_applicable",
       account: preset.account
         ? embeddedAccountDraft(preset.account, {
-            passwordAvailable: preset.account.passwordAvailable,
+            hasPassword: Boolean(preset.account.password),
             sourceAppointmentId: preset.sourceAppointmentId,
           })
         : emptyAccountDraft(),

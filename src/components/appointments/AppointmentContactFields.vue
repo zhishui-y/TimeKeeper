@@ -68,7 +68,7 @@ function select(preset: ContactPreset): void {
           <span class="contact-preset__meta">
             <Clock3 :size="12" />
             {{ preset.startTime || "待定" }}
-            <small v-if="preset.account?.passwordAvailable">可沿用密码</small>
+            <small v-if="preset.account?.password">可沿用密码</small>
           </span>
         </button>
       </template>

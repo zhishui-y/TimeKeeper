@@ -8,7 +8,7 @@ import { findNextScheduledAppointment } from "../../utils/appointment";
 import CalendarBoard from "./CalendarBoard.vue";
 
 const ui = useUiStore();
-const { items, loading, error, load } = useAppointments();
+const { filters, items, loading, error, load } = useAppointments({}, { immediate: false });
 const now = shallowRef(new Date());
 let clockTimer: ReturnType<typeof globalThis.setInterval> | undefined;
 
@@ -24,8 +24,17 @@ const nextAppointmentId = computed(
 
 watch(
   () => ui.dataRevision,
-  () => void load(),
+  () => {
+    if (filters.from && filters.to) void load();
+  },
 );
+
+function loadRange(from: string, to: string): void {
+  if (filters.from === from && filters.to === to && items.value.length > 0) return;
+  filters.from = from;
+  filters.to = to;
+  void load();
+}
 
 onMounted(() => {
   clockTimer = globalThis.setInterval(() => {
@@ -92,6 +101,7 @@ onBeforeUnmount(() => {
       :next-appointment-id="nextAppointmentId"
       @edit="ui.openEditAppointment"
       @create="(date, startTime) => ui.openCreateAppointment(date, startTime)"
+      @range-change="loadRange"
     />
   </div>
 </template>

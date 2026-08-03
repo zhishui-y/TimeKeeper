@@ -22,8 +22,12 @@ const props = defineProps<{
   appointments: readonly Appointment[];
   columnWidths: AppointmentTableColumnWidths;
   savingColumnWidths: boolean;
+  selectedIds: readonly string[];
+  allSelected: boolean;
+  selectionIndeterminate: boolean;
+  selectingAll: boolean;
+  passwordResetKey?: string | number;
 }>();
-const selectedIds = defineModel<string[]>("selectedIds", { required: true });
 
 const emit = defineEmits<{
   edit: [appointment: Appointment];
@@ -35,22 +39,20 @@ const emit = defineEmits<{
   previewColumnWidth: [columnKey: AppointmentTableColumnKey, width: number];
   commitColumnWidth: [columnKey: AppointmentTableColumnKey, width: number];
   cancelColumnResize: [columnKey: AppointmentTableColumnKey, width: number];
+  toggleAll: [selected: boolean];
+  toggleOne: [appointmentId: string, selected: boolean];
 }>();
 
 const allSelectRef = useTemplateRef("all-select");
-const selectedIdSet = computed(() => new Set(selectedIds.value));
-const selectedCount = computed(() => selectedIds.value.length);
-const allChecked = computed(
-  () =>
-    props.appointments.length > 0 &&
-    props.appointments.every((appointment) => selectedIdSet.value.has(appointment.id)),
-);
-const indeterminate = computed(() => selectedCount.value > 0 && !allChecked.value);
+const selectedIdSet = computed(() => new Set(props.selectedIds));
 const tableMinimumWidth = computed(() => appointmentTableTotalWidth(props.columnWidths));
 
-watch(indeterminate, (value) => {
-  if (allSelectRef.value) allSelectRef.value.indeterminate = value;
-});
+watch(
+  () => props.selectionIndeterminate,
+  (value) => {
+    if (allSelectRef.value) allSelectRef.value.indeterminate = value;
+  },
+);
 
 function isChecked(event: unknown): boolean {
   const target = (event as { target?: { checked?: boolean } } | null)?.target;
@@ -58,16 +60,11 @@ function isChecked(event: unknown): boolean {
 }
 
 function toggleAll(event: unknown): void {
-  selectedIds.value = isChecked(event)
-    ? props.appointments.map((appointment) => appointment.id)
-    : [];
+  emit("toggleAll", isChecked(event));
 }
 
 function toggleOne(appointmentId: string, event: unknown): void {
-  const next = new Set(selectedIds.value);
-  if (isChecked(event)) next.add(appointmentId);
-  else next.delete(appointmentId);
-  selectedIds.value = [...next];
+  emit("toggleOne", appointmentId, isChecked(event));
 }
 
 function previewColumnWidth(columnKey: AppointmentTableColumnKey, width: number): void {
@@ -108,8 +105,9 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
                 id="all-select"
                 ref="all-select"
                 type="checkbox"
-                :checked="allChecked"
-                aria-label="全选当前页面预约"
+                :checked="allSelected"
+                :disabled="selectingAll || appointments.length === 0"
+                aria-label="全选全部筛选结果"
                 @change="toggleAll"
                 @click.stop
               />
@@ -267,6 +265,7 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
               <AppointmentAccountSummary
                 :account="appointment.account"
                 :contact-name="appointment.contactName"
+                :reset-key="passwordResetKey"
                 @copy-account="emit('copyAccount', appointment)"
                 @copy-password="emit('copyPassword', appointment)"
               />

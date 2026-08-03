@@ -42,7 +42,8 @@ export const MIN_ACCOUNT_TABLE_COLUMN_WIDTHS: AccountTableColumnWidths = {
 };
 
 export const MAX_ACCOUNT_TABLE_COLUMN_WIDTH = 480;
-export const ACCOUNT_TABLE_FIXED_WIDTH = 58 + 40 + 40 + 72;
+// Selection, account copy, password controls, and sticky row actions.
+export const ACCOUNT_TABLE_FIXED_WIDTH = 58 + 40 + 104 + 108;
 
 export function clampAccountTableColumnWidth(key: AccountTableColumnKey, width: number): number {
   return Math.min(

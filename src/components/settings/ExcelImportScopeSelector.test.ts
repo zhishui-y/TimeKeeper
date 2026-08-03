@@ -10,6 +10,8 @@ describe("ExcelImportScopeSelector", () => {
       props: { appointments: true, accounts: true },
     });
 
+    expect(wrapper.text()).toContain("资料与本地业务密码");
+
     await wrapper.get('input[aria-label="导入预约记录"]').setValue(false);
     await wrapper.get('input[aria-label="导入账号档案"]').setValue(false);
 

@@ -9,13 +9,17 @@ use std::{
 use chrono::{Days, Local, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};
-use tauri::{AppHandle, Runtime, State};
+use sqlx::{
+    Connection, Row, SqliteConnection,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
+use tauri::{AppHandle, Manager, Runtime, State};
 use thiserror::Error;
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 use crate::{
     accounts::profile_from_row,
+    app_access::AppAccessState,
     appointments::appointment_from_row,
     db::MIGRATOR,
     models::{AppointmentMode, SettlementStatus, VoicePlatform},
@@ -23,7 +27,8 @@ use crate::{
     vault,
 };
 
-const BACKUP_FORMAT_VERSION: u32 = 1;
+const LEGACY_BACKUP_FORMAT_VERSION: u32 = 1;
+const BACKUP_FORMAT_VERSION: u32 = 2;
 const DATABASE_ARCHIVE_NAME: &str = "database.sqlite3";
 const VAULT_ARCHIVE_NAME: &str = "vault.hold";
 const SALT_ARCHIVE_NAME: &str = "vault.salt";
@@ -31,12 +36,13 @@ const SETTINGS_ARCHIVE_NAME: &str = "settings.json";
 const MANIFEST_ARCHIVE_NAME: &str = "manifest.json";
 const DATABASE_WAL_ROLLBACK_NAME: &str = "database.sqlite3-wal";
 const DATABASE_SHM_ROLLBACK_NAME: &str = "database.sqlite3-shm";
-const REQUIRED_ARCHIVE_FILES: [&str; 4] = [
+const V1_REQUIRED_ARCHIVE_FILES: [&str; 4] = [
     DATABASE_ARCHIVE_NAME,
     SETTINGS_ARCHIVE_NAME,
     VAULT_ARCHIVE_NAME,
     SALT_ARCHIVE_NAME,
 ];
+const V2_REQUIRED_ARCHIVE_FILES: [&str; 2] = [DATABASE_ARCHIVE_NAME, SETTINGS_ARCHIVE_NAME];
 const REQUIRED_DATABASE_TABLES: [&str; 4] = [
     "account_profiles",
     "appointment_password_backfill",
@@ -279,8 +285,12 @@ impl BackupState {
 
         let apply_result = self.apply_staged_files(&manifest, &rollback);
         if let Err(error) = apply_result {
-            let _ = self.restore_rollback(&manifest, &rollback);
-            return Err(error);
+            return match self.restore_rollback(&manifest, &rollback) {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(BackupError::InvalidBackup(format!(
+                    "应用恢复失败：{error}；回滚当前数据也失败，将在下次启动时重试：{rollback_error}"
+                ))),
+            };
         }
 
         fs::remove_dir_all(&self.rollback_dir)?;
@@ -290,8 +300,8 @@ impl BackupState {
     }
 
     async fn create_backup_internal(
-        &self,
-        destination: Option<&Path>,
+        self,
+        destination: Option<PathBuf>,
         kind: BackupKind,
     ) -> Result<BackupResult, BackupError> {
         let now = Utc::now();
@@ -304,7 +314,8 @@ impl BackupState {
             },
             now.format("%Y%m%d-%H%M%S-%3f")
         );
-        let output_path = resolve_destination(destination, &self.backups_dir, &default_name)?;
+        let output_path =
+            resolve_destination(destination.as_deref(), &self.backups_dir, &default_name)?;
         if output_path.exists() {
             return Err(BackupError::InvalidBackup(
                 "目标备份文件已经存在，不会覆盖".into(),
@@ -322,14 +333,19 @@ impl BackupState {
             uuid::Uuid::now_v7().simple()
         ));
         let database_snapshot = if self.database_path.is_file() {
-            create_database_snapshot(&self.database_path, &database_snapshot).await?;
+            create_database_snapshot(self.database_path.clone(), database_snapshot.clone()).await?;
             Some(database_snapshot)
         } else {
             None
         };
 
         let result = self
-            .write_backup_package(&output_path, database_snapshot.as_deref(), now.to_rfc3339())
+            .clone()
+            .write_backup_package(
+                output_path.clone(),
+                database_snapshot.clone(),
+                now.to_rfc3339(),
+            )
             .await;
         if let Some(snapshot) = database_snapshot {
             let _ = fs::remove_file(snapshot);
@@ -339,12 +355,16 @@ impl BackupState {
     }
 
     async fn write_backup_package(
-        &self,
-        output_path: &Path,
-        database_snapshot: Option<&Path>,
+        self,
+        output_path: PathBuf,
+        database_snapshot: Option<PathBuf>,
         created_at: String,
     ) -> Result<BackupResult, BackupError> {
-        let sources = self.backup_sources(database_snapshot);
+        let database_snapshot = database_snapshot.ok_or_else(|| {
+            BackupError::InvalidBackup("当前数据库不存在，无法创建完整备份".into())
+        })?;
+        let include_legacy_vault = legacy_migration_pending(database_snapshot.clone()).await?;
+        let sources = self.backup_sources(&database_snapshot, include_legacy_vault)?;
         let mut manifest = BackupManifest {
             format_version: BACKUP_FORMAT_VERSION,
             created_at: created_at.clone(),
@@ -398,7 +418,7 @@ impl BackupState {
         }
         let validation_result = async {
             let manifest = extract_and_validate(&partial_path, &validation_dir)?;
-            validate_staged_contents(&validation_dir, &manifest).await
+            validate_staged_contents(validation_dir.clone(), manifest).await
         }
         .await;
         let cleanup_result = fs::remove_dir_all(&validation_dir);
@@ -418,7 +438,7 @@ impl BackupState {
                 return Err(error.into());
             }
         };
-        if let Err(error) = fs::rename(&partial_path, output_path) {
+        if let Err(error) = fs::rename(&partial_path, &output_path) {
             let _ = fs::remove_file(&partial_path);
             return Err(error.into());
         }
@@ -429,60 +449,83 @@ impl BackupState {
         })
     }
 
-    fn backup_sources(&self, database_snapshot: Option<&Path>) -> Vec<BackupSource> {
-        let mut sources = Vec::new();
-        if let Some(path) = database_snapshot {
-            sources.push(BackupSource {
+    fn backup_sources(
+        &self,
+        database_snapshot: &Path,
+        include_legacy_vault: bool,
+    ) -> Result<Vec<BackupSource>, BackupError> {
+        let settings_path = self.data_dir.join(SETTINGS_ARCHIVE_NAME);
+        if !settings_path.is_file() {
+            return Err(BackupError::InvalidBackup(
+                "设置文件不存在，无法创建完整备份".into(),
+            ));
+        }
+        let mut sources = vec![
+            BackupSource {
                 archive_name: DATABASE_ARCHIVE_NAME,
-                path: path.to_path_buf(),
-            });
-        }
-        for (archive_name, path) in [
-            (VAULT_ARCHIVE_NAME, self.data_dir.join(VAULT_ARCHIVE_NAME)),
-            (SALT_ARCHIVE_NAME, self.data_dir.join(SALT_ARCHIVE_NAME)),
-            (
-                SETTINGS_ARCHIVE_NAME,
-                self.data_dir.join(SETTINGS_ARCHIVE_NAME),
-            ),
-        ] {
-            if path.is_file() {
-                sources.push(BackupSource { archive_name, path });
+                path: database_snapshot.to_path_buf(),
+            },
+            BackupSource {
+                archive_name: SETTINGS_ARCHIVE_NAME,
+                path: settings_path,
+            },
+        ];
+        if include_legacy_vault {
+            let vault_path = self.data_dir.join(VAULT_ARCHIVE_NAME);
+            let salt_path = self.data_dir.join(SALT_ARCHIVE_NAME);
+            if !vault_path.is_file() || !salt_path.is_file() {
+                return Err(BackupError::InvalidBackup(
+                    "仍有旧密码待迁移，备份必须包含成对的旧 Stronghold 快照与盐文件".into(),
+                ));
             }
+            sources.extend([
+                BackupSource {
+                    archive_name: VAULT_ARCHIVE_NAME,
+                    path: vault_path,
+                },
+                BackupSource {
+                    archive_name: SALT_ARCHIVE_NAME,
+                    path: salt_path,
+                },
+            ]);
         }
-        sources
+        Ok(sources)
     }
 
     #[cfg(test)]
     async fn stage_restore(&self, backup_path: &Path) -> Result<(), BackupError> {
         let _operation_guard = self.lock_data_operation().await;
-        self.stage_restore_internal(backup_path).await
+        self.clone()
+            .stage_restore_internal(backup_path.to_path_buf())
+            .await
     }
 
-    async fn stage_restore_internal(&self, backup_path: &Path) -> Result<(), BackupError> {
+    async fn stage_restore_internal(self, backup_path: PathBuf) -> Result<(), BackupError> {
         if self.pending_marker.exists() || self.pending_dir.exists() {
             return Err(BackupError::InvalidBackup(
                 "已经存在等待应用的恢复任务，请先重启应用".into(),
             ));
         }
-        reject_symlink(backup_path)?;
+        reject_symlink(&backup_path)?;
 
         let staging_dir = self
             .data_dir
             .join(format!(".restore-stage-{}", uuid::Uuid::now_v7().simple()));
         fs::create_dir_all(&staging_dir)?;
-        let manifest = match extract_and_validate(backup_path, &staging_dir) {
+        let manifest = match extract_and_validate(&backup_path, &staging_dir) {
             Ok(manifest) => manifest,
             Err(error) => {
                 let _ = fs::remove_dir_all(&staging_dir);
                 return Err(error);
             }
         };
-        if let Err(error) = validate_staged_contents(&staging_dir, &manifest).await {
+        if let Err(error) = validate_staged_contents(staging_dir.clone(), manifest.clone()).await {
             let _ = fs::remove_dir_all(&staging_dir);
             return Err(error);
         }
 
         if let Err(error) = self
+            .clone()
             .create_backup_internal(None, BackupKind::PreRestore)
             .await
         {
@@ -658,12 +701,16 @@ impl BackupState {
 pub async fn create_backup(
     destination: Option<String>,
     state: State<'_, BackupState>,
+    access: State<'_, AppAccessState>,
 ) -> Result<BackupResult, String> {
-    let state = state.inner().clone();
+    let access_state = AppAccessState::clone(access.inner());
+    access_state.require_unlocked()?;
+    let owned_state = BackupState::clone(state.inner());
     let destination = destination.map(PathBuf::from);
-    let _operation_guard = state.lock_data_operation().await;
-    state
-        .create_backup_internal(destination.as_deref(), BackupKind::Manual)
+    let _operation_guard = owned_state.lock_data_operation().await;
+    owned_state
+        .clone()
+        .create_backup_internal(destination, BackupKind::Manual)
         .await
         .map_err(|error| error.to_string())
 }
@@ -673,19 +720,23 @@ pub async fn restore_backup<R: Runtime>(
     path: String,
     app: AppHandle<R>,
     state: State<'_, BackupState>,
+    access: State<'_, AppAccessState>,
 ) -> Result<(), String> {
-    let state = state.inner().clone();
-    let _operation_guard = state.lock_data_operation().await;
-    state
-        .stage_restore_internal(Path::new(&path))
+    let access_state = AppAccessState::clone(access.inner());
+    access_state.require_unlocked()?;
+    let owned_state = BackupState::clone(state.inner());
+    let _operation_guard = owned_state.lock_data_operation().await;
+    owned_state
+        .clone()
+        .stage_restore_internal(PathBuf::from(path))
         .await
         .map_err(|error| error.to_string())?;
     app.restart()
 }
 
 pub(crate) async fn create_automatic_backup_if_due(
-    backup: &BackupState,
-    settings: &SettingsState,
+    backup: BackupState,
+    settings: SettingsState,
 ) -> Result<Option<BackupResult>, BackupError> {
     let _operation_guard = backup.lock_data_operation().await;
     let today = Local::now().date_naive();
@@ -696,6 +747,7 @@ pub(crate) async fn create_automatic_backup_if_due(
     }
 
     let result = backup
+        .clone()
         .create_backup_internal(None, BackupKind::Automatic)
         .await?;
     prune_automatic_backups(&backup.backups_dir, snapshot.backup_retention as usize)?;
@@ -703,15 +755,54 @@ pub(crate) async fn create_automatic_backup_if_due(
     Ok(Some(result))
 }
 
+pub fn spawn_automatic_backup_task<R: Runtime>(app: AppHandle<R>) {
+    let (backup, settings) = {
+        let Some(backup) = app.try_state::<BackupState>() else {
+            return;
+        };
+        let Some(settings) = app.try_state::<SettingsState>() else {
+            return;
+        };
+        (
+            BackupState::clone(backup.inner()),
+            SettingsState::clone(settings.inner()),
+        )
+    };
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            if let Err(error) =
+                create_automatic_backup_if_due(backup.clone(), settings.clone()).await
+            {
+                eprintln!("automatic backup failed: {error}");
+            }
+        }
+    });
+}
+
+async fn legacy_migration_pending(database_path: PathBuf) -> Result<bool, BackupError> {
+    let options = SqliteConnectOptions::new()
+        .filename(&database_path)
+        .create_if_missing(false)
+        .read_only(true);
+    let mut connection = SqliteConnection::connect_with(&options).await?;
+    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM legacy_credential_migration")
+        .fetch_one(&mut connection)
+        .await?;
+    connection.close().await?;
+    Ok(count > 0)
+}
+
 async fn create_database_snapshot(
-    database_path: &Path,
-    snapshot_path: &Path,
+    database_path: PathBuf,
+    snapshot_path: PathBuf,
 ) -> Result<(), BackupError> {
     if snapshot_path.exists() {
-        fs::remove_file(snapshot_path)?;
+        fs::remove_file(&snapshot_path)?;
     }
     let options = SqliteConnectOptions::new()
-        .filename(database_path)
+        .filename(&database_path)
         .create_if_missing(false);
     let mut connection = SqliteConnection::connect_with(&options).await?;
     sqlx::query("VACUUM INTO ?")
@@ -805,7 +896,10 @@ fn extract_and_validate(
 }
 
 fn validate_manifest(manifest: &BackupManifest) -> Result<(), BackupError> {
-    if manifest.format_version != BACKUP_FORMAT_VERSION {
+    if !matches!(
+        manifest.format_version,
+        LEGACY_BACKUP_FORMAT_VERSION | BACKUP_FORMAT_VERSION
+    ) {
         return Err(BackupError::InvalidBackup(format!(
             "不支持的备份版本：{}",
             manifest.format_version
@@ -850,7 +944,12 @@ fn validate_manifest(manifest: &BackupManifest) -> Result<(), BackupError> {
             "Stronghold 快照与盐文件必须同时存在".into(),
         ));
     }
-    for required in REQUIRED_ARCHIVE_FILES {
+    let required_files: &[&str] = if manifest.format_version == LEGACY_BACKUP_FORMAT_VERSION {
+        &V1_REQUIRED_ARCHIVE_FILES
+    } else {
+        &V2_REQUIRED_ARCHIVE_FILES
+    };
+    for &required in required_files {
         if !names.contains(required) {
             return Err(BackupError::InvalidBackup(format!(
                 "备份缺少必要文件：{required}"
@@ -861,29 +960,43 @@ fn validate_manifest(manifest: &BackupManifest) -> Result<(), BackupError> {
 }
 
 async fn validate_staged_contents(
-    staging_dir: &Path,
-    _manifest: &BackupManifest,
+    staging_dir: PathBuf,
+    manifest: BackupManifest,
 ) -> Result<(), BackupError> {
-    validate_staged_database(&staging_dir.join(DATABASE_ARCHIVE_NAME)).await?;
+    let database_path = staging_dir.join(DATABASE_ARCHIVE_NAME);
+    validate_staged_database(database_path.clone(), manifest.format_version).await?;
     validate_staged_settings(&staging_dir.join(SETTINGS_ARCHIVE_NAME))?;
-    vault::validate_backup_files(
-        &staging_dir.join(VAULT_ARCHIVE_NAME),
-        &staging_dir.join(SALT_ARCHIVE_NAME),
-    )
-    .map_err(|error| BackupError::InvalidBackup(error.to_string()))?;
+    let has_legacy_vault = manifest
+        .files
+        .iter()
+        .any(|entry| entry.name == VAULT_ARCHIVE_NAME);
+    if manifest.format_version == BACKUP_FORMAT_VERSION
+        && legacy_migration_pending(database_path).await? != has_legacy_vault
+    {
+        return Err(BackupError::InvalidBackup(
+            "v2 备份中的旧 Stronghold 文件必须与待迁移队列状态一致".into(),
+        ));
+    }
+    if has_legacy_vault {
+        vault::validate_backup_files(
+            &staging_dir.join(VAULT_ARCHIVE_NAME),
+            &staging_dir.join(SALT_ARCHIVE_NAME),
+        )
+        .map_err(|error| BackupError::InvalidBackup(error.to_string()))?;
+    }
     Ok(())
 }
 
-async fn validate_staged_database(path: &Path) -> Result<(), BackupError> {
+async fn validate_staged_database(path: PathBuf, format_version: u32) -> Result<(), BackupError> {
     let options = SqliteConnectOptions::new()
-        .filename(path)
+        .filename(&path)
         .create_if_missing(false)
         .read_only(true)
         .foreign_keys(true);
     let mut connection = SqliteConnection::connect_with(&options)
         .await
         .map_err(|error| BackupError::InvalidBackup(format!("数据库文件无法打开：{error}")))?;
-    let validation_result = validate_database_contract(&mut connection).await;
+    let validation_result = validate_database_contract(&mut connection, format_version).await;
     let close_result = connection.close().await;
     validation_result?;
     close_result
@@ -891,7 +1004,10 @@ async fn validate_staged_database(path: &Path) -> Result<(), BackupError> {
     Ok(())
 }
 
-async fn validate_database_contract(connection: &mut SqliteConnection) -> Result<(), BackupError> {
+async fn validate_database_contract(
+    connection: &mut SqliteConnection,
+    format_version: u32,
+) -> Result<(), BackupError> {
     let integrity = sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
         .fetch_all(&mut *connection)
         .await
@@ -912,6 +1028,10 @@ async fn validate_database_contract(connection: &mut SqliteConnection) -> Result
             "数据库存在 {} 条外键错误",
             foreign_key_errors.len()
         )));
+    }
+
+    if format_version == BACKUP_FORMAT_VERSION {
+        return validate_v2_database_contract(connection).await;
     }
 
     let tables = sqlx::query_scalar::<_, String>(
@@ -965,9 +1085,242 @@ async fn validate_database_contract(connection: &mut SqliteConnection) -> Result
     .await?;
     validate_table_columns(connection, "appointments", &APPOINTMENT_COLUMNS).await?;
     validate_table_columns(connection, "_sqlx_migrations", &MIGRATION_COLUMNS).await?;
-    validate_migration_records(connection).await?;
+    validate_migration_records(connection, LEGACY_BACKUP_FORMAT_VERSION).await?;
     validate_database_constraints(connection).await?;
     validate_database_rows(connection).await
+}
+
+async fn schema_signature(
+    connection: &mut SqliteConnection,
+) -> Result<Vec<(String, String, String, String)>, BackupError> {
+    let rows = sqlx::query(
+        "SELECT type, name, tbl_name, sql
+         FROM sqlite_master
+         WHERE name NOT LIKE 'sqlite_%'
+           AND type IN ('table', 'index', 'trigger', 'view')
+           AND sql IS NOT NULL
+         ORDER BY type, name",
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(|error| BackupError::InvalidBackup(format!("读取数据库结构签名失败：{error}")))?;
+    rows.iter()
+        .map(|row| {
+            Ok((
+                row.try_get("type").map_err(database_schema_error)?,
+                row.try_get("name").map_err(database_schema_error)?,
+                row.try_get("tbl_name").map_err(database_schema_error)?,
+                normalize_schema_sql(
+                    &row.try_get::<String, _>("sql")
+                        .map_err(database_schema_error)?,
+                ),
+            ))
+        })
+        .collect()
+}
+
+async fn validate_v2_database_contract(
+    connection: &mut SqliteConnection,
+) -> Result<(), BackupError> {
+    let actual_schema = schema_signature(connection).await?;
+    let expected_pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .map_err(|error| {
+            BackupError::InvalidBackup(format!("创建数据库结构校验环境失败：{error}"))
+        })?;
+    MIGRATOR.run(&expected_pool).await.map_err(|error| {
+        BackupError::InvalidBackup(format!("创建当前数据库结构签名失败：{error}"))
+    })?;
+    let mut expected = expected_pool.acquire().await.map_err(|error| {
+        BackupError::InvalidBackup(format!("打开当前数据库结构校验环境失败：{error}"))
+    })?;
+    let expected_schema = schema_signature(&mut expected).await?;
+    drop(expected);
+    expected_pool.close().await;
+    if actual_schema != expected_schema {
+        return Err(BackupError::InvalidBackup(
+            "数据库结构与当前 TimeKeeper migration 0005 不一致".into(),
+        ));
+    }
+
+    validate_migration_records(connection, BACKUP_FORMAT_VERSION).await?;
+    validate_v2_database_rows(connection).await
+}
+
+async fn validate_v2_database_rows(connection: &mut SqliteConnection) -> Result<(), BackupError> {
+    let profile_rows = sqlx::query("SELECT * FROM account_profiles ORDER BY id")
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(|error| BackupError::InvalidBackup(format!("读取账号档案失败：{error}")))?;
+    for row in &profile_rows {
+        let profile = profile_from_row(row).map_err(|error| {
+            BackupError::InvalidBackup(format!("账号档案记录无法读取：{error}"))
+        })?;
+        if profile.id.trim().is_empty() || profile.account_name.trim().is_empty() {
+            return Err(BackupError::InvalidBackup(
+                "账号档案包含空标识或空账号名".into(),
+            ));
+        }
+        if let Some(date) = profile.score_updated_at.as_deref() {
+            NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| {
+                BackupError::InvalidBackup(format!("账号档案 {} 的分数更新日期无效", profile.id))
+            })?;
+        }
+        validate_rfc3339(&profile.created_at, "账号档案创建时间", &profile.id)?;
+        validate_rfc3339(&profile.updated_at, "账号档案更新时间", &profile.id)?;
+    }
+
+    let access_rows = sqlx::query("SELECT id, password_verifier, updated_at FROM app_access")
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(|error| BackupError::InvalidBackup(format!("读取入口密码状态失败：{error}")))?;
+    if access_rows.len() > 1 {
+        return Err(BackupError::InvalidBackup("入口密码状态不是单例".into()));
+    }
+    for row in &access_rows {
+        let id: i64 = row.try_get("id").map_err(database_schema_error)?;
+        let verifier: String = row
+            .try_get("password_verifier")
+            .map_err(database_schema_error)?;
+        let updated_at: String = row.try_get("updated_at").map_err(database_schema_error)?;
+        if id != 1 || !verifier.starts_with("$argon2id$") {
+            return Err(BackupError::InvalidBackup(
+                "入口密码 verifier 格式无效".into(),
+            ));
+        }
+        validate_rfc3339(&updated_at, "入口密码更新时间", "app_access")?;
+    }
+
+    let orphaned_migrations = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)
+         FROM legacy_credential_migration q
+         LEFT JOIN account_profiles p
+           ON q.target_kind = 'account_profile' AND p.id = q.target_id
+         LEFT JOIN appointments a
+           ON q.target_kind = 'appointment' AND a.id = q.target_id
+         WHERE (q.target_kind = 'account_profile' AND p.id IS NULL)
+            OR (q.target_kind = 'appointment' AND a.id IS NULL)",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|error| BackupError::InvalidBackup(format!("校验旧密码迁移队列失败：{error}")))?;
+    if orphaned_migrations != 0 {
+        return Err(BackupError::InvalidBackup(format!(
+            "旧密码迁移队列包含 {orphaned_migrations} 条无对应目标的记录"
+        )));
+    }
+
+    let appointment_rows = sqlx::query(
+        "SELECT a.*, c.password AS account_password
+         FROM appointments a
+         LEFT JOIN appointment_credentials c ON c.appointment_id = a.id
+         ORDER BY a.id",
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(|error| BackupError::InvalidBackup(format!("读取预约记录失败：{error}")))?;
+    for row in &appointment_rows {
+        let appointment = appointment_from_row(row)
+            .map_err(|error| BackupError::InvalidBackup(format!("预约记录无法读取：{error}")))?;
+        let account_name: Option<String> =
+            row.try_get("account_name").map_err(database_schema_error)?;
+        let account_specialization: Option<String> = row
+            .try_get("account_specialization")
+            .map_err(database_schema_error)?;
+        let account_gear_score: Option<String> = row
+            .try_get("account_gear_score")
+            .map_err(database_schema_error)?;
+        let account_server: Option<String> = row
+            .try_get("account_server")
+            .map_err(database_schema_error)?;
+        let service_date = NaiveDate::parse_from_str(&appointment.service_date, "%Y-%m-%d")
+            .map_err(|_| {
+                BackupError::InvalidBackup(format!("预约 {} 的服务日期无效", appointment.id))
+            })?;
+        let starts_at = appointment
+            .starts_at
+            .as_deref()
+            .map(|value| parse_appointment_datetime(value, "开始时间", &appointment.id))
+            .transpose()?;
+        let ends_at = appointment
+            .ends_at
+            .as_deref()
+            .map(|value| parse_appointment_datetime(value, "结束时间", &appointment.id))
+            .transpose()?;
+        let next_service_date = service_date.checked_add_days(Days::new(1));
+        let invalid_time_range = match (starts_at, ends_at) {
+            (None, Some(_)) => true,
+            (Some(start), Some(end)) => {
+                end <= start
+                    || end - start >= chrono::Duration::days(1)
+                    || (end.date() != service_date && Some(end.date()) != next_service_date)
+            }
+            _ => false,
+        };
+        if starts_at.is_some_and(|value| value.date() != service_date)
+            || invalid_time_range
+            || appointment.id.trim().is_empty()
+            || appointment.contact_name.trim().is_empty()
+            || match account_name.as_deref() {
+                Some(value) => value.trim().is_empty(),
+                None => {
+                    account_specialization.is_some()
+                        || account_gear_score.is_some()
+                        || account_server.is_some()
+                }
+            }
+        {
+            return Err(BackupError::InvalidBackup(format!(
+                "预约 {} 的字段值不符合当前 TimeKeeper 契约",
+                appointment.id
+            )));
+        }
+        match appointment.mode {
+            AppointmentMode::Entertainment
+                if appointment.settlement_status != SettlementStatus::NotApplicable
+                    || appointment.rate_note.is_some()
+                    || appointment.payment_method.is_some()
+                    || appointment.amount_minor.is_some() =>
+            {
+                return Err(BackupError::InvalidBackup(format!(
+                    "娱乐预约 {} 包含不允许的账单数据",
+                    appointment.id
+                )));
+            }
+            AppointmentMode::Business
+                if appointment.settlement_status == SettlementStatus::NotApplicable =>
+            {
+                return Err(BackupError::InvalidBackup(format!(
+                    "业务预约 {} 的结算状态无效",
+                    appointment.id
+                )));
+            }
+            _ => {}
+        }
+        if appointment.settlement_status == SettlementStatus::Settled
+            && appointment.amount_minor.is_none()
+        {
+            return Err(BackupError::InvalidBackup(format!(
+                "已结算预约 {} 缺少金额",
+                appointment.id
+            )));
+        }
+        if let Some(channel) = appointment.voice_channel.as_deref()
+            && (appointment.voice_platform != Some(VoicePlatform::Yy)
+                || channel.is_empty()
+                || !channel.chars().all(|character| character.is_ascii_digit()))
+        {
+            return Err(BackupError::InvalidBackup(format!(
+                "预约 {} 的语音频道无效",
+                appointment.id
+            )));
+        }
+        validate_rfc3339(&appointment.created_at, "预约创建时间", &appointment.id)?;
+        validate_rfc3339(&appointment.updated_at, "预约更新时间", &appointment.id)?;
+    }
+    Ok(())
 }
 
 async fn validate_table_columns(
@@ -1021,7 +1374,10 @@ fn database_schema_error(error: sqlx::Error) -> BackupError {
     BackupError::InvalidBackup(format!("数据库表结构无法读取：{error}"))
 }
 
-async fn validate_migration_records(connection: &mut SqliteConnection) -> Result<(), BackupError> {
+async fn validate_migration_records(
+    connection: &mut SqliteConnection,
+    format_version: u32,
+) -> Result<(), BackupError> {
     let rows =
         sqlx::query("SELECT version, success, checksum FROM _sqlx_migrations ORDER BY version")
             .fetch_all(&mut *connection)
@@ -1029,7 +1385,12 @@ async fn validate_migration_records(connection: &mut SqliteConnection) -> Result
             .map_err(|error| {
                 BackupError::InvalidBackup(format!("读取数据库迁移记录失败：{error}"))
             })?;
-    let expected = MIGRATOR.iter().collect::<Vec<_>>();
+    let expected = MIGRATOR
+        .iter()
+        .filter(|migration| {
+            format_version != LEGACY_BACKUP_FORMAT_VERSION || migration.version <= 4
+        })
+        .collect::<Vec<_>>();
     if rows.len() != expected.len() {
         return Err(BackupError::InvalidBackup(format!(
             "数据库迁移记录数量不符：期望 {}，实际 {}",
@@ -1525,10 +1886,7 @@ async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(),
             )));
         }
         match appointment.account.as_ref() {
-            Some(account)
-                if account.account_name.trim().is_empty()
-                    || account.password_available != (account_password_available != 0) =>
-            {
+            Some(account) if account.account_name.trim().is_empty() => {
                 return Err(BackupError::InvalidBackup(format!(
                     "预约 {} 的内嵌账号数据无效",
                     appointment.id
@@ -1699,6 +2057,8 @@ fn prune_automatic_backups(directory: &Path, retention: usize) -> Result<(), Bac
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::*;
     use crate::{
         accounts::{
@@ -1737,6 +2097,36 @@ mod tests {
             let database = Database::initialize(path).await.unwrap();
             database.pool().close().await;
         });
+    }
+
+    fn create_legacy_database(path: &Path, latest_version: i64) {
+        runtime().block_on(async {
+            let options = SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(true)
+                .foreign_keys(true);
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(options)
+                .await
+                .unwrap();
+            let migrator = sqlx::migrate::Migrator {
+                migrations: Cow::Owned(
+                    MIGRATOR
+                        .iter()
+                        .filter(|migration| migration.version <= latest_version)
+                        .cloned()
+                        .collect(),
+                ),
+                ..sqlx::migrate::Migrator::DEFAULT
+            };
+            migrator.run(&pool).await.unwrap();
+            pool.close().await;
+        });
+    }
+
+    fn create_v1_database(path: &Path) {
+        create_legacy_database(path, 4);
     }
 
     fn create_wrong_schema_database(path: &Path) {
@@ -1779,31 +2169,50 @@ mod tests {
     }
 
     fn create_database_without_0004_contract(path: &Path) {
-        runtime().block_on(async {
-            let database = Database::initialize(path).await.unwrap();
-            sqlx::query("DROP TABLE appointment_password_backfill")
-                .execute(database.pool())
-                .await
-                .unwrap();
-            sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 4")
-                .execute(database.pool())
-                .await
-                .unwrap();
-            sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-                .fetch_all(database.pool())
-                .await
-                .unwrap();
-            database.pool().close().await;
-        });
+        create_legacy_database(path, 3);
     }
 
     fn create_database_with_orphaned_password_backfill(path: &Path) {
+        create_v1_database(path);
         runtime().block_on(async {
-            let database = Database::initialize(path).await.unwrap();
+            let options = SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(false)
+                .foreign_keys(true);
+            let mut connection = SqliteConnection::connect_with(&options).await.unwrap();
             sqlx::query(
                 "INSERT INTO appointment_password_backfill (appointment_id, source_profile_id)
                  VALUES ('missing-appointment', 'legacy-profile')",
             )
+            .execute(&mut connection)
+            .await
+            .unwrap();
+            connection.close().await.unwrap();
+        });
+    }
+
+    fn insert_pending_legacy_profile(path: &Path, profile_id: &str) {
+        runtime().block_on(async {
+            let database = Database::initialize(path).await.unwrap();
+            let now = Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO account_profiles (
+                    id, account_name, created_at, updated_at
+                 ) VALUES (?, 'legacy-account', ?, ?)",
+            )
+            .bind(profile_id)
+            .bind(&now)
+            .bind(&now)
+            .execute(database.pool())
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO legacy_credential_migration (
+                    target_kind, target_id, source_kind, source_id
+                 ) VALUES ('account_profile', ?, 'account_profile', ?)",
+            )
+            .bind(profile_id)
+            .bind(profile_id)
             .execute(database.pool())
             .await
             .unwrap();
@@ -1812,6 +2221,29 @@ mod tests {
                 .await
                 .unwrap();
             database.pool().close().await;
+        });
+    }
+
+    fn insert_v1_profile(path: &Path, profile_id: &str) {
+        runtime().block_on(async {
+            let options = SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(false)
+                .foreign_keys(true);
+            let mut connection = SqliteConnection::connect_with(&options).await.unwrap();
+            let now = Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO account_profiles (
+                    id, account_name, created_at, updated_at
+                 ) VALUES (?, 'legacy-account', ?, ?)",
+            )
+            .bind(profile_id)
+            .bind(&now)
+            .bind(&now)
+            .execute(&mut connection)
+            .await
+            .unwrap();
+            connection.close().await.unwrap();
         });
     }
 
@@ -1868,6 +2300,15 @@ mod tests {
         )
     }
 
+    fn test_app_access_verifier(password: &[u8], salt_byte: u8) -> String {
+        argon2::hash_encoded(
+            password,
+            &[salt_byte; 32],
+            &argon2::Config::rfc9106_low_mem(),
+        )
+        .unwrap()
+    }
+
     fn business_input(date: &str, start: &str, end: &str, amount_minor: i64) -> AppointmentInput {
         AppointmentInput {
             service_date: date.into(),
@@ -1889,9 +2330,9 @@ mod tests {
         }
     }
 
-    fn write_test_backup(path: &Path, files: &[(&str, &[u8])]) {
+    fn write_test_backup_with_version(path: &Path, format_version: u32, files: &[(&str, &[u8])]) {
         let manifest = BackupManifest {
-            format_version: BACKUP_FORMAT_VERSION,
+            format_version,
             created_at: Utc::now().to_rfc3339(),
             files: files
                 .iter()
@@ -1916,6 +2357,10 @@ mod tests {
             .write_all(&serde_json::to_vec_pretty(&manifest).unwrap())
             .unwrap();
         archive.finish().unwrap();
+    }
+
+    fn write_test_backup(path: &Path, files: &[(&str, &[u8])]) {
+        write_test_backup_with_version(path, BACKUP_FORMAT_VERSION, files);
     }
 
     fn pre_restore_backup_count(state: &BackupState) -> usize {
@@ -1965,17 +2410,21 @@ mod tests {
         let state = BackupState::new(&dir, &database).unwrap();
 
         let backup = runtime()
-            .block_on(state.create_backup_internal(None, BackupKind::Manual))
+            .block_on(
+                state
+                    .clone()
+                    .create_backup_internal(None, BackupKind::Manual),
+            )
             .unwrap();
         let verify_dir = dir.join("verify-created-package");
         fs::create_dir(&verify_dir).unwrap();
         let manifest = extract_and_validate(Path::new(&backup.path), &verify_dir).unwrap();
         runtime()
-            .block_on(validate_staged_contents(&verify_dir, &manifest))
+            .block_on(validate_staged_contents(verify_dir.clone(), manifest))
             .unwrap();
         fs::remove_dir_all(verify_dir).unwrap();
         let changed_settings = AppSettings {
-            auto_lock_minutes: 30,
+            default_reminder_minutes: 45,
             ..AppSettings::default()
         };
         fs::write(
@@ -2005,7 +2454,11 @@ mod tests {
         create_vault_files(&dir);
         let state = BackupState::new(&dir, &database).unwrap();
         let backup = runtime()
-            .block_on(state.create_backup_internal(None, BackupKind::Manual))
+            .block_on(
+                state
+                    .clone()
+                    .create_backup_internal(None, BackupKind::Manual),
+            )
             .unwrap();
         runtime()
             .block_on(state.stage_restore(Path::new(&backup.path)))
@@ -2067,11 +2520,57 @@ mod tests {
     }
 
     #[test]
-    fn backup_creation_requires_an_initialized_vault() {
-        let dir = test_dir("create-without-vault");
+    fn v2_backup_omits_legacy_vault_when_migration_queue_is_empty() {
+        let dir = test_dir("v2-without-legacy-queue");
         fs::create_dir_all(&dir).unwrap();
         let database = dir.join("timekeeper.db");
         create_timekeeper_database(&database);
+        let state = BackupState::new(&dir, &database).unwrap();
+        let error = runtime()
+            .block_on(
+                state
+                    .clone()
+                    .create_backup_internal(None, BackupKind::Manual),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("设置文件不存在"), "{error}");
+        fs::write(
+            dir.join(SETTINGS_ARCHIVE_NAME),
+            serde_json::to_vec_pretty(&AppSettings::default()).unwrap(),
+        )
+        .unwrap();
+        create_vault_files(&dir);
+
+        let backup = runtime()
+            .block_on(
+                state
+                    .clone()
+                    .create_backup_internal(None, BackupKind::Manual),
+            )
+            .unwrap();
+        let verify_dir = dir.join("verify-v2-without-legacy-queue");
+        fs::create_dir(&verify_dir).unwrap();
+        let manifest = extract_and_validate(Path::new(&backup.path), &verify_dir).unwrap();
+        assert_eq!(manifest.format_version, BACKUP_FORMAT_VERSION);
+        assert_eq!(
+            manifest
+                .files
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<HashSet<_>>(),
+            HashSet::from([DATABASE_ARCHIVE_NAME, SETTINGS_ARCHIVE_NAME])
+        );
+        fs::remove_dir_all(verify_dir).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn v2_backup_requires_and_includes_paired_legacy_vault_for_pending_queue() {
+        let dir = test_dir("v2-with-legacy-queue");
+        fs::create_dir_all(&dir).unwrap();
+        let database = dir.join("timekeeper.db");
+        create_timekeeper_database(&database);
+        insert_pending_legacy_profile(&database, "legacy-profile");
         fs::write(
             dir.join(SETTINGS_ARCHIVE_NAME),
             serde_json::to_vec_pretty(&AppSettings::default()).unwrap(),
@@ -2080,22 +2579,256 @@ mod tests {
         let state = BackupState::new(&dir, &database).unwrap();
 
         let error = runtime()
-            .block_on(state.create_backup_internal(None, BackupKind::Manual))
+            .block_on(
+                state
+                    .clone()
+                    .create_backup_internal(None, BackupKind::Manual),
+            )
             .unwrap_err();
-        assert!(error.to_string().contains(VAULT_ARCHIVE_NAME));
-        assert!(
-            fs::read_dir(&state.backups_dir)
-                .unwrap()
-                .filter_map(Result::ok)
-                .all(|entry| !entry.file_name().to_string_lossy().ends_with(".tkbackup"))
-        );
-        assert!(
-            fs::read_dir(&state.backups_dir)
-                .unwrap()
-                .filter_map(Result::ok)
-                .all(|entry| !entry.file_name().to_string_lossy().ends_with(".partial"))
-        );
+        assert!(error.to_string().contains("成对"), "{error}");
+
+        create_vault_files(&dir);
+        let backup = runtime()
+            .block_on(
+                state
+                    .clone()
+                    .create_backup_internal(None, BackupKind::Manual),
+            )
+            .unwrap();
+        let verify_dir = dir.join("verify-v2-with-legacy-queue");
+        fs::create_dir(&verify_dir).unwrap();
+        let manifest = extract_and_validate(Path::new(&backup.path), &verify_dir).unwrap();
+        assert_eq!(manifest.format_version, BACKUP_FORMAT_VERSION);
+        let names = manifest
+            .files
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<HashSet<_>>();
+        assert!(names.contains(VAULT_ARCHIVE_NAME));
+        assert!(names.contains(SALT_ARCHIVE_NAME));
+        runtime()
+            .block_on(validate_staged_contents(verify_dir.clone(), manifest))
+            .unwrap();
+        fs::remove_dir_all(verify_dir).unwrap();
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn v1_backup_is_staged_restored_and_upgraded_on_next_database_start() {
+        let dir = test_dir("v1-restore-upgrade");
+        let source_dir = test_dir("v1-restore-source");
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&source_dir).unwrap();
+
+        let database = dir.join("timekeeper.db");
+        create_timekeeper_database(&database);
+        let current_settings = SettingsState::load(&dir).unwrap();
+        drop(current_settings);
+        let state = BackupState::new(&dir, &database).unwrap();
+
+        let v1_database = source_dir.join("database.sqlite3");
+        create_v1_database(&v1_database);
+        insert_v1_profile(&v1_database, "legacy-profile");
+        let source_vault = VaultState::new(&source_dir).unwrap();
+        source_vault
+            .initialize("v1 restore compatibility password".into())
+            .unwrap();
+        source_vault
+            .set_secret("legacy-profile", "legacy-profile-secret".into())
+            .unwrap();
+        drop(source_vault);
+        let v1_database_bytes = fs::read(&v1_database).unwrap();
+        let v1_settings = serde_json::to_vec_pretty(&AppSettings {
+            default_reminder_minutes: 75,
+            ..AppSettings::default()
+        })
+        .unwrap();
+        let v1_vault = fs::read(source_dir.join(VAULT_ARCHIVE_NAME)).unwrap();
+        let v1_salt = fs::read(source_dir.join(SALT_ARCHIVE_NAME)).unwrap();
+        let v1_backup = source_dir.join("legacy-v1.tkbackup");
+        write_test_backup_with_version(
+            &v1_backup,
+            LEGACY_BACKUP_FORMAT_VERSION,
+            &[
+                (DATABASE_ARCHIVE_NAME, v1_database_bytes.as_slice()),
+                (SETTINGS_ARCHIVE_NAME, v1_settings.as_slice()),
+                (VAULT_ARCHIVE_NAME, v1_vault.as_slice()),
+                (SALT_ARCHIVE_NAME, v1_salt.as_slice()),
+            ],
+        );
+
+        runtime().block_on(state.stage_restore(&v1_backup)).unwrap();
+        let pending_manifest: BackupManifest =
+            serde_json::from_slice(&fs::read(&state.pending_marker).unwrap()).unwrap();
+        assert_eq!(
+            pending_manifest.format_version,
+            LEGACY_BACKUP_FORMAT_VERSION
+        );
+        assert_eq!(pre_restore_backup_count(&state), 1);
+        let pre_restore_path = fs::read_dir(&state.backups_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("pre-restore-"))
+            })
+            .unwrap()
+            .path();
+        let verify_dir = dir.join("verify-pre-restore-v2");
+        fs::create_dir(&verify_dir).unwrap();
+        let pre_restore_manifest = extract_and_validate(&pre_restore_path, &verify_dir).unwrap();
+        assert_eq!(pre_restore_manifest.format_version, BACKUP_FORMAT_VERSION);
+        fs::remove_dir_all(verify_dir).unwrap();
+        assert!(state.apply_pending_restore().unwrap());
+        assert_eq!(fs::read(dir.join(VAULT_ARCHIVE_NAME)).unwrap(), v1_vault);
+        assert_eq!(fs::read(dir.join(SALT_ARCHIVE_NAME)).unwrap(), v1_salt);
+
+        runtime().block_on(async {
+            let upgraded = Database::initialize(&database).await.unwrap();
+            let latest_version =
+                sqlx::query_scalar::<_, i64>("SELECT MAX(version) FROM _sqlx_migrations")
+                    .fetch_one(upgraded.pool())
+                    .await
+                    .unwrap();
+            let queued = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM legacy_credential_migration
+                 WHERE target_kind = 'account_profile'
+                   AND target_id = 'legacy-profile'
+                   AND source_kind = 'account_profile'
+                   AND source_id = 'legacy-profile'",
+            )
+            .fetch_one(upgraded.pool())
+            .await
+            .unwrap();
+            assert_eq!(latest_version, 5);
+            assert_eq!(queued, 1);
+            upgraded.pool().close().await;
+        });
+        assert_eq!(
+            SettingsState::load(&dir)
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .default_reminder_minutes,
+            75
+        );
+
+        fs::remove_dir_all(source_dir).unwrap();
+        remove_test_dir_after_sqlite_shutdown(dir);
+    }
+
+    #[test]
+    fn v2_restore_restores_the_backed_up_app_access_verifier() {
+        let dir = test_dir("v2-access-verifier");
+        fs::create_dir_all(&dir).unwrap();
+        let database = dir.join("timekeeper.db");
+        create_timekeeper_database(&database);
+        let settings = SettingsState::load(&dir).unwrap();
+        drop(settings);
+        let backed_up_verifier = test_app_access_verifier(b"backup verifier before restore", 7);
+        let changed_verifier = test_app_access_verifier(b"backup verifier after restore", 9);
+        runtime().block_on(async {
+            let database = Database::initialize(&database).await.unwrap();
+            sqlx::query(
+                "INSERT INTO app_access (id, password_verifier, updated_at)
+                 VALUES (1, ?, ?)",
+            )
+            .bind(&backed_up_verifier)
+            .bind(Utc::now().to_rfc3339())
+            .execute(database.pool())
+            .await
+            .unwrap();
+            database.pool().close().await;
+        });
+        let state = BackupState::new(&dir, &database).unwrap();
+        let backup = runtime()
+            .block_on(
+                state
+                    .clone()
+                    .create_backup_internal(None, BackupKind::Manual),
+            )
+            .unwrap();
+
+        runtime().block_on(async {
+            let database = Database::initialize(&database).await.unwrap();
+            sqlx::query("UPDATE app_access SET password_verifier = ?, updated_at = ? WHERE id = 1")
+                .bind(&changed_verifier)
+                .bind(Utc::now().to_rfc3339())
+                .execute(database.pool())
+                .await
+                .unwrap();
+            database.pool().close().await;
+        });
+        runtime()
+            .block_on(state.stage_restore(Path::new(&backup.path)))
+            .unwrap();
+        assert_eq!(pre_restore_backup_count(&state), 1);
+        assert!(state.apply_pending_restore().unwrap());
+
+        runtime().block_on(async {
+            let restored = Database::initialize(&database).await.unwrap();
+            let verifier = sqlx::query_scalar::<_, String>(
+                "SELECT password_verifier FROM app_access WHERE id = 1",
+            )
+            .fetch_one(restored.pool())
+            .await
+            .unwrap();
+            assert_eq!(verifier, backed_up_verifier);
+            assert_ne!(verifier, changed_verifier);
+            restored.pool().close().await;
+        });
+        remove_test_dir_after_sqlite_shutdown(dir);
+    }
+
+    #[test]
+    fn v2_restore_requires_legacy_vault_pair_to_match_migration_queue() {
+        let dir = test_dir("v2-restore-legacy-pair-contract");
+        fs::create_dir_all(&dir).unwrap();
+        let live_database = dir.join("timekeeper.db");
+        create_timekeeper_database(&live_database);
+        let settings = serde_json::to_vec_pretty(&AppSettings::default()).unwrap();
+        fs::write(dir.join(SETTINGS_ARCHIVE_NAME), &settings).unwrap();
+        let (vault_bytes, salt_bytes) = create_vault_files(&dir);
+        let state = BackupState::new(&dir, &live_database).unwrap();
+
+        let empty_queue_database = fs::read(&live_database).unwrap();
+        let unexpected_pair = dir.join("unexpected-pair.tkbackup");
+        write_test_backup(
+            &unexpected_pair,
+            &[
+                (DATABASE_ARCHIVE_NAME, empty_queue_database.as_slice()),
+                (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
+                (VAULT_ARCHIVE_NAME, vault_bytes.as_slice()),
+                (SALT_ARCHIVE_NAME, salt_bytes.as_slice()),
+            ],
+        );
+        let error = runtime()
+            .block_on(state.stage_restore(&unexpected_pair))
+            .unwrap_err();
+        assert!(error.to_string().contains("队列状态一致"), "{error}");
+
+        let queued_database = dir.join("queued-v2.sqlite3");
+        create_timekeeper_database(&queued_database);
+        insert_pending_legacy_profile(&queued_database, "queued-profile");
+        let queued_database = fs::read(&queued_database).unwrap();
+        let missing_pair = dir.join("missing-pair.tkbackup");
+        write_test_backup(
+            &missing_pair,
+            &[
+                (DATABASE_ARCHIVE_NAME, queued_database.as_slice()),
+                (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
+            ],
+        );
+        let error = runtime()
+            .block_on(state.stage_restore(&missing_pair))
+            .unwrap_err();
+        assert!(error.to_string().contains("队列状态一致"), "{error}");
+
+        assert!(!state.pending_marker.exists());
+        assert_eq!(pre_restore_backup_count(&state), 0);
+        remove_test_dir_after_sqlite_shutdown(dir);
     }
 
     #[test]
@@ -2163,6 +2896,9 @@ mod tests {
         fs::write(dir.join(SETTINGS_ARCHIVE_NAME), &settings).unwrap();
         let (vault_bytes, salt_bytes) = create_vault_files(&dir);
         let original_database = fs::read(&database).unwrap();
+        let v1_database = dir.join("valid-v1.sqlite3");
+        create_v1_database(&v1_database);
+        let v1_database_bytes = fs::read(&v1_database).unwrap();
         let state = BackupState::new(&dir, &database).unwrap();
 
         let invalid_database_backup = dir.join("invalid-database.tkbackup");
@@ -2171,8 +2907,6 @@ mod tests {
             &[
                 (DATABASE_ARCHIVE_NAME, b"not a sqlite database"),
                 (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
-                (VAULT_ARCHIVE_NAME, vault_bytes.as_slice()),
-                (SALT_ARCHIVE_NAME, salt_bytes.as_slice()),
             ],
         );
         let error = runtime()
@@ -2189,14 +2923,12 @@ mod tests {
             &[
                 (DATABASE_ARCHIVE_NAME, wrong_schema_bytes.as_slice()),
                 (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
-                (VAULT_ARCHIVE_NAME, vault_bytes.as_slice()),
-                (SALT_ARCHIVE_NAME, salt_bytes.as_slice()),
             ],
         );
         let error = runtime()
             .block_on(state.stage_restore(&wrong_schema_backup))
             .unwrap_err();
-        assert!(error.to_string().contains("缺少表"));
+        assert!(error.to_string().contains("结构"), "{error}");
 
         let same_named_wrong_schema_database = dir.join("same-named-wrong-schema.sqlite3");
         create_same_named_wrong_schema_database(&same_named_wrong_schema_database);
@@ -2210,21 +2942,20 @@ mod tests {
                     same_named_wrong_schema_bytes.as_slice(),
                 ),
                 (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
-                (VAULT_ARCHIVE_NAME, vault_bytes.as_slice()),
-                (SALT_ARCHIVE_NAME, salt_bytes.as_slice()),
             ],
         );
         let error = runtime()
             .block_on(state.stage_restore(&same_named_wrong_schema_backup))
             .unwrap_err();
-        assert!(error.to_string().contains("列"));
+        assert!(error.to_string().contains("结构"), "{error}");
 
         let pre_0004_database = dir.join("pre-0004.sqlite3");
         create_database_without_0004_contract(&pre_0004_database);
         let pre_0004_backup = dir.join("pre-0004.tkbackup");
         let pre_0004_bytes = fs::read(&pre_0004_database).unwrap();
-        write_test_backup(
+        write_test_backup_with_version(
             &pre_0004_backup,
+            LEGACY_BACKUP_FORMAT_VERSION,
             &[
                 (DATABASE_ARCHIVE_NAME, pre_0004_bytes.as_slice()),
                 (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
@@ -2241,8 +2972,9 @@ mod tests {
         create_database_with_orphaned_password_backfill(&orphaned_backfill_database);
         let orphaned_backfill_backup = dir.join("orphaned-backfill.tkbackup");
         let orphaned_backfill_bytes = fs::read(&orphaned_backfill_database).unwrap();
-        write_test_backup(
+        write_test_backup_with_version(
             &orphaned_backfill_backup,
+            LEGACY_BACKUP_FORMAT_VERSION,
             &[
                 (DATABASE_ARCHIVE_NAME, orphaned_backfill_bytes.as_slice()),
                 (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
@@ -2270,8 +3002,6 @@ mod tests {
             &[
                 (DATABASE_ARCHIVE_NAME, invalid_account_bytes.as_slice()),
                 (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
-                (VAULT_ARCHIVE_NAME, vault_bytes.as_slice()),
-                (SALT_ARCHIVE_NAME, salt_bytes.as_slice()),
             ],
         );
         let error = runtime()
@@ -2294,8 +3024,6 @@ mod tests {
             &[
                 (DATABASE_ARCHIVE_NAME, invalid_date_bytes.as_slice()),
                 (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
-                (VAULT_ARCHIVE_NAME, vault_bytes.as_slice()),
-                (SALT_ARCHIVE_NAME, salt_bytes.as_slice()),
             ],
         );
         let error = runtime()
@@ -2318,8 +3046,6 @@ mod tests {
             &[
                 (DATABASE_ARCHIVE_NAME, invalid_duration_bytes.as_slice()),
                 (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
-                (VAULT_ARCHIVE_NAME, vault_bytes.as_slice()),
-                (SALT_ARCHIVE_NAME, salt_bytes.as_slice()),
             ],
         );
         let error = runtime()
@@ -2328,10 +3054,11 @@ mod tests {
         assert!(error.to_string().contains("字段值"));
 
         let missing_vault_backup = dir.join("missing-vault.tkbackup");
-        write_test_backup(
+        write_test_backup_with_version(
             &missing_vault_backup,
+            LEGACY_BACKUP_FORMAT_VERSION,
             &[
-                (DATABASE_ARCHIVE_NAME, original_database.as_slice()),
+                (DATABASE_ARCHIVE_NAME, v1_database_bytes.as_slice()),
                 (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
             ],
         );
@@ -2346,8 +3073,6 @@ mod tests {
             &[
                 (DATABASE_ARCHIVE_NAME, original_database.as_slice()),
                 (SETTINGS_ARCHIVE_NAME, b"{}"),
-                (VAULT_ARCHIVE_NAME, vault_bytes.as_slice()),
-                (SALT_ARCHIVE_NAME, salt_bytes.as_slice()),
             ],
         );
         let error = runtime()
@@ -2358,10 +3083,11 @@ mod tests {
         let invalid_vault = vec![0_u8; 173];
         let salt = [0_u8; 32];
         let invalid_vault_backup = dir.join("invalid-vault.tkbackup");
-        write_test_backup(
+        write_test_backup_with_version(
             &invalid_vault_backup,
+            LEGACY_BACKUP_FORMAT_VERSION,
             &[
-                (DATABASE_ARCHIVE_NAME, original_database.as_slice()),
+                (DATABASE_ARCHIVE_NAME, v1_database_bytes.as_slice()),
                 (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
                 (VAULT_ARCHIVE_NAME, invalid_vault.as_slice()),
                 (SALT_ARCHIVE_NAME, salt.as_slice()),
@@ -2376,10 +3102,11 @@ mod tests {
         structural_vault[..7].copy_from_slice(b"PARTI\x03\x00");
         let short_salt = [0_u8; 31];
         let invalid_salt_backup = dir.join("invalid-salt.tkbackup");
-        write_test_backup(
+        write_test_backup_with_version(
             &invalid_salt_backup,
+            LEGACY_BACKUP_FORMAT_VERSION,
             &[
-                (DATABASE_ARCHIVE_NAME, original_database.as_slice()),
+                (DATABASE_ARCHIVE_NAME, v1_database_bytes.as_slice()),
                 (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
                 (VAULT_ARCHIVE_NAME, structural_vault.as_slice()),
                 (SALT_ARCHIVE_NAME, short_salt.as_slice()),
@@ -2529,6 +3256,7 @@ mod tests {
             assert_eq!(settled.unsettled_minor, 0);
 
             let backup = state
+                .clone()
                 .create_backup_internal(None, BackupKind::Manual)
                 .await
                 .unwrap();
@@ -2583,7 +3311,7 @@ mod tests {
             assert!(restored_vault.unlock(password.into()).unwrap().unlocked);
             assert_eq!(
                 restored_vault.get_secret("workflow-account").unwrap(),
-                "original-secret"
+                "changed-secret"
             );
             let restored_settings = SettingsState::load(&dir).unwrap().snapshot().unwrap();
             assert_eq!(restored_settings.account_table_column_widths.weekly, 224);
@@ -2669,6 +3397,7 @@ mod tests {
             );
 
             let backup = state
+                .clone()
                 .create_backup_internal(None, BackupKind::Manual)
                 .await
                 .unwrap();
@@ -2714,18 +3443,45 @@ mod tests {
     }
 
     #[test]
-    fn manifest_rejects_unpaired_stronghold_files() {
-        let manifest = BackupManifest {
+    fn manifest_enforces_v1_and_v2_required_files_and_stronghold_pairing() {
+        let file = |name: &str| ManifestFile {
+            name: name.into(),
+            size_bytes: 1,
+            sha256: "0".repeat(64),
+        };
+        let v2 = BackupManifest {
             format_version: BACKUP_FORMAT_VERSION,
             created_at: Utc::now().to_rfc3339(),
-            files: vec![ManifestFile {
-                name: VAULT_ARCHIVE_NAME.into(),
-                size_bytes: 1,
-                sha256: "0".repeat(64),
-            }],
+            files: V2_REQUIRED_ARCHIVE_FILES
+                .iter()
+                .map(|name| file(name))
+                .collect(),
+        };
+        assert!(validate_manifest(&v2).is_ok());
+
+        let v1_missing_pair = BackupManifest {
+            format_version: LEGACY_BACKUP_FORMAT_VERSION,
+            ..v2.clone()
         };
         assert!(matches!(
-            validate_manifest(&manifest),
+            validate_manifest(&v1_missing_pair),
+            Err(BackupError::InvalidBackup(_))
+        ));
+
+        let v1 = BackupManifest {
+            format_version: LEGACY_BACKUP_FORMAT_VERSION,
+            created_at: Utc::now().to_rfc3339(),
+            files: V1_REQUIRED_ARCHIVE_FILES
+                .iter()
+                .map(|name| file(name))
+                .collect(),
+        };
+        assert!(validate_manifest(&v1).is_ok());
+
+        let mut unpaired_v2 = v2;
+        unpaired_v2.files.push(file(VAULT_ARCHIVE_NAME));
+        assert!(matches!(
+            validate_manifest(&unpaired_v2),
             Err(BackupError::InvalidBackup(_))
         ));
     }

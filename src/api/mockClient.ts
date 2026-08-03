@@ -4,6 +4,7 @@ import type {
   AccountRoleDataRefreshResult,
   AccountTableColumnWidths,
   AccountUsageWeekSyncResult,
+  AppAccessStatus,
   AppSettings,
   Appointment,
   AppointmentConflict,
@@ -15,7 +16,6 @@ import type {
   ReportGranularity,
   RevenuePoint,
   ServiceStatus,
-  VaultStatus,
 } from "../types/domain";
 import {
   ACCOUNT_TABLE_COLUMN_KEYS,
@@ -36,12 +36,7 @@ import {
 import { MIN_MASTER_PASSWORD_CHARACTERS, isMasterPasswordLongEnough } from "../utils/security";
 import { combineDateTime } from "../utils/appointment";
 import { appointmentProgressStatus } from "../utils/appointmentProgress";
-import {
-  demoAccounts,
-  demoAppointmentPasswords,
-  demoAppointments,
-  demoPasswords,
-} from "./mockData";
+import { demoAccounts, demoAppointments } from "./mockData";
 import type { ApiClient } from "./types";
 
 let appointments = structuredClone(demoAppointments);
@@ -52,10 +47,13 @@ let accounts = structuredClone(demoAccounts).sort((a, b) => {
     a.accountName.localeCompare(b.accountName)
   );
 });
-const passwords = new Map(demoPasswords);
-const appointmentPasswords = new Map(demoAppointmentPasswords);
-let vault: VaultStatus = { initialized: true, unlocked: true, autoLockMinutes: 15 };
-let vaultPassword: string | null = null;
+let appAccess: AppAccessStatus = {
+  initialized: true,
+  unlocked: true,
+  legacyMigrationPendingCount: 0,
+};
+let appAccessPassword: string | null = "demo";
+const appointmentSelections = new Map<string, { ids: string[]; expiresAt: number }>();
 const ACCOUNT_TABLE_WIDTHS_STORAGE_KEY = "timekeeper.demo.accountTableColumnWidths";
 const APPOINTMENT_TABLE_WIDTHS_STORAGE_KEY = "timekeeper.demo.appointmentTableColumnWidths";
 
@@ -127,7 +125,6 @@ function storeAppointmentTableColumnWidths(widths: AppointmentTableColumnWidths)
 
 let settings: AppSettings = {
   defaultReminderMinutes: 30,
-  autoLockMinutes: 15,
   backupRetention: 30,
   lastAutomaticBackupDate: format(new Date(), "yyyy-MM-dd"),
   accountTableColumnWidths: loadStoredAccountTableColumnWidths(),
@@ -140,11 +137,9 @@ let accountRoleDataRefreshBusy = false;
 interface MockBackupSnapshot {
   appointments: Appointment[];
   accounts: AccountProfile[];
-  passwords: Array<[string, string]>;
-  appointmentPasswords: Array<[string, string]>;
   settings: AppSettings;
-  vault: Omit<VaultStatus, "unlocked">;
-  vaultPassword: string | null;
+  appAccess: Omit<AppAccessStatus, "unlocked">;
+  appAccessPassword: string | null;
 }
 
 let backupSnapshot: MockBackupSnapshot | null = null;
@@ -288,25 +283,21 @@ function accountDetailsFromProfile(profile: AccountProfile): NonNullable<Appoint
     server: profile.server,
     specialization: profile.specialization,
     gearScore: profile.gearScore,
-    passwordAvailable: true,
+    password: profile.password,
   };
 }
 
 function resolveAppointmentAccount(
-  appointmentId: string,
+  _appointmentId: string,
   input: AppointmentInput,
   existing?: Appointment,
 ): Appointment["account"] {
   if (!input.account) {
-    if (existing?.account?.passwordAvailable) requireVault();
-    appointmentPasswords.delete(appointmentId);
     return null;
   }
 
   if (input.account.kind === "profile") {
-    requireVault();
     const profile = getAccountOrThrow(input.account.profileId);
-    appointmentPasswords.set(appointmentId, getPasswordOrThrow(profile.id));
     return accountDetailsFromProfile(profile);
   }
 
@@ -316,23 +307,18 @@ function resolveAppointmentAccount(
     server: details.server?.trim() || null,
     specialization: details.specialization?.trim() || null,
     gearScore: details.gearScore?.trim() || null,
-    passwordAvailable: false,
+    password: null as string | null,
   };
   const credential = input.account.credential;
   if (credential.kind === "keep") {
-    account.passwordAvailable =
-      Boolean(existing?.account?.passwordAvailable) && appointmentPasswords.has(appointmentId);
+    account.password = existing?.account?.password ?? null;
   } else if (credential.kind === "replace") {
-    requireVault();
     if (!credential.password) throw new Error("临时账号必须填写密码");
-    appointmentPasswords.set(appointmentId, credential.password);
-    account.passwordAvailable = true;
+    account.password = credential.password;
   } else {
-    requireVault();
-    const password = appointmentPasswords.get(credential.sourceAppointmentId);
-    if (password === undefined) throw new Error("上次预约的账号密码不可用");
-    appointmentPasswords.set(appointmentId, password);
-    account.passwordAvailable = true;
+    const password = getAppointmentOrThrow(credential.sourceAppointmentId).account?.password;
+    if (!password) throw new Error("上次预约的账号密码不可用");
+    account.password = password;
   }
   return account;
 }
@@ -389,9 +375,12 @@ function filteredAppointments(filters: AppointmentFilters = {}): Appointment[] {
       ].some((value) => value?.toLocaleLowerCase().includes(query));
     })
     .sort((a, b) => {
-      const left = a.startsAt ?? `${a.serviceDate}T23:59:59`;
-      const right = b.startsAt ?? `${b.serviceDate}T23:59:59`;
-      return left.localeCompare(right);
+      const dateOrder = b.serviceDate.localeCompare(a.serviceDate);
+      if (dateOrder !== 0) return dateOrder;
+      const startOrder = (b.startsAt ?? "").localeCompare(a.startsAt ?? "");
+      if (startOrder !== 0) return startOrder;
+      const createdOrder = b.createdAt.localeCompare(a.createdAt);
+      return createdOrder || b.id.localeCompare(a.id);
     });
 }
 
@@ -424,13 +413,9 @@ function appointmentHours(item: Appointment): number {
   return Math.max(differenceInMinutes(parseISO(item.endsAt), parseISO(item.startsAt)) / 60, 0);
 }
 
-function requireVault(): void {
-  if (!vault.unlocked) throw new Error("密码库已锁定，请先解锁");
-}
-
 function getPasswordOrThrow(id: string): string {
-  const password = passwords.get(id);
-  if (password === undefined) throw new Error("该账号尚未保存密码");
+  const password = getAccountOrThrow(id).password;
+  if (!password) throw new Error("该账号尚未保存密码");
   return password;
 }
 
@@ -454,12 +439,8 @@ function scheduleClipboardClear(expectedText: string): void {
 
 function deleteAppointmentsByIds(ids: readonly string[]): number {
   const targets = new Set(ids.map((id) => id.trim()).filter(Boolean));
-  if (appointments.some((item) => targets.has(item.id) && item.account?.passwordAvailable)) {
-    requireVault();
-  }
   const before = appointments.length;
   appointments = appointments.filter((item) => !targets.has(item.id));
-  targets.forEach((id) => appointmentPasswords.delete(id));
   return before - appointments.length;
 }
 
@@ -501,13 +482,38 @@ function deleteAccountProfilesByIds(ids: readonly string[]): number {
     accounts.filter((account) => targets.has(account.id)).map((account) => account.id),
   );
   accounts = accounts.filter((account) => !existingIds.has(account.id));
-  existingIds.forEach((id) => passwords.delete(id));
   return existingIds.size;
 }
 
 export const mockApi: ApiClient = {
-  async listAppointments(filters = {}) {
+  async listAppointments(filters) {
+    if (!filters.from || !filters.to) {
+      throw new Error("预约范围查询必须同时提供开始日期和结束日期");
+    }
+    if (filters.from > filters.to) throw new Error("开始日期不能晚于结束日期");
     return structuredClone(filteredAppointments(filters));
+  },
+  async listAppointmentPage(filters = {}, requestedPage = 1, requestedPageSize = 100) {
+    const pageSize = Math.min(Math.max(Math.trunc(requestedPageSize), 1), 200);
+    const filtered = filteredAppointments(filters);
+    const totalCount = filtered.length;
+    const totalPages = totalCount === 0 ? 0 : Math.ceil(totalCount / pageSize);
+    const page = Math.min(Math.max(Math.trunc(requestedPage), 1), Math.max(totalPages, 1));
+    const offset = (page - 1) * pageSize;
+    return structuredClone({
+      items: filtered.slice(offset, offset + pageSize),
+      totalCount,
+      page,
+      pageSize,
+      totalPages,
+    });
+  },
+  async createAppointmentSelection(filters = {}) {
+    const token = makeId("selection");
+    const ids = filteredAppointments(filters).map((item) => item.id);
+    const expiresAt = Date.now() + 10 * 60_000;
+    appointmentSelections.set(token, { ids, expiresAt });
+    return { token, totalCount: ids.length, expiresAt: new Date(expiresAt).toISOString() };
   },
   async getAppointment(id) {
     return structuredClone(getAppointmentOrThrow(id));
@@ -551,7 +557,7 @@ export const mockApi: ApiClient = {
               specialization: source.account.specialization,
               gearScore: source.account.gearScore,
             },
-            credential: source.account.passwordAvailable
+            credential: source.account.password
               ? { kind: "copyFromAppointment", sourceAppointmentId: source.id }
               : { kind: "keep" },
           }
@@ -604,11 +610,9 @@ export const mockApi: ApiClient = {
     return structuredClone(result);
   },
   async copyAppointmentAccountPassword(id) {
-    requireVault();
     const appointment = getAppointmentOrThrow(id);
-    if (!appointment.account?.passwordAvailable) throw new Error("该预约没有可复制的账号密码");
-    const password = appointmentPasswords.get(id);
-    if (password === undefined) throw new Error("该预约尚未保存账号密码");
+    const password = appointment.account?.password;
+    if (!password) throw new Error("该预约没有可复制的账号密码");
     if (!globalThis.navigator?.clipboard) throw new Error("当前环境无法访问剪贴板");
     await globalThis.navigator.clipboard.writeText(password);
     scheduleClipboardClear(password);
@@ -628,8 +632,25 @@ export const mockApi: ApiClient = {
     if (!globalThis.navigator?.clipboard) throw new Error("当前环境无法访问剪贴板");
     await globalThis.navigator.clipboard.writeText(channel);
   },
-  async deleteAppointments(ids) {
-    return deleteAppointmentsByIds(ids);
+  async deleteAppointments(selection) {
+    let ids: string[];
+    let token: string | null = null;
+    if (selection.kind === "explicit") {
+      ids = [...new Set(selection.ids.map((id) => id.trim()).filter(Boolean))];
+    } else {
+      const snapshot = appointmentSelections.get(selection.token);
+      if (!snapshot || snapshot.expiresAt <= Date.now()) {
+        appointmentSelections.delete(selection.token);
+        throw new Error("全选结果已过期，请重新选择");
+      }
+      token = selection.token;
+      const excluded = new Set(selection.excludedIds);
+      ids = snapshot.ids.filter((id) => !excluded.has(id));
+    }
+    const matchedCount = ids.length;
+    const deletedCount = deleteAppointmentsByIds(ids);
+    if (token) appointmentSelections.delete(token);
+    return { matchedCount, deletedCount };
   },
   async deleteAppointment(id) {
     deleteAppointmentsByIds([id]);
@@ -672,8 +693,8 @@ export const mockApi: ApiClient = {
     return structuredClone(getAccountOrThrow(id));
   },
   async createAccountProfile(input) {
-    requireVault();
     const timestamp = new Date().toISOString();
+    if (!input.password) throw new Error("新建账号必须填写密码");
     const profile: AccountProfile = {
       id: makeId("account"),
       contactName: input.contactName?.trim() || null,
@@ -682,6 +703,7 @@ export const mockApi: ApiClient = {
       specialization: input.specialization?.trim() || null,
       gearScore: input.gearScore?.trim() || null,
       accountName: input.accountName.trim(),
+      password: input.password,
       currentScore: input.currentScore ?? null,
       highestScore: input.highestScore ?? null,
       scoreUpdatedAt: input.scoreUpdatedAt ?? null,
@@ -691,13 +713,10 @@ export const mockApi: ApiClient = {
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    if (!input.password) throw new Error("新建账号必须填写密码");
-    passwords.set(profile.id, input.password);
     accounts.push(profile);
     return structuredClone(profile);
   },
   async updateAccountProfile(id, input) {
-    requireVault();
     const existing = getAccountOrThrow(id);
     Object.assign(existing, {
       contactName: input.contactName?.trim() || null,
@@ -706,6 +725,7 @@ export const mockApi: ApiClient = {
       specialization: input.specialization?.trim() || null,
       gearScore: input.gearScore?.trim() || null,
       accountName: input.accountName.trim(),
+      password: input.password || existing.password,
       currentScore: input.currentScore ?? null,
       highestScore: input.highestScore ?? null,
       scoreUpdatedAt: input.scoreUpdatedAt ?? null,
@@ -713,7 +733,6 @@ export const mockApi: ApiClient = {
       needsReview: input.needsReview ?? false,
       updatedAt: new Date().toISOString(),
     });
-    if (input.password) passwords.set(id, input.password);
     return structuredClone(existing);
   },
   async updateAccountProfileUsage(id, usageInfo) {
@@ -781,49 +800,60 @@ export const mockApi: ApiClient = {
     }
   },
 
-  async vaultStatus() {
-    return structuredClone(vault);
+  async appAccessStatus() {
+    return structuredClone(appAccess);
   },
-  async initializeVault(password) {
+  async initializeAppAccess(password) {
     if (!isMasterPasswordLongEnough(password)) {
-      throw new Error(`主密码至少需要${MIN_MASTER_PASSWORD_CHARACTERS}个字符`);
+      throw new Error(`入口密码至少需要${MIN_MASTER_PASSWORD_CHARACTERS}个字符`);
     }
-    vaultPassword = password;
-    vault = { initialized: true, unlocked: true, autoLockMinutes: settings.autoLockMinutes };
-    return structuredClone(vault);
+    appAccessPassword = password;
+    appAccess = { ...appAccess, initialized: true, unlocked: true };
+    return structuredClone(appAccess);
   },
-  async unlockVault(password) {
-    if (!password) throw new Error("主密码不能为空");
-    if (vaultPassword !== null && password !== vaultPassword) {
-      throw new Error("主密码错误或保险库已经损坏");
+  async unlockAppAccess(password) {
+    if (!password) throw new Error("入口密码不能为空");
+    if (appAccessPassword !== null && password !== appAccessPassword) {
+      throw new Error("入口密码错误");
     }
-    vaultPassword ??= password;
-    vault = { ...vault, unlocked: true };
-    return structuredClone(vault);
+    appAccessPassword ??= password;
+    appAccess = { ...appAccess, unlocked: true };
+    return structuredClone(appAccess);
   },
-  async changeVaultPassword(currentPassword, newPassword) {
-    requireVault();
-    if (!currentPassword) throw new Error("主密码不能为空");
+  async changeAppAccessPassword(currentPassword, newPassword) {
+    if (!appAccess.unlocked) throw new Error("应用尚未解锁");
+    if (!currentPassword) throw new Error("入口密码不能为空");
     if (!isMasterPasswordLongEnough(newPassword)) {
-      throw new Error(`主密码至少需要${MIN_MASTER_PASSWORD_CHARACTERS}个字符`);
+      throw new Error(`入口密码至少需要${MIN_MASTER_PASSWORD_CHARACTERS}个字符`);
     }
-    if (newPassword === currentPassword) throw new Error("新主密码不能与当前主密码相同");
-    if (vaultPassword !== null && currentPassword !== vaultPassword) {
-      throw new Error("当前主密码不正确");
+    if (newPassword === currentPassword) throw new Error("新入口密码不能与当前密码相同");
+    if (appAccessPassword !== null && currentPassword !== appAccessPassword) {
+      throw new Error("当前入口密码不正确");
     }
-    vaultPassword = newPassword;
-    return structuredClone(vault);
+    appAccessPassword = newPassword;
+    return structuredClone(appAccess);
   },
-  async lockVault() {
-    vault = { ...vault, unlocked: false };
-    return structuredClone(vault);
+  async resetAppAccessPassword(newPassword, confirmationText) {
+    if (confirmationText !== "重置") throw new Error("请输入“重置”确认操作");
+    if (!isMasterPasswordLongEnough(newPassword)) {
+      throw new Error(`入口密码至少需要${MIN_MASTER_PASSWORD_CHARACTERS}个字符`);
+    }
+    appAccessPassword = newPassword;
+    appAccess = { ...appAccess, initialized: true, unlocked: true };
+    return structuredClone(appAccess);
   },
-  async revealAccountPassword(id) {
-    requireVault();
-    return getPasswordOrThrow(id);
+  async lockAppAccess() {
+    appAccess = { ...appAccess, unlocked: false };
+    return structuredClone(appAccess);
+  },
+  async migrateLegacyCredentials(password) {
+    if (!password) throw new Error("原主密码不能为空");
+    const pendingCount = appAccess.legacyMigrationPendingCount;
+    appAccess = { initialized: true, unlocked: true, legacyMigrationPendingCount: 0 };
+    appAccessPassword = password;
+    return { migratedCount: pendingCount, missingCount: 0, pendingCount: 0 };
   },
   async copyAccountPassword(id) {
-    requireVault();
     const password = getPasswordOrThrow(id);
     if (navigator.clipboard) {
       await navigator.clipboard.writeText(password);
@@ -972,14 +1002,12 @@ export const mockApi: ApiClient = {
     backupSnapshot = {
       appointments: structuredClone(appointments),
       accounts: structuredClone(accounts),
-      passwords: structuredClone([...passwords.entries()]),
-      appointmentPasswords: structuredClone([...appointmentPasswords.entries()]),
       settings: structuredClone(settings),
-      vault: {
-        initialized: vault.initialized,
-        autoLockMinutes: vault.autoLockMinutes,
+      appAccess: {
+        initialized: appAccess.initialized,
+        legacyMigrationPendingCount: appAccess.legacyMigrationPendingCount,
       },
-      vaultPassword,
+      appAccessPassword,
     };
     lastBackupPath = path;
     return {
@@ -996,15 +1024,9 @@ export const mockApi: ApiClient = {
     storeAppointmentTableColumnWidths(backupSnapshot.settings.appointmentTableColumnWidths);
     appointments = structuredClone(backupSnapshot.appointments);
     accounts = structuredClone(backupSnapshot.accounts);
-    passwords.clear();
-    for (const [id, password] of backupSnapshot.passwords) passwords.set(id, password);
-    appointmentPasswords.clear();
-    for (const [id, password] of backupSnapshot.appointmentPasswords) {
-      appointmentPasswords.set(id, password);
-    }
     settings = structuredClone(backupSnapshot.settings);
-    vault = { ...structuredClone(backupSnapshot.vault), unlocked: false };
-    vaultPassword = backupSnapshot.vaultPassword;
+    appAccess = { ...structuredClone(backupSnapshot.appAccess), unlocked: false };
+    appAccessPassword = backupSnapshot.appAccessPassword;
   },
   async getSettings() {
     return structuredClone(settings);
@@ -1027,7 +1049,6 @@ export const mockApi: ApiClient = {
       accountRoleDataServerUrl: nextSettings.accountRoleDataServerUrl.trim(),
       lastAccountUsageWeekStart: settings.lastAccountUsageWeekStart,
     };
-    vault = { ...vault, autoLockMinutes: settings.autoLockMinutes };
     return structuredClone(settings);
   },
   async updateAccountTableColumnWidths(widths) {

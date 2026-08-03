@@ -25,7 +25,7 @@ export const router = createRouter({
       path: "/accounts",
       name: "accounts",
       component: () => import("../views/AccountsView.vue"),
-      meta: { title: "账号档案", subtitle: "账号资料与密码库" },
+      meta: { title: "账号档案", subtitle: "账号资料与独立密码" },
     },
     {
       path: "/revenue",

@@ -23,7 +23,7 @@ function appointment(withAccount = true, overrides: Partial<Appointment> = {}): 
           gearScore: "19.8万",
           server: "梦江南",
           accountName: "demo-account",
-          passwordAvailable: true,
+          password: "demo-secret",
         }
       : null,
     amountMinor: 8_000,
@@ -41,9 +41,11 @@ describe("AppointmentTable", () => {
       props: {
         appointments: [appointment(), appointment(false)],
         selectedIds: [],
+        allSelected: false,
+        selectionIndeterminate: false,
+        selectingAll: false,
         columnWidths: { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS },
         savingColumnWidths: false,
-        "onUpdate:selectedIds": () => undefined,
       },
     });
 
@@ -67,11 +69,11 @@ describe("AppointmentTable", () => {
       .findAll(".appointment-account-summary__line");
     expect(accountLines[0]!.text()).toBe("冰心·19.8万");
     expect(accountLines[0]!.findAll("button")).toHaveLength(0);
-    expect(accountLines[1]!.text()).toBe("梦江南··");
-    expect(accountLines[1]!.findAll("button")).toHaveLength(2);
+    expect(accountLines[1]!.text()).toContain("梦江南··••••••");
+    expect(accountLines[1]!.findAll("button")).toHaveLength(3);
 
     await wrapper.get('button[aria-label="复制账号 demo-account"]').trigger("click");
-    await wrapper.get('button[aria-label="复制密码 测试联系人"]').trigger("click");
+    await wrapper.get('button[aria-label="复制测试联系人 的预约密码"]').trigger("click");
     expect(wrapper.emitted("copyAccount")?.[0]?.[0]).toMatchObject({ id: "appointment-account" });
     expect(wrapper.emitted("copyPassword")?.[0]?.[0]).toMatchObject({ id: "appointment-account" });
 
@@ -105,9 +107,11 @@ describe("AppointmentTable", () => {
           appointment(false, { id: "appointment-no-voice" }),
         ],
         selectedIds: [],
+        allSelected: false,
+        selectionIndeterminate: false,
+        selectingAll: false,
         columnWidths: { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS },
         savingColumnWidths: false,
-        "onUpdate:selectedIds": () => undefined,
       },
     });
 
@@ -133,9 +137,11 @@ describe("AppointmentTable", () => {
       props: {
         appointments: [appointment()],
         selectedIds: [],
+        allSelected: false,
+        selectionIndeterminate: false,
+        selectingAll: false,
         columnWidths: { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS },
         savingColumnWidths: false,
-        "onUpdate:selectedIds": () => undefined,
       },
     });
 

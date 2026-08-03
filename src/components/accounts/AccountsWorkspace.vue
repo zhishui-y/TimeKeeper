@@ -4,7 +4,6 @@ import { computed, onMounted, onUnmounted, reactive, ref, shallowRef, watch } fr
 import { api, errorMessage } from "../../api/client";
 import { useAccounts } from "../../composables/useAccounts";
 import { useAccountRoleDataRefresh } from "../../composables/useAccountRoleDataRefresh";
-import { useVault } from "../../composables/useVault";
 import { useUiStore } from "../../stores/ui";
 import type {
   AccountProfile,
@@ -28,7 +27,6 @@ import {
   type AccountProfileSortKey,
   type SortDirection,
 } from "../../utils/accounts";
-import { vaultUnlockFeedback } from "../../utils/vault";
 import AccountDrawer from "./AccountDrawer.vue";
 import AccountRoleDataRefreshDialog from "./AccountRoleDataRefreshDialog.vue";
 import AccountTable from "./AccountTable.vue";
@@ -36,15 +34,6 @@ import AccountToolbar from "./AccountToolbar.vue";
 
 const ui = useUiStore();
 const { items, loading, error, load } = useAccounts({ immediate: false });
-const {
-  status: vaultStatus,
-  loading: vaultLoading,
-  error: vaultError,
-  load: loadVault,
-  unlock,
-  initialize,
-  lock,
-} = useVault();
 const query = shallowRef("");
 const needsReviewOnly = shallowRef(false);
 const accountFilters = reactive<AccountProfileFilters>({
@@ -72,6 +61,7 @@ const savingColumnWidths = shallowRef(false);
 const clearingWeekly = shallowRef(false);
 const syncingWeekly = shallowRef(false);
 const selectedIds = ref<string[]>([]);
+const passwordResetKey = shallowRef(0);
 const selectedCount = computed(() => selectedIds.value.length);
 const roleDataRefreshReturnFocus = shallowRef<{ focus(): void } | null>(null);
 const deletingAccounts = shallowRef(false);
@@ -150,6 +140,7 @@ function openEdit(profile: AccountProfile): void {
 
 async function search(): Promise<void> {
   selectedIds.value = [];
+  passwordResetKey.value += 1;
   await load(query.value, needsReviewOnly.value ? true : undefined);
 }
 
@@ -256,6 +247,7 @@ async function clearWeeklyUsage(): Promise<void> {
 }
 
 function changeSort(nextSortKey: AccountProfileSortKey): void {
+  passwordResetKey.value += 1;
   if (sortKey.value === nextSortKey) {
     sortDirection.value = sortDirection.value === "asc" ? "desc" : "asc";
     return;
@@ -269,6 +261,7 @@ function changeSort(nextSortKey: AccountProfileSortKey): void {
 }
 
 function resetListView(): void {
+  passwordResetKey.value += 1;
   Object.assign(accountFilters, {
     contactName: "",
     server: "",
@@ -412,7 +405,7 @@ async function remove(profile: AccountProfile): Promise<void> {
 }
 
 async function removeBatch(): Promise<void> {
-  if (selectedCount.value === 0 || !vaultStatus.value.unlocked || deletingAccounts.value) return;
+  if (selectedCount.value === 0 || deletingAccounts.value) return;
   if (!globalThis.confirm(`确定永久删除选中的 ${selectedCount.value} 个账号档案及其密码吗？`)) {
     return;
   }
@@ -447,24 +440,8 @@ async function removeBatch(): Promise<void> {
   }
 }
 
-async function submitVault(password: string): Promise<void> {
-  const result = vaultStatus.value.initialized
-    ? await unlock(password)
-    : await initialize(password);
-  if (result) {
-    const feedback = vaultUnlockFeedback(result);
-    ui.notify(feedback.message, feedback.tone);
-  }
-}
-
-async function lockVault(): Promise<void> {
-  const result = await lock();
-  if (!result) return;
-  ui.notify("密码库已锁定", "success");
-}
-
 async function initializeWorkspace(): Promise<void> {
-  await Promise.all([loadVault(), loadColumnWidths()]);
+  await loadColumnWidths();
   await syncWeeklyUsage({ reload: false });
   await load();
 }
@@ -512,6 +489,7 @@ watch(
   () => [accountFilters.contactName, accountFilters.server, accountFilters.specialization],
   () => {
     selectedIds.value = [];
+    passwordResetKey.value += 1;
   },
 );
 
@@ -557,9 +535,6 @@ watch(
       :specialization-options="specializationOptions"
       :visible-count="visibleProfiles.length"
       :selected-count="selectedCount"
-      :vault-unlocked="vaultStatus.unlocked"
-      :vault-loading="vaultLoading"
-      :vault-error="vaultError"
       :refresh-busy="roleDataRefresh.busy.value"
       :deleting="deletingAccounts"
       :can-reset-view="activeFilterCount > 0 || sortKey !== null"
@@ -569,8 +544,6 @@ watch(
       @refresh-selected="refreshSelectedRoleData"
       @delete-selected="removeBatch"
       @create="openCreate"
-      @lock="lockVault"
-      @unlock="submitVault"
     />
     <div class="account-summary">
       <span v-if="visibleProfiles.length === items.length">共 {{ items.length }} 个账号</span>
@@ -612,7 +585,6 @@ watch(
     />
     <AccountTable
       :profiles="visibleProfiles"
-      :vault-unlocked="vaultStatus.unlocked"
       :sort-key="sortKey"
       :sort-direction="sortDirection"
       :reorder-enabled="manualReorderEnabled"
@@ -622,6 +594,7 @@ watch(
       :column-widths="columnWidths"
       :saving-column-widths="savingColumnWidths"
       :clearing-weekly="clearingWeekly"
+      :password-reset-key="passwordResetKey"
       :role-refresh-busy="roleDataRefresh.busy.value"
       :refreshing-ids="roleDataRefresh.targetIds.value"
       v-model:selected-ids="selectedIds"

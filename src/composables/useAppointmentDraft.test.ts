@@ -39,7 +39,7 @@ function preset(): ContactPreset {
       specialization: "无方",
       gearScore: "19.8万",
       server: "梦江南",
-      passwordAvailable: true,
+      password: "demo-secret",
     },
     rateNote: "180元/小时",
     paymentMethod: "微信",
@@ -113,7 +113,7 @@ describe("useAppointmentDraft", () => {
       credentialKind: "replace",
       password: "",
       sourceAppointmentId: "",
-      passwordAvailable: false,
+      hasPassword: false,
     };
 
     submit();
@@ -139,7 +139,7 @@ describe("useAppointmentDraft", () => {
         specialization: null,
         gearScore: null,
         server: null,
-        passwordAvailable: false,
+        password: null,
       },
       amountMinor: null,
       reminderMinutes: null,
@@ -154,7 +154,7 @@ describe("useAppointmentDraft", () => {
     expect(draft.account).toMatchObject({
       kind: "embedded",
       credentialKind: "keep",
-      passwordAvailable: false,
+      hasPassword: false,
     });
     submit();
 
@@ -176,7 +176,7 @@ describe("useAppointmentDraft", () => {
       credentialKind: "replace",
       password: "one-time-secret",
       sourceAppointmentId: "",
-      passwordAvailable: false,
+      hasPassword: false,
     };
 
     submit();

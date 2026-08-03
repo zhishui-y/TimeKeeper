@@ -33,6 +33,7 @@ async function createBusinessAppointment(
   await drawer.getByLabel("联系人", { exact: true }).fill(contactName);
   await drawer.getByLabel("预约内容").fill(content);
   await drawer.getByLabel("金额（元）").fill("88");
+  await drawer.getByRole("button", { name: "不使用账号", exact: true }).click();
   await drawer.getByRole("button", { name: "保存预约" }).click();
   await expect(drawer).toBeHidden();
 }
@@ -43,11 +44,11 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
     await expect(page.getByRole("heading", { name: "今日工作台" })).toBeVisible();
   });
 
-  test("新建待完善账号后可查询筛选且新预约可从档案复制", async ({ page }) => {
+  test("新建暂不可用账号后可查询筛选且新预约可从档案复制", async ({ page }) => {
     const contactName = "矩阵待完善联系人";
     const accountName = "feature_matrix_review";
 
-    await test.step("新建一条待完善账号档案", async () => {
+    await test.step("新建一条暂不可用账号档案", async () => {
       await page.getByRole("link", { name: "账号档案" }).click();
       await page.getByRole("button", { name: "新建账号" }).click();
 
@@ -56,7 +57,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       await drawer.getByLabel("登录账号 *").fill(accountName);
       await drawer.getByLabel("密码 *").fill("FeatureMatrix#2026");
       await drawer.getByLabel("联系人").fill(contactName);
-      await drawer.getByLabel("服务器").fill("测试区服");
+      await drawer.getByLabel("服务器").fill("矩阵测试区服");
       await drawer.getByLabel("标记为暂不可用").check();
       await drawer.getByRole("button", { name: "保存档案" }).click();
 
@@ -64,7 +65,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       await expect(page.getByRole("status")).toContainText("账号档案已保存");
     });
 
-    await test.step("按账号查询并只筛选待完善档案", async () => {
+    await test.step("按账号查询并只筛选暂不可用档案", async () => {
       const search = page.getByPlaceholder("搜索联系人、区服、角色或账号");
       await search.fill(accountName);
       await page.getByTitle("查询账号").click();
@@ -81,7 +82,12 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       const drawer = page.getByRole("dialog", { name: /新建预约|编辑预约/ });
       await drawer.getByRole("button", { name: "从档案选择" }).click();
       const accountSelect = drawer.getByLabel("账号档案 *");
-      await expect(accountSelect.locator("option").filter({ hasText: contactName })).toHaveCount(1);
+      const accountOption = accountSelect
+        .locator("option")
+        .filter({ hasText: "矩阵测试区服 · 角色名待补 · — · —" });
+      await expect(accountOption).toHaveCount(1);
+      await accountSelect.selectOption({ label: "矩阵测试区服 · 角色名待补 · — · —" });
+      await expect(drawer.getByText(`保存时将复制 ${accountName} 的当前资料与密码`)).toBeVisible();
     });
   });
 
@@ -135,7 +141,9 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
 
     await test.step("今日、编辑抽屉和历史记录均提供密码复制入口", async () => {
       const todayRow = page.locator("article.appointment-row").filter({ hasText: contactName });
-      const todayCopy = todayRow.getByRole("button", { name: "复制账号密码" });
+      const todayCopy = todayRow.getByRole("button", {
+        name: `复制${contactName} 的预约密码`,
+      });
       await expect(todayCopy).toBeEnabled();
       await todayCopy.click();
       await expect(page.getByRole("status")).toContainText("账号密码已复制");
@@ -153,18 +161,22 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
 
       await page.getByRole("link", { name: "预约记录" }).click();
       const historyRow = appointmentRow(page, contactName);
-      const historyCopy = historyRow.getByRole("button", { name: "复制账号密码" });
+      const historyCopy = historyRow.getByRole("button", {
+        name: `复制${contactName} 的预约密码`,
+      });
       await expect(historyCopy).toBeEnabled();
 
       await page.getByRole("link", { name: "数据与设置" }).click();
       await page.getByRole("button", { name: "立即锁定" }).click();
+      const accessGate = page.getByRole("dialog", { name: "解锁时约管家" });
+      await expect(accessGate).toBeVisible();
+      await accessGate.getByLabel("入口密码", { exact: true }).fill("demo");
+      await accessGate.getByRole("button", { name: "进入", exact: true }).click();
+      await expect(accessGate).toBeHidden();
       await page.getByRole("link", { name: "预约记录" }).click();
-      await appointmentRow(page, contactName).getByRole("button", { name: "复制账号密码" }).click();
-      const unlockDialog = page.getByRole("dialog", { name: "解锁密码库" });
-      await expect(unlockDialog).toBeVisible();
-      await unlockDialog.getByLabel("主密码").fill("demo-master-password");
-      await unlockDialog.getByRole("button", { name: "解锁", exact: true }).click();
-      await expect(unlockDialog).toBeHidden();
+      await appointmentRow(page, contactName)
+        .getByRole("button", { name: `复制${contactName} 的预约密码` })
+        .click();
       await expect(page.getByRole("status")).toContainText("账号密码已复制");
     });
 
@@ -234,6 +246,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       await drawer.getByLabel("结束时间（可留空）", { exact: true }).fill("08:00");
       await drawer.getByLabel("联系人", { exact: true }).fill(contactName);
       await drawer.getByLabel("预约内容").fill("仅供娱乐模式回归");
+      await drawer.getByRole("button", { name: "不使用账号", exact: true }).click();
       await drawer.getByRole("button", { name: "保存预约" }).click();
       await expect(drawer).toBeHidden();
     });
@@ -302,15 +315,21 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
 
     await test.step("取消原预约并仅删除本测试创建的数据", async () => {
       const editedRow = appointmentRow(page, editedContact);
-      await editedRow.getByRole("button", { name: "取消预约" }).click();
+      await editedRow.getByRole("button", { name: "删除", exact: true }).click();
+      const deleteDialog = page.getByRole("dialog", { name: "处理预约记录" });
+      await deleteDialog.getByRole("button", { name: "取消预约", exact: true }).click();
       await expect(editedRow).toContainText("已取消");
 
-      page.once("dialog", (dialog) => void dialog.accept());
-      await appointmentRow(page, copiedContact).getByRole("button", { name: "永久删除" }).click();
+      await appointmentRow(page, copiedContact)
+        .getByRole("button", { name: "删除", exact: true })
+        .click();
+      await deleteDialog.getByRole("button", { name: "永久删除", exact: true }).click();
       await expect(appointmentRow(page, copiedContact)).toHaveCount(0);
 
-      page.once("dialog", (dialog) => void dialog.accept());
-      await appointmentRow(page, editedContact).getByRole("button", { name: "永久删除" }).click();
+      await appointmentRow(page, editedContact)
+        .getByRole("button", { name: "删除", exact: true })
+        .click();
+      await deleteDialog.getByRole("button", { name: "永久删除", exact: true }).click();
       await expect(appointmentRow(page, editedContact)).toHaveCount(0);
     });
   });

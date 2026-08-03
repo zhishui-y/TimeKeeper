@@ -6,7 +6,7 @@ import timeGridPlugin from "@fullcalendar/timegrid";
 import zhCnLocale from "@fullcalendar/core/locales/zh-cn";
 import type { CalendarOptions, EventApi, EventInput } from "@fullcalendar/core";
 import { CalendarDays, ChevronLeft, ChevronRight } from "@lucide/vue";
-import { format } from "date-fns";
+import { format, subDays } from "date-fns";
 import { computed, shallowRef, useTemplateRef } from "vue";
 import type { Appointment } from "../../types/domain";
 import { calendarAppointmentCounts, calendarEventClassNames } from "../../utils/calendar";
@@ -20,6 +20,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   edit: [appointment: Appointment];
   create: [serviceDate: string, startTime?: string];
+  rangeChange: [from: string, to: string];
 }>();
 
 const calendarRef = useTemplateRef<InstanceType<typeof FullCalendar>>("calendar");
@@ -84,6 +85,11 @@ const calendarOptions = computed<CalendarOptions>(() => ({
   datesSet(info) {
     currentTitle.value = info.view.title;
     activeView.value = info.view.type;
+    emit(
+      "rangeChange",
+      format(info.start, "yyyy-MM-dd"),
+      format(subDays(info.end, 1), "yyyy-MM-dd"),
+    );
   },
   eventClick(info) {
     emit("edit", info.event.extendedProps.appointment as Appointment);

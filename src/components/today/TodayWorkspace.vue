@@ -13,7 +13,6 @@ import { zhCN } from "date-fns/locale";
 import { computed, onMounted, onUnmounted, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAppointments } from "../../composables/useAppointments";
-import { useAppointmentPasswordCopy } from "../../composables/useAppointmentPasswordCopy";
 import { useDashboard } from "../../composables/useDashboard";
 import { useUiStore } from "../../stores/ui";
 import type { Appointment, ServiceStatus } from "../../types/domain";
@@ -21,7 +20,6 @@ import { findNextScheduledAppointment, sortAppointmentsByStartTime } from "../..
 import { formatCurrency, formatDateHeading, formatTimeRange } from "../../utils/formatters";
 import TodayAppointmentList from "./TodayAppointmentList.vue";
 import WeekSchedule from "./WeekSchedule.vue";
-import AccountVaultUnlockDialog from "../accounts/AccountVaultUnlockDialog.vue";
 
 const now = shallowRef(new Date());
 const todayKey = computed(() => format(now.value, "yyyy-MM-dd"));
@@ -30,7 +28,6 @@ const weekStart = computed(() => startOfWeek(now.value, { weekStartsOn: 1 }));
 const weekEnd = computed(() => endOfWeek(now.value, { weekStartsOn: 1 }));
 const currentMonthLabel = computed(() => format(now.value, "yyyy · MM"));
 const ui = useUiStore();
-const passwordCopy = useAppointmentPasswordCopy();
 const {
   filters,
   items,
@@ -149,23 +146,21 @@ async function copyVoiceChannel(appointment: Appointment): Promise<void> {
 
 async function removeAppointment(appointment: Appointment): Promise<void> {
   if (!globalThis.confirm(`确定永久删除 ${appointment.contactName} 的这条预约吗？`)) return;
-  const action = async () => {
-    try {
-      await api.deleteAppointment(appointment.id);
-      ui.markDataChanged();
-      ui.notify("预约已永久删除", "success");
-    } catch (cause) {
-      ui.notify(errorMessage(cause), "danger");
-    }
-  };
-  if (appointment.account?.passwordAvailable) {
-    try {
-      await passwordCopy.runWhenUnlocked(action);
-    } catch (cause) {
-      ui.notify(errorMessage(cause), "danger");
-    }
-  } else {
-    await action();
+  try {
+    await api.deleteAppointment(appointment.id);
+    ui.markDataChanged();
+    ui.notify("预约已永久删除", "success");
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  }
+}
+
+async function copyPassword(appointment: Appointment): Promise<void> {
+  try {
+    await api.copyAppointmentAccountPassword(appointment.id);
+    ui.notify("账号密码已复制，30秒后自动清空剪贴板", "success");
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
   }
 }
 
@@ -286,17 +281,9 @@ onUnmounted(() => {
       @settle="ui.openSettleAppointment"
       @change-status="changeStatus"
       @copy-account="copyAccount"
-      @copy-password="passwordCopy.copy($event.id)"
+      @copy-password="copyPassword"
       @copy-voice-channel="copyVoiceChannel"
       @delete="removeAppointment"
-    />
-    <AccountVaultUnlockDialog
-      v-if="passwordCopy.ownsUnlockDialog"
-      :open="passwordCopy.unlockOpen.value"
-      :loading="passwordCopy.unlockLoading.value"
-      :error="passwordCopy.unlockError.value"
-      @close="passwordCopy.closeUnlock"
-      @submit="passwordCopy.unlockAndRetry"
     />
   </div>
 </template>

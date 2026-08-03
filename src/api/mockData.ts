@@ -21,6 +21,7 @@ export const demoAccounts: AccountProfile[] = [
     specialization: "无方",
     gearScore: "19.8万",
     accountName: "nanzhi_0217",
+    password: "Nanzhi#2026",
     currentScore: 2680,
     highestScore: 2912,
     scoreUpdatedAt: today,
@@ -38,6 +39,7 @@ export const demoAccounts: AccountProfile[] = [
     specialization: "紫霞",
     gearScore: "18.6万",
     accountName: "latecloud_77",
+    password: "LateCloud@77",
     currentScore: 2415,
     highestScore: 2630,
     scoreUpdatedAt: format(subDays(now, 2), "yyyy-MM-dd"),
@@ -55,6 +57,7 @@ export const demoAccounts: AccountProfile[] = [
     specialization: "太虚",
     gearScore: null,
     accountName: "beibei_game",
+    password: "BeiBei-Game",
     currentScore: 1980,
     highestScore: 2120,
     scoreUpdatedAt: format(subDays(now, 8), "yyyy-MM-dd"),
@@ -72,6 +75,7 @@ export const demoAccounts: AccountProfile[] = [
     specialization: "铁骨",
     gearScore: "20.1万",
     accountName: "qinghe_09",
+    password: "Qinghe_09!",
     currentScore: 3050,
     highestScore: 3186,
     scoreUpdatedAt: format(subDays(now, 1), "yyyy-MM-dd"),
@@ -124,7 +128,7 @@ function appointment(input: DemoAppointmentInput): Appointment {
           server: account.server,
           specialization: account.specialization,
           gearScore: account.gearScore,
-          passwordAvailable: true,
+          password: account.password,
         }
       : null,
     rateNote: input.amount ? "按小时计费" : null,
@@ -292,21 +296,3 @@ if (!demoAppointments.some((item) => item.startsAt && new Date(item.startsAt) > 
     }),
   );
 }
-
-export const demoPasswords = new Map<string, string>([
-  ["account-1", "Nanzhi#2026"],
-  ["account-2", "LateCloud@77"],
-  ["account-3", "BeiBei-Game"],
-  ["account-4", "Qinghe_09!"],
-]);
-
-export const demoAppointmentPasswords = new Map<string, string>(
-  demoAppointments.flatMap((item) => {
-    if (!item.account) return [];
-    const profile = demoAccounts.find(
-      (account) => account.accountName === item.account?.accountName,
-    );
-    const password = profile ? demoPasswords.get(profile.id) : undefined;
-    return password ? [[item.id, password] as const] : [];
-  }),
-);

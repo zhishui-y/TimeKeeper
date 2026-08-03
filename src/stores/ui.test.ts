@@ -13,7 +13,7 @@ describe("ui toast queue", () => {
   it("shows an unlock migration result after the current operation feedback", () => {
     const ui = useUiStore();
     ui.notify("预约已创建", "success");
-    ui.notifyAfterCurrent("密码库已解锁；已迁移 2 条历史预约密码", "success");
+    ui.notifyAfterCurrent("应用入口已解锁；已迁移 2 条历史预约密码", "success");
 
     expect(ui.toast?.message).toBe("预约已创建");
     vi.advanceTimersByTime(3_600);

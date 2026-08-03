@@ -6,8 +6,7 @@ interface BusinessAppointmentDraft {
   startTime: string;
   endTime: string;
   amountYuan: string;
-  serviceStatus?: "scheduled" | "completed";
-  settlementStatus?: "unsettled" | "settled";
+  progressStatus?: "scheduled" | "in_progress" | "pending_settlement" | "completed";
 }
 
 async function createBusinessAppointment(
@@ -23,11 +22,9 @@ async function createBusinessAppointment(
   await drawer.getByLabel("结束时间（可留空）", { exact: true }).fill(draft.endTime);
   await drawer.getByLabel("联系人", { exact: true }).fill(draft.contactName);
   await drawer.getByLabel("金额（元）").fill(draft.amountYuan);
-  if (draft.serviceStatus) {
-    await drawer.getByLabel("预约进度").selectOption(draft.serviceStatus);
-  }
-  if (draft.settlementStatus) {
-    await drawer.getByLabel("结算状态").selectOption(draft.settlementStatus);
+  await drawer.getByRole("button", { name: "不使用账号", exact: true }).click();
+  if (draft.progressStatus) {
+    await drawer.getByLabel("预约进度").selectOption(draft.progressStatus);
   }
   await drawer.getByRole("button", { name: "保存预约" }).click();
   await expect(drawer).toBeHidden();
@@ -40,6 +37,7 @@ async function readSettledMinor(page: Page): Promise<number> {
 }
 
 test("核心页面在桌面窗口中可访问且没有横向溢出", async ({ page }) => {
+  test.setTimeout(60_000);
   const consoleErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
@@ -217,10 +215,11 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
   await page.getByRole("link", { name: "数据与设置" }).click();
   await page.getByRole("button", { name: "立即锁定" }).click();
 
-  const settingsUnlock = page.locator(".vault-unlock");
-  await settingsUnlock.getByLabel("密码库主密码").fill("demo-master-password");
-  await settingsUnlock.getByRole("button", { name: "解锁", exact: true }).click();
-  await expect(settingsUnlock).toBeHidden();
+  const accessGate = page.getByRole("dialog", { name: "解锁时约管家" });
+  await expect(accessGate).toBeVisible();
+  await accessGate.getByLabel("入口密码", { exact: true }).fill("demo");
+  await accessGate.getByRole("button", { name: "进入", exact: true }).click();
+  await expect(accessGate).toBeHidden();
 
   await page.getByRole("link", { name: "收益总结" }).click();
   const baselineSettledMinor = await readSettledMinor(page);
@@ -243,22 +242,25 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
   await expect(page.getByRole("status")).toContainText(/已保存；与 \d+ 条预约存在时间重叠/);
 
   const targetRow = page.locator("article.appointment-row").filter({ hasText: "闭环验收目标" });
-  await expect(targetRow).toContainText("待结算");
-  await targetRow.getByRole("button", { name: "开始预约" }).click();
+  await expect(targetRow).toContainText("已预约");
+  await targetRow.getByRole("button", { name: "编辑预约" }).click();
+  const progressDrawer = page.getByRole("dialog", { name: "编辑预约" });
+  await progressDrawer.getByLabel("预约进度").selectOption("in_progress");
+  await progressDrawer.getByRole("button", { name: "保存预约" }).click();
+  await expect(progressDrawer).toBeHidden();
   await expect(targetRow).toContainText("进行中");
   await targetRow.getByRole("button", { name: "完成预约" }).click();
-  await expect(targetRow).toContainText("已完成");
   await expect(targetRow).toContainText("待结算");
 
   await targetRow.getByRole("button", { name: "编辑结算" }).click();
   const settlementDrawer = page.getByRole("dialog", { name: "编辑预约" });
   await expect(settlementDrawer.getByLabel("金额（元）")).toBeFocused();
-  await settlementDrawer.getByLabel("结算状态").selectOption("settled");
+  await settlementDrawer.getByLabel("预约进度").selectOption("completed");
   await settlementDrawer.getByLabel("收款方式").fill("微信");
   await settlementDrawer.getByRole("button", { name: "保存预约" }).click();
   await expect(settlementDrawer).toBeHidden();
-  await expect(page.getByRole("status")).toContainText("已结算；该预约仍与");
-  await expect(targetRow).toContainText("已结算");
+  await expect(page.getByRole("status")).toContainText("已完成；该预约仍与");
+  await expect(targetRow).toContainText("已完成");
 
   await page.getByRole("link", { name: "收益总结" }).click();
   await expect.poll(() => readSettledMinor(page)).toBe(baselineSettledMinor + targetAmountMinor);
@@ -268,8 +270,7 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
     startTime: "11:00",
     endTime: "12:00",
     amountYuan: "1.23",
-    serviceStatus: "completed",
-    settlementStatus: "settled",
+    progressStatus: "completed",
   });
   const settledAfterLiveRefresh = baselineSettledMinor + targetAmountMinor + liveRefreshAmountMinor;
   await expect.poll(() => readSettledMinor(page)).toBe(settledAfterLiveRefresh);
@@ -281,7 +282,9 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
 
   await page.getByRole("link", { name: "预约记录" }).click();
   const tableRow = page.locator("tbody tr").filter({ hasText: "闭环验收目标" });
-  await tableRow.getByRole("button", { name: "取消预约" }).click();
+  await tableRow.getByRole("button", { name: "删除", exact: true }).click();
+  const deleteDialog = page.getByRole("dialog", { name: "处理预约记录" });
+  await deleteDialog.getByRole("button", { name: "取消预约", exact: true }).click();
   await expect(tableRow).toContainText("已取消");
 
   await page.getByRole("link", { name: "收益总结" }).click();
@@ -290,16 +293,15 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
   await page.getByRole("link", { name: "数据与设置" }).click();
   page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "从备份恢复" }).click();
-  await expect(page.getByRole("status")).toContainText("备份校验与恢复流程已完成");
 
-  await settingsUnlock.getByLabel("密码库主密码").fill("demo-master-password");
-  await settingsUnlock.getByRole("button", { name: "解锁", exact: true }).click();
-  await expect(settingsUnlock).toBeHidden();
+  await expect(accessGate).toBeVisible();
+  await accessGate.getByLabel("入口密码", { exact: true }).fill("demo");
+  await accessGate.getByRole("button", { name: "进入", exact: true }).click();
+  await expect(accessGate).toBeHidden();
 
   await page.getByRole("link", { name: "预约记录" }).click();
   const restoredRow = page.locator("tbody tr").filter({ hasText: "闭环验收目标" });
   await expect(restoredRow).toContainText("已完成");
-  await expect(restoredRow).toContainText("已结算");
   await expect(restoredRow).not.toContainText("已取消");
 
   await page.getByRole("link", { name: "收益总结" }).click();

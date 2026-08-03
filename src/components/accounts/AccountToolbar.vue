@@ -1,26 +1,12 @@
 <script setup lang="ts">
-import {
-  LoaderCircle,
-  LockKeyhole,
-  Plus,
-  RefreshCw,
-  RotateCcw,
-  Search,
-  Trash2,
-  UnlockKeyhole,
-} from "@lucide/vue";
-import { shallowRef, watch } from "vue";
-import AccountVaultUnlockDialog from "./AccountVaultUnlockDialog.vue";
+import { LoaderCircle, Plus, RefreshCw, RotateCcw, Search, Trash2 } from "@lucide/vue";
 
-const props = defineProps<{
+defineProps<{
   contactOptions: readonly string[];
   serverOptions: readonly string[];
   specializationOptions: readonly string[];
   visibleCount: number;
   selectedCount: number;
-  vaultUnlocked: boolean;
-  vaultLoading: boolean;
-  vaultError: string | null;
   refreshBusy: boolean;
   deleting: boolean;
   canResetView: boolean;
@@ -39,26 +25,7 @@ const emit = defineEmits<{
   refreshSelected: [];
   deleteSelected: [];
   create: [];
-  lock: [];
-  unlock: [password: string];
 }>();
-
-const unlockDialogOpen = shallowRef(false);
-
-function toggleVault(): void {
-  if (props.vaultUnlocked) {
-    emit("lock");
-    return;
-  }
-  unlockDialogOpen.value = true;
-}
-
-watch(
-  () => props.vaultUnlocked,
-  (unlocked) => {
-    if (unlocked) unlockDialogOpen.value = false;
-  },
-);
 </script>
 
 <template>
@@ -153,16 +120,14 @@ watch(
       <button
         class="button button--ghost account-toolbar__action"
         type="button"
-        :disabled="selectedCount === 0 || !vaultUnlocked || deleting"
+        :disabled="selectedCount === 0 || deleting"
         :aria-busy="deleting"
         :title="
-          !vaultUnlocked
-            ? '删除账号前需要解锁密码库'
-            : deleting
-              ? '正在删除选中的账号'
-              : selectedCount === 0
-                ? '请先选择账号'
-                : '永久删除选中的账号'
+          deleting
+            ? '正在删除选中的账号'
+            : selectedCount === 0
+              ? '请先选择账号'
+              : '永久删除选中的账号'
         "
         aria-label="批量删除"
         @click="emit('deleteSelected')"
@@ -174,7 +139,6 @@ watch(
       <button
         class="button button--primary account-toolbar__action"
         type="button"
-        :disabled="!vaultUnlocked"
         title="新建账号"
         aria-label="新建账号"
         @click="emit('create')"
@@ -182,29 +146,8 @@ watch(
         <Plus :size="15" aria-hidden="true" />
         <span class="account-toolbar__action-label">新建账号</span>
       </button>
-      <button
-        class="button account-toolbar__action account-toolbar__vault"
-        :class="vaultUnlocked ? 'button--ghost' : 'button--primary'"
-        type="button"
-        :disabled="vaultLoading"
-        :title="vaultUnlocked ? '锁定密码库' : '解锁密码库'"
-        :aria-label="vaultUnlocked ? '锁定密码库' : '解锁密码库'"
-        @click="toggleVault"
-      >
-        <LockKeyhole v-if="vaultUnlocked" :size="15" aria-hidden="true" />
-        <UnlockKeyhole v-else :size="15" aria-hidden="true" />
-        <span class="account-toolbar__action-label">{{ vaultUnlocked ? "锁定" : "解锁" }}</span>
-      </button>
     </div>
   </section>
-
-  <AccountVaultUnlockDialog
-    :open="unlockDialogOpen"
-    :loading="vaultLoading"
-    :error="vaultError"
-    @close="unlockDialogOpen = false"
-    @submit="emit('unlock', $event)"
-  />
 </template>
 
 <style scoped>

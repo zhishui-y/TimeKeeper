@@ -6,10 +6,11 @@ import {
   Clock3,
   DatabaseBackup,
   LayoutDashboard,
+  LockKeyhole,
 } from "@lucide/vue";
 
-defineProps<{
-  vaultUnlocked: boolean;
+const emit = defineEmits<{
+  lock: [];
 }>();
 
 const navigation = [
@@ -44,13 +45,14 @@ const navigation = [
       </RouterLink>
     </nav>
 
-    <div class="sidebar__footer">
-      <span class="vault-dot" :class="{ 'is-unlocked': vaultUnlocked }" />
+    <button class="sidebar__footer" type="button" title="锁定时约管家" @click="emit('lock')">
+      <span class="access-dot" />
       <div>
-        <strong>{{ vaultUnlocked ? "密码库已解锁" : "密码库已锁定" }}</strong>
-        <span>本地加密存储</span>
+        <strong>本次运行已解锁</strong>
+        <span>点击立即锁定</span>
       </div>
-    </div>
+      <LockKeyhole :size="14" />
+    </button>
   </aside>
 </template>
 
@@ -207,8 +209,17 @@ const navigation = [
   align-items: center;
   gap: 10px;
   padding: 13px 18px;
+  border: 0;
   border-top: 1px solid rgba(244, 239, 226, 0.1);
+  color: inherit;
   background: rgba(7, 24, 19, 0.12);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.sidebar__footer:hover {
+  background: rgba(245, 239, 226, 0.07);
 }
 
 .sidebar__footer div {
@@ -224,23 +235,23 @@ const navigation = [
   font-weight: 650;
 }
 
-.sidebar__footer span:not(.vault-dot) {
+.sidebar__footer span:not(.access-dot) {
   color: var(--sidebar-muted);
   font-size: 10px;
 }
 
-.vault-dot {
+.access-dot {
   width: 8px;
   height: 8px;
   flex: 0 0 8px;
   border-radius: 50%;
-  background: #d9a552;
-  box-shadow: 0 0 0 4px rgba(217, 165, 82, 0.14);
-}
-
-.vault-dot.is-unlocked {
   background: #83b99d;
   box-shadow: 0 0 0 4px rgba(131, 185, 157, 0.14);
+}
+
+.sidebar__footer > svg {
+  margin-left: auto;
+  color: var(--sidebar-muted);
 }
 
 @media (max-width: 1180px) {

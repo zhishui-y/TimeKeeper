@@ -71,6 +71,7 @@ describe("AppointmentDrawer", () => {
       specialization: "冰心",
       gearScore: "128000",
       accountName: "login-account",
+      password: "demo-secret",
       currentScore: 2100,
       highestScore: 2300,
       scoreUpdatedAt: "2026-07-28",
@@ -111,7 +112,9 @@ describe("AppointmentDrawer", () => {
       .find((button) => button.text().includes("一次性账号"));
     expect(oneTimeButton).toBeDefined();
     await oneTimeButton?.trigger("click");
-    await wrapper.get('input[placeholder="仅写入本条预约的加密保险库"]').setValue("secret");
+    await wrapper
+      .get('input[placeholder="仅保存到本条预约，不跟随账号档案更新"]')
+      .setValue("secret");
 
     const noneButton = wrapper
       .findAll("button")
@@ -120,8 +123,10 @@ describe("AppointmentDrawer", () => {
     await oneTimeButton?.trigger("click");
 
     expect(
-      (wrapper.get('input[placeholder="仅写入本条预约的加密保险库"]').element as HTMLInputElement)
-        .value,
+      (
+        wrapper.get('input[placeholder="仅保存到本条预约，不跟随账号档案更新"]')
+          .element as HTMLInputElement
+      ).value,
     ).toBe("");
   });
 

@@ -14,7 +14,7 @@ export interface AppointmentAccountDetails {
 }
 
 export interface AppointmentAccount extends AppointmentAccountDetails {
-  passwordAvailable: boolean;
+  password: string | null;
 }
 
 export type AppointmentAccountCredential =
@@ -82,6 +82,11 @@ export interface AppointmentFilters {
   settlementStatus?: SettlementStatus;
 }
 
+export interface AppointmentRangeFilters extends AppointmentFilters {
+  from: string;
+  to: string;
+}
+
 export interface ContactPreset {
   sourceAppointmentId: string;
   contactName: string;
@@ -119,6 +124,7 @@ export interface AccountProfile {
   specialization?: string | null;
   gearScore?: string | null;
   accountName: string;
+  password: string | null;
   currentScore?: number | null;
   highestScore?: number | null;
   scoreUpdatedAt?: string | null;
@@ -202,20 +208,38 @@ export interface ExcelImportSelection {
   accounts: boolean;
 }
 
-export interface VaultStatus {
+export interface AppAccessStatus {
   initialized: boolean;
   unlocked: boolean;
-  autoLockMinutes: number;
+  legacyMigrationPendingCount: number;
 }
 
-export interface AppointmentPasswordMigrationResult {
+export interface LegacyCredentialMigrationResult {
   migratedCount: number;
   missingCount: number;
   pendingCount: number;
 }
 
-export interface VaultUnlockResult extends VaultStatus {
-  appointmentPasswordMigration?: AppointmentPasswordMigrationResult;
+export interface AppointmentPage {
+  items: Appointment[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+export interface AppointmentSelectionSnapshot {
+  token: string;
+  totalCount: number;
+  expiresAt: string;
+}
+
+export type AppointmentDeleteSelection =
+  { kind: "explicit"; ids: string[] } | { kind: "token"; token: string; excludedIds: string[] };
+
+export interface AppointmentDeleteResult {
+  matchedCount: number;
+  deletedCount: number;
 }
 
 export interface AccountTableColumnWidths {
@@ -268,7 +292,6 @@ export interface AccountRoleDataRefreshResult {
 
 export interface AppSettings {
   defaultReminderMinutes: number;
-  autoLockMinutes: number;
   backupRetention: number;
   lastAutomaticBackupDate?: string | null;
   accountTableColumnWidths: AccountTableColumnWidths;

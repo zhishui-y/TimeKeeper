@@ -4,11 +4,17 @@ import type {
   AccountRoleDataRefreshResult,
   AccountTableColumnWidths,
   AccountUsageWeekSyncResult,
+  AppAccessStatus,
   AppSettings,
   Appointment,
+  AppointmentDeleteResult,
+  AppointmentDeleteSelection,
   AppointmentFilters,
   AppointmentInput,
   AppointmentMutationResult,
+  AppointmentPage,
+  AppointmentRangeFilters,
+  AppointmentSelectionSnapshot,
   AppointmentTableColumnWidths,
   BackupResult,
   ContactPreset,
@@ -19,18 +25,23 @@ import type {
   ReportGranularity,
   RevenueSummary,
   ServiceStatus,
-  VaultStatus,
-  VaultUnlockResult,
+  LegacyCredentialMigrationResult,
 } from "../types/domain";
 
 export interface ApiClient {
-  listAppointments(filters?: AppointmentFilters): Promise<Appointment[]>;
+  listAppointments(filters: AppointmentRangeFilters): Promise<Appointment[]>;
+  listAppointmentPage(
+    filters?: AppointmentFilters,
+    page?: number,
+    pageSize?: number,
+  ): Promise<AppointmentPage>;
+  createAppointmentSelection(filters?: AppointmentFilters): Promise<AppointmentSelectionSnapshot>;
   getAppointment(id: string): Promise<Appointment>;
   createAppointment(input: AppointmentInput): Promise<AppointmentMutationResult>;
   updateAppointment(id: string, input: AppointmentInput): Promise<AppointmentMutationResult>;
   duplicateAppointment(id: string, serviceDate?: string): Promise<AppointmentMutationResult>;
   deleteAppointment(id: string): Promise<void>;
-  deleteAppointments(ids: string[]): Promise<number>;
+  deleteAppointments(selection: AppointmentDeleteSelection): Promise<AppointmentDeleteResult>;
   syncAppointmentServiceStatuses(): Promise<number>;
   setAppointmentServiceStatus(id: string, status: ServiceStatus): Promise<Appointment>;
   settleAppointment(id: string, amountMinor: number, paymentMethod?: string): Promise<Appointment>;
@@ -53,12 +64,13 @@ export interface ApiClient {
   copyAccountCharacterName(id: string): Promise<void>;
   refreshAccountProfileRoleData(ids: string[]): Promise<AccountRoleDataRefreshResult>;
 
-  vaultStatus(): Promise<VaultStatus>;
-  initializeVault(password: string): Promise<VaultStatus>;
-  unlockVault(password: string): Promise<VaultUnlockResult>;
-  changeVaultPassword(currentPassword: string, newPassword: string): Promise<VaultStatus>;
-  lockVault(): Promise<VaultStatus>;
-  revealAccountPassword(id: string): Promise<string>;
+  appAccessStatus(): Promise<AppAccessStatus>;
+  initializeAppAccess(password: string): Promise<AppAccessStatus>;
+  unlockAppAccess(password: string): Promise<AppAccessStatus>;
+  lockAppAccess(): Promise<AppAccessStatus>;
+  changeAppAccessPassword(currentPassword: string, newPassword: string): Promise<AppAccessStatus>;
+  resetAppAccessPassword(newPassword: string, confirmationText: string): Promise<AppAccessStatus>;
+  migrateLegacyCredentials(password: string): Promise<LegacyCredentialMigrationResult>;
   copyAccountPassword(id: string): Promise<void>;
 
   getDashboardSummary(date: string): Promise<DashboardSummary>;

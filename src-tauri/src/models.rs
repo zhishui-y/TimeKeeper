@@ -83,17 +83,30 @@ pub struct AppointmentAccountDetails {
     pub account_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppointmentAccount {
     pub specialization: Option<String>,
     pub gear_score: Option<String>,
     pub server: Option<String>,
     pub account_name: String,
-    pub password_available: bool,
+    pub password: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl fmt::Debug for AppointmentAccount {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AppointmentAccount")
+            .field("specialization", &self.specialization)
+            .field("gear_score", &self.gear_score)
+            .field("server", &self.server)
+            .field("account_name", &self.account_name)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -103,6 +116,24 @@ pub enum AppointmentAccountCredentialInput {
     Keep,
     Replace { password: String },
     CopyFromAppointment { source_appointment_id: String },
+}
+
+impl fmt::Debug for AppointmentAccountCredentialInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Keep => formatter.write_str("Keep"),
+            Self::Replace { .. } => formatter
+                .debug_struct("Replace")
+                .field("password", &"<redacted>")
+                .finish(),
+            Self::CopyFromAppointment {
+                source_appointment_id,
+            } => formatter
+                .debug_struct("CopyFromAppointment")
+                .field("source_appointment_id", source_appointment_id)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,6 +223,48 @@ pub struct AppointmentFilters {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AppointmentPage {
+    pub items: Vec<Appointment>,
+    pub total_count: i64,
+    pub page: i64,
+    pub page_size: i64,
+    pub total_pages: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppointmentSelectionSnapshot {
+    pub token: String,
+    pub total_count: i64,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AppointmentDeleteSelection {
+    Explicit {
+        ids: Vec<String>,
+    },
+    Token {
+        token: String,
+        #[serde(default)]
+        excluded_ids: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppointmentDeleteResult {
+    pub matched_count: i64,
+    pub deleted_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ContactPreset {
     pub source_appointment_id: String,
     pub contact_name: String,
@@ -225,7 +298,7 @@ pub struct AppointmentMutationResult {
     pub conflicts: Vec<AppointmentConflict>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountProfile {
     pub id: String,
@@ -235,6 +308,7 @@ pub struct AccountProfile {
     pub specialization: Option<String>,
     pub gear_score: Option<String>,
     pub account_name: String,
+    pub password: Option<String>,
     pub current_score: Option<i64>,
     pub highest_score: Option<i64>,
     pub score_updated_at: Option<String>,
@@ -246,7 +320,19 @@ pub struct AccountProfile {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl fmt::Debug for AccountProfile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AccountProfile")
+            .field("id", &self.id)
+            .field("account_name", &self.account_name)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("needs_review", &self.needs_review)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountProfileInput {
     #[serde(default)]
@@ -272,6 +358,17 @@ pub struct AccountProfileInput {
     pub notes: Option<String>,
     #[serde(default)]
     pub needs_review: Option<bool>,
+}
+
+impl fmt::Debug for AccountProfileInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AccountProfileInput")
+            .field("account_name", &self.account_name)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("needs_review", &self.needs_review)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -326,12 +423,12 @@ mod tests {
             gear_score: None,
             server: None,
             account_name: "demo".into(),
-            password_available: true,
+            password: Some("secret".into()),
         };
 
         let value = serde_json::to_value(account).unwrap();
         assert_eq!(value["accountName"], "demo");
-        assert_eq!(value["passwordAvailable"], true);
+        assert_eq!(value["password"], "secret");
         assert!(value.get("account_name").is_none());
     }
 
@@ -373,5 +470,43 @@ mod tests {
             "\"in_progress\""
         );
         assert_eq!(SettlementStatus::NotApplicable.as_str(), "not_applicable");
+    }
+
+    #[test]
+    fn sensitive_dto_debug_output_redacts_passwords() {
+        let secret = "must-not-appear-in-debug";
+        let account = AppointmentAccount {
+            specialization: None,
+            gear_score: None,
+            server: None,
+            account_name: "demo".into(),
+            password: Some(secret.into()),
+        };
+        let credential = AppointmentAccountCredentialInput::Replace {
+            password: secret.into(),
+        };
+        let profile_input = AccountProfileInput {
+            contact_name: None,
+            server: None,
+            character_name: None,
+            specialization: None,
+            gear_score: None,
+            account_name: "demo".into(),
+            password: Some(secret.into()),
+            current_score: None,
+            highest_score: None,
+            score_updated_at: None,
+            notes: None,
+            needs_review: None,
+        };
+
+        for output in [
+            format!("{account:?}"),
+            format!("{credential:?}"),
+            format!("{profile_input:?}"),
+        ] {
+            assert!(!output.contains(secret));
+            assert!(output.contains("<redacted>"));
+        }
     }
 }

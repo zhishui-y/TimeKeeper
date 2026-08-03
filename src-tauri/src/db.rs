@@ -120,7 +120,6 @@ mod tests {
                 "account_gear_score",
                 "account_server",
                 "account_name",
-                "account_password_available",
                 "voice_platform",
                 "voice_channel",
             ] {
@@ -137,10 +136,23 @@ mod tests {
                     .any(|name| name == "account_snapshot_json")
             );
             assert!(
-                tables
+                !appointment_columns
+                    .iter()
+                    .any(|name| name == "account_password_available")
+            );
+            assert!(
+                !tables
                     .iter()
                     .any(|name| name == "appointment_password_backfill")
             );
+            for expected in [
+                "account_profile_credentials",
+                "appointment_credentials",
+                "app_access",
+                "legacy_credential_migration",
+            ] {
+                assert!(tables.iter().any(|name| name == expected));
+            }
         });
     }
 

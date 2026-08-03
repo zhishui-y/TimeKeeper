@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { Plus, Trash2 } from "@lucide/vue";
-import { computed, onMounted, ref, shallowRef, watch } from "vue";
+import { computed, onMounted, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
-import { useAppointments } from "../../composables/useAppointments";
-import { useAppointmentPasswordCopy } from "../../composables/useAppointmentPasswordCopy";
+import { useAppointmentPage } from "../../composables/useAppointmentPage";
+import { useAppointmentSelection } from "../../composables/useAppointmentSelection";
 import { useUiStore } from "../../stores/ui";
 import type {
   Appointment,
@@ -17,16 +17,14 @@ import {
   DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS,
   type AppointmentTableColumnKey,
 } from "../../utils/appointmentTableColumns";
-import AppointmentFiltersBar from "./AppointmentFiltersBar.vue";
 import AppointmentDeleteDialog from "./AppointmentDeleteDialog.vue";
+import AppointmentFiltersBar from "./AppointmentFiltersBar.vue";
+import AppointmentPagination from "./AppointmentPagination.vue";
 import AppointmentTable from "./AppointmentTable.vue";
-import AccountVaultUnlockDialog from "../accounts/AccountVaultUnlockDialog.vue";
 
 const ui = useUiStore();
-const { filters, items, loading, error, load } = useAppointments();
-const passwordCopy = useAppointmentPasswordCopy();
-const selectedIds = ref<string[]>([]);
-const selectedCount = computed(() => selectedIds.value.length);
+const history = useAppointmentPage({}, { pageSize: 100 });
+const selection = useAppointmentSelection();
 const columnWidths = shallowRef<AppointmentTableColumnWidths>(
   cloneAppointmentTableColumnWidths(DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS),
 );
@@ -36,6 +34,21 @@ const persistedColumnWidths = shallowRef<AppointmentTableColumnWidths>(
 const savingColumnWidths = shallowRef(false);
 const deleteTarget = shallowRef<Appointment | null>(null);
 const deleteOperationPending = shallowRef(false);
+const batchDeletePending = shallowRef(false);
+const passwordResetKey = shallowRef(0);
+
+const currentPageSelectedIds = computed(() =>
+  history.items.value.filter((item) => selection.isSelected(item.id)).map((item) => item.id),
+);
+const allSelected = computed(
+  () => history.totalCount.value > 0 && selection.selectedCount.value === history.totalCount.value,
+);
+const selectionIndeterminate = computed(
+  () => selection.selectedCount.value > 0 && !allSelected.value,
+);
+const operationBusy = computed(
+  () => deleteOperationPending.value || batchDeletePending.value || selection.selectingAll.value,
+);
 
 async function loadColumnWidths(): Promise<void> {
   try {
@@ -88,32 +101,35 @@ function commitColumnWidth(columnKey: AppointmentTableColumnKey, width: number):
 }
 
 async function applyFilters(next: AppointmentFilters): Promise<void> {
-  selectedIds.value = [];
-  Object.keys(filters).forEach((key) => delete filters[key as keyof AppointmentFilters]);
-  Object.assign(filters, next);
-  await load();
+  selection.clear();
+  passwordResetKey.value += 1;
+  await history.applyFilters(next);
 }
 
 async function resetFilters(): Promise<void> {
-  selectedIds.value = [];
-  Object.keys(filters).forEach((key) => delete filters[key as keyof AppointmentFilters]);
-  await load();
+  await applyFilters({});
+}
+
+async function changePage(page: number): Promise<void> {
+  passwordResetKey.value += 1;
+  await history.goToPage(page);
+}
+
+async function toggleAll(selected: boolean): Promise<void> {
+  if (!selected) {
+    selection.clear();
+    return;
+  }
+  const succeeded = await selection.selectAll(history.filters);
+  if (!succeeded && selection.error.value) ui.notify(selection.error.value, "danger");
 }
 
 async function duplicate(appointment: Appointment): Promise<void> {
-  const action = async () => {
+  try {
     const result = await api.duplicateAppointment(appointment.id);
     ui.markDataChanged();
-    await load();
     ui.openEditAppointment(result.appointment);
     ui.notify("已复制预约，请确认日期和时间", "success");
-  };
-  try {
-    if (appointment.account?.passwordAvailable) {
-      await passwordCopy.runWhenUnlocked(action);
-    } else {
-      await passwordCopy.runWithUnlockRetry(action);
-    }
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
   }
@@ -123,6 +139,15 @@ async function copyAccount(appointment: Appointment): Promise<void> {
   try {
     await api.copyAppointmentAccountName(appointment.id);
     ui.notify("账号已复制", "success");
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  }
+}
+
+async function copyPassword(appointment: Appointment): Promise<void> {
+  try {
+    await api.copyAppointmentAccountPassword(appointment.id);
+    ui.notify("账号密码已复制，30秒后自动清空剪贴板", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
   }
@@ -138,7 +163,7 @@ async function copyVoiceChannel(appointment: Appointment): Promise<void> {
 }
 
 function requestDelete(appointment: Appointment): void {
-  if (deleteOperationPending.value) return;
+  if (operationBusy.value) return;
   deleteTarget.value = appointment;
 }
 
@@ -148,45 +173,30 @@ function closeDeleteDialog(): void {
 
 async function cancelFromDialog(): Promise<void> {
   const appointment = deleteTarget.value;
-  if (!appointment || appointment.serviceStatus === "cancelled" || deleteOperationPending.value) {
-    return;
-  }
+  if (!appointment || appointment.serviceStatus === "cancelled" || operationBusy.value) return;
   deleteOperationPending.value = true;
   try {
     await api.setAppointmentServiceStatus(appointment.id, "cancelled");
+    deleteTarget.value = null;
     ui.markDataChanged();
-    await load();
     ui.notify("预约已取消，历史记录仍会保留", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
   } finally {
     deleteOperationPending.value = false;
-    deleteTarget.value = null;
   }
 }
 
 async function removeFromDialog(): Promise<void> {
   const appointment = deleteTarget.value;
-  if (!appointment || deleteOperationPending.value) return;
-  deleteTarget.value = null;
+  if (!appointment || operationBusy.value) return;
   deleteOperationPending.value = true;
-  const action = async () => {
-    try {
-      await api.deleteAppointment(appointment.id);
-      selectedIds.value = selectedIds.value.filter((id) => id !== appointment.id);
-      ui.markDataChanged();
-      await load();
-      ui.notify("预约已永久删除", "success");
-    } catch (cause) {
-      ui.notify(errorMessage(cause), "danger");
-    }
-  };
   try {
-    if (appointment.account?.passwordAvailable) {
-      await passwordCopy.runWhenUnlocked(action);
-    } else {
-      await action();
-    }
+    await api.deleteAppointment(appointment.id);
+    selection.removeId(appointment.id);
+    deleteTarget.value = null;
+    ui.markDataChanged();
+    ui.notify("预约已永久删除", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
   } finally {
@@ -195,54 +205,37 @@ async function removeFromDialog(): Promise<void> {
 }
 
 async function removeBatch(): Promise<void> {
-  if (selectedCount.value === 0) return;
-  if (!globalThis.confirm(`确定永久删除选中的 ${selectedCount.value} 条预约吗？`)) return;
-  const ids = [...selectedIds.value];
-  const action = async () => {
-    try {
-      const deletedCount = await api.deleteAppointments(ids);
-      selectedIds.value = [];
-      ui.markDataChanged();
-      await load();
-      if (deletedCount > 0) {
-        ui.notify(`已永久删除 ${deletedCount} 条预约`, "success");
-      } else {
-        ui.notify("未找到可删除的预约", "warning");
-      }
-    } catch (cause) {
-      ui.notify(errorMessage(cause), "danger");
-    }
-  };
-  const needsVault = items.value.some(
-    (item) => ids.includes(item.id) && item.account?.passwordAvailable,
-  );
-  if (needsVault) {
-    try {
-      await passwordCopy.runWhenUnlocked(action);
-    } catch (cause) {
-      ui.notify(errorMessage(cause), "danger");
-    }
-  } else {
-    await action();
+  if (selection.selectedCount.value === 0 || operationBusy.value) return;
+  if (!globalThis.confirm(`确定永久删除选中的 ${selection.selectedCount.value} 条预约吗？`)) {
+    return;
+  }
+  const deleteSelection = selection.deleteSelection();
+  if (!deleteSelection) return;
+
+  batchDeletePending.value = true;
+  try {
+    const result = await api.deleteAppointments(deleteSelection);
+    selection.clear();
+    ui.markDataChanged();
+    ui.notify(
+      result.deletedCount > 0
+        ? `已永久删除 ${result.deletedCount} 条预约`
+        : `匹配 ${result.matchedCount} 条，但没有可删除的预约`,
+      result.deletedCount > 0 ? "success" : "warning",
+    );
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  } finally {
+    batchDeletePending.value = false;
   }
 }
 
 watch(
-  () => items.value,
-  (currentItems) => {
-    const validIds = new Set(currentItems.map((item) => item.id));
-    const next = selectedIds.value.filter((id) => validIds.has(id));
-    if (next.length !== selectedIds.value.length) {
-      selectedIds.value = next;
-    }
-  },
-);
-
-watch(
   () => ui.dataRevision,
   () => {
-    selectedIds.value = [];
-    void load();
+    selection.clear();
+    passwordResetKey.value += 1;
+    void history.reloadAfterDeletion();
   },
 );
 
@@ -252,15 +245,20 @@ onMounted(loadColumnWidths);
 <template>
   <div class="appointments-workspace page-stack">
     <div class="page-toolbar appointments-workspace__toolbar">
-      <AppointmentFiltersBar :filters="filters" @apply="applyFilters" @reset="resetFilters" />
+      <AppointmentFiltersBar
+        :filters="history.filters"
+        @apply="applyFilters"
+        @reset="resetFilters"
+      />
       <button
         class="button button--ghost"
         type="button"
+        :disabled="selection.selectedCount.value === 0 || operationBusy"
+        :aria-busy="batchDeletePending"
         @click="removeBatch"
-        :disabled="selectedCount === 0"
       >
         <Trash2 :size="15" />
-        批量删除
+        {{ batchDeletePending ? "正在删除…" : "批量删除" }}
       </button>
       <button class="button button--primary" type="button" @click="ui.openCreateAppointment()">
         <Plus :size="15" />
@@ -268,26 +266,43 @@ onMounted(loadColumnWidths);
       </button>
     </div>
     <div class="result-line">
-      <span>共 {{ items.length }} 条记录</span>
-      <span v-if="selectedCount > 0">{{ selectedCount }} 条已选中</span>
+      <span>共 {{ history.totalCount.value }} 条记录</span>
+      <span v-if="selection.selectedCount.value > 0">
+        {{ selection.selectedCount.value }} 条已选中
+        <template v-if="selection.snapshot.value">（全部筛选结果）</template>
+      </span>
       <span v-else>取消记录默认保留，可筛选后回顾</span>
     </div>
-    <div v-if="loading" class="loading-line" />
-    <div v-if="error" class="error-banner">{{ error }}</div>
+    <div v-if="history.loading.value" class="loading-line" />
+    <div v-if="history.error.value" class="error-banner">{{ history.error.value }}</div>
     <AppointmentTable
-      :appointments="items"
+      :appointments="history.items.value"
       :column-widths="columnWidths"
       :saving-column-widths="savingColumnWidths"
-      v-model:selected-ids="selectedIds"
+      :selected-ids="currentPageSelectedIds"
+      :all-selected="allSelected"
+      :selection-indeterminate="selectionIndeterminate"
+      :selecting-all="selection.selectingAll.value"
+      :password-reset-key="passwordResetKey"
+      @toggle-all="toggleAll"
+      @toggle-one="selection.toggleOne"
       @edit="ui.openEditAppointment"
       @duplicate="duplicate"
       @copy-account="copyAccount"
       @copy-voice-channel="copyVoiceChannel"
-      @copy-password="passwordCopy.copy($event.id)"
+      @copy-password="copyPassword"
       @delete="requestDelete"
       @preview-column-width="previewColumnWidth"
       @commit-column-width="commitColumnWidth"
       @cancel-column-resize="cancelColumnResize"
+    />
+    <AppointmentPagination
+      :page="history.page.value"
+      :page-size="history.pageSize.value"
+      :total-pages="history.totalPages.value"
+      :total-count="history.totalCount.value"
+      :loading="history.loading.value"
+      @change-page="changePage"
     />
     <AppointmentDeleteDialog
       :open="deleteTarget !== null"
@@ -297,21 +312,13 @@ onMounted(loadColumnWidths);
       @cancel-appointment="cancelFromDialog"
       @permanent-delete="removeFromDialog"
     />
-    <AccountVaultUnlockDialog
-      v-if="passwordCopy.ownsUnlockDialog"
-      :open="passwordCopy.unlockOpen.value"
-      :loading="passwordCopy.unlockLoading.value"
-      :error="passwordCopy.unlockError.value"
-      @close="passwordCopy.closeUnlock"
-      @submit="passwordCopy.unlockAndRetry"
-    />
   </div>
 </template>
 
 <style scoped>
 .appointments-workspace {
   height: 100%;
-  gap: 12px;
+  gap: 10px;
 }
 
 .appointments-workspace__toolbar {

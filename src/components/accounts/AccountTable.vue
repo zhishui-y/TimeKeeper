@@ -23,6 +23,7 @@ import type {
   SortDirection,
 } from "../../utils/accounts";
 import { formatShortDate } from "../../utils/formatters";
+import PasswordValue from "../common/PasswordValue.vue";
 import AccountColumnResizeHandle from "./AccountColumnResizeHandle.vue";
 
 interface AccountDragEvent {
@@ -39,7 +40,6 @@ interface AccountDragEvent {
 const props = withDefaults(
   defineProps<{
     profiles: readonly AccountProfile[];
-    vaultUnlocked: boolean;
     sortKey: AccountProfileSortKey | null;
     sortDirection: SortDirection;
     reorderEnabled: boolean;
@@ -49,10 +49,12 @@ const props = withDefaults(
     columnWidths: AccountTableColumnWidths;
     savingColumnWidths: boolean;
     clearingWeekly: boolean;
+    passwordResetKey?: string | number;
     roleRefreshBusy?: boolean;
     refreshingIds?: ReadonlySet<string>;
   }>(),
   {
+    passwordResetKey: 0,
     roleRefreshBusy: false,
     refreshingIds: () => new Set<string>(),
   },
@@ -190,7 +192,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
           <col :style="{ width: `${columnWidths.specialization}px` }" />
           <col :style="{ width: `${columnWidths.gearScore}px` }" />
           <col style="width: 40px" />
-          <col style="width: 40px" />
+          <col style="width: 104px" />
           <col :style="{ width: `${columnWidths.currentScore}px` }" />
           <col :style="{ width: `${columnWidths.highestScore}px` }" />
           <col :style="{ width: `${columnWidths.scoreUpdatedAt}px` }" />
@@ -428,7 +430,6 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
             :key="profile.id"
             v-memo="[
               profile,
-              vaultUnlocked,
               selectedIdSet.has(profile.id),
               reorderEnabled,
               draggedId,
@@ -509,16 +510,13 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
               </button>
             </td>
             <td class="copy-cell">
-              <button
-                class="icon-button copy-button"
-                type="button"
-                :disabled="!vaultUnlocked"
-                :title="vaultUnlocked ? '复制密码' : '解锁密码库后可复制密码'"
-                :aria-label="`复制密码 ${profile.accountName}`"
-                @click="emit('copy', profile)"
-              >
-                <Copy :size="15" />
-              </button>
+              <PasswordValue
+                :password="profile.password"
+                :label="`${profile.accountName} 的密码`"
+                :reset-key="`${passwordResetKey}:${profile.updatedAt}`"
+                compact
+                @copy="emit('copy', profile)"
+              />
             </td>
             <td class="mono-number score-cell">{{ profile.currentScore ?? "—" }}</td>
             <td class="mono-number score-cell">{{ profile.highestScore ?? "—" }}</td>
@@ -578,8 +576,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
                 <button
                   class="icon-button action-danger"
                   type="button"
-                  :disabled="!vaultUnlocked"
-                  :title="vaultUnlocked ? '删除' : '删除账号前需要解锁密码库'"
+                  title="删除"
                   aria-label="删除账号"
                   @click="emit('delete', profile)"
                 >

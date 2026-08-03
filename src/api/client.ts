@@ -4,9 +4,13 @@ import type {
   AccountRoleDataRefreshResult,
   AccountTableColumnWidths,
   AccountUsageWeekSyncResult,
+  AppAccessStatus,
   AppSettings,
   Appointment,
+  AppointmentDeleteResult,
   AppointmentMutationResult,
+  AppointmentPage,
+  AppointmentSelectionSnapshot,
   AppointmentTableColumnWidths,
   BackupResult,
   ContactPreset,
@@ -15,15 +19,18 @@ import type {
   ExcelImportResult,
   ExcelImportSelection,
   RevenueSummary,
-  VaultStatus,
-  VaultUnlockResult,
+  LegacyCredentialMigrationResult,
 } from "../types/domain";
 import type { ApiClient } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 const nativeApi: ApiClient = {
-  listAppointments: (filters = {}) => invoke<Appointment[]>("list_appointments", { filters }),
+  listAppointments: (filters) => invoke<Appointment[]>("list_appointments", { filters }),
+  listAppointmentPage: (filters = {}, page = 1, pageSize = 100) =>
+    invoke<AppointmentPage>("list_appointment_page", { filters, page, pageSize }),
+  createAppointmentSelection: (filters = {}) =>
+    invoke<AppointmentSelectionSnapshot>("create_appointment_selection", { filters }),
   getAppointment: (id) => invoke<Appointment>("get_appointment", { id }),
   createAppointment: (input) => invoke<AppointmentMutationResult>("create_appointment", { input }),
   updateAppointment: (id, input) =>
@@ -31,7 +38,8 @@ const nativeApi: ApiClient = {
   duplicateAppointment: (id, serviceDate) =>
     invoke<AppointmentMutationResult>("duplicate_appointment", { id, serviceDate }),
   deleteAppointment: (id) => invoke<void>("delete_appointment", { id }),
-  deleteAppointments: (ids) => invoke<number>("delete_appointments", { ids }),
+  deleteAppointments: (selection) =>
+    invoke<AppointmentDeleteResult>("delete_appointments", { selection }),
   syncAppointmentServiceStatuses: () => invoke<number>("sync_appointment_service_statuses"),
   setAppointmentServiceStatus: (id, status) =>
     invoke<Appointment>("set_appointment_service_status", { id, status }),
@@ -62,13 +70,16 @@ const nativeApi: ApiClient = {
   refreshAccountProfileRoleData: (ids) =>
     invoke<AccountRoleDataRefreshResult>("refresh_account_profile_role_data", { ids }),
 
-  vaultStatus: () => invoke<VaultStatus>("vault_status"),
-  initializeVault: (password) => invoke<VaultStatus>("initialize_vault", { password }),
-  unlockVault: (password) => invoke<VaultUnlockResult>("unlock_vault", { password }),
-  changeVaultPassword: (currentPassword, newPassword) =>
-    invoke<VaultStatus>("change_vault_password", { currentPassword, newPassword }),
-  lockVault: () => invoke<VaultStatus>("lock_vault"),
-  revealAccountPassword: (id) => invoke<string>("reveal_account_password", { id }),
+  appAccessStatus: () => invoke<AppAccessStatus>("app_access_status"),
+  initializeAppAccess: (password) => invoke<AppAccessStatus>("initialize_app_access", { password }),
+  unlockAppAccess: (password) => invoke<AppAccessStatus>("unlock_app_access", { password }),
+  lockAppAccess: () => invoke<AppAccessStatus>("lock_app_access"),
+  changeAppAccessPassword: (currentPassword, newPassword) =>
+    invoke<AppAccessStatus>("change_app_access_password", { currentPassword, newPassword }),
+  resetAppAccessPassword: (newPassword, confirmationText) =>
+    invoke<AppAccessStatus>("reset_app_access_password", { newPassword, confirmationText }),
+  migrateLegacyCredentials: (password) =>
+    invoke<LegacyCredentialMigrationResult>("migrate_legacy_credentials", { password }),
   copyAccountPassword: (id) => invoke<void>("copy_account_password", { id }),
 
   getDashboardSummary: (date) => invoke<DashboardSummary>("get_dashboard_summary", { date }),

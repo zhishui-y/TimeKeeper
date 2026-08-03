@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    fmt,
     path::Path,
     sync::{Arc, Mutex},
     time::{Duration as StdDuration, Instant},
@@ -12,17 +13,17 @@ use chrono::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{Sqlite, Transaction};
-use tauri::{AppHandle, Manager, Runtime, State};
+use tauri::{AppHandle, Runtime, State};
 use uuid::Uuid;
 
 use crate::{
     accounts::insert_imported_account_profile,
-    appointments::{insert_imported_appointment, restore_pending_notifications},
+    app_access::AppAccessState,
+    appointments::{insert_imported_appointment, restore_notifications_for_ids},
     backup::BackupState,
     db::Database,
     models::VoicePlatform,
     notifications::NotificationState,
-    vault::{VaultState, run_blocking_vault_operation},
 };
 
 const PREVIEW_TTL: StdDuration = StdDuration::from_secs(30 * 60);
@@ -32,7 +33,7 @@ type ParsedTimeRange = (
     bool,
 );
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct LegacyAppointment {
     pub service_date: NaiveDate,
     pub starts_at: Option<DateTime<FixedOffset>>,
@@ -55,7 +56,23 @@ pub(crate) struct LegacyAppointment {
     pub import_fingerprint: String,
 }
 
-#[derive(Debug, Clone)]
+impl fmt::Debug for LegacyAppointment {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LegacyAppointment")
+            .field("service_date", &self.service_date)
+            .field("contact_name", &self.contact_name)
+            .field("account_name", &self.account_name)
+            .field(
+                "account_password",
+                &self.account_password.as_ref().map(|_| "<redacted>"),
+            )
+            .field("import_fingerprint", &self.import_fingerprint)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct LegacyAccountProfile {
     pub contact_name: Option<String>,
     pub server: Option<String>,
@@ -70,6 +87,17 @@ pub(crate) struct LegacyAccountProfile {
     pub notes: Option<String>,
     pub needs_review: bool,
     pub import_fingerprint: String,
+}
+
+impl fmt::Debug for LegacyAccountProfile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LegacyAccountProfile")
+            .field("account_name", &self.account_name)
+            .field("password", &"<redacted>")
+            .field("import_fingerprint", &self.import_fingerprint)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -90,11 +118,6 @@ pub(crate) struct ParsedLegacyData {
 struct PreviewEntry {
     created_at: Instant,
     parsed: ParsedLegacyData,
-}
-
-enum ImportedSecretTarget {
-    AccountProfile(String),
-    Appointment(String),
 }
 
 #[derive(Default)]
@@ -165,7 +188,9 @@ pub async fn preview_excel_import(
     path: String,
     base_year: i32,
     state: State<'_, ImportState>,
+    access: State<'_, AppAccessState>,
 ) -> Result<ExcelImportPreview, String> {
+    access.require_unlocked()?;
     if !(2000..=2100).contains(&base_year) {
         return Err("基准年份必须在 2000 到 2100 之间".to_string());
     }
@@ -232,6 +257,7 @@ async fn parse_legacy_workbook_in_background(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::too_many_arguments)]
 pub async fn commit_excel_import<R: Runtime>(
     app: AppHandle<R>,
     preview_token: String,
@@ -240,28 +266,44 @@ pub async fn commit_excel_import<R: Runtime>(
     database: State<'_, Database>,
     notifications: State<'_, NotificationState>,
     backup: State<'_, BackupState>,
+    access: State<'_, AppAccessState>,
 ) -> Result<ExcelImportResult, String> {
+    access.require_unlocked()?;
     let selection = selection.validate()?;
     let operation_guard = backup.lock_data_operation().await;
     let parsed = imports.take(&preview_token)?;
-    let vault = app.state::<VaultState>().inner().clone();
-    let result =
-        commit_excel_import_with_vault(database.inner(), &vault, parsed, selection).await?;
+    let mut outcome = commit_excel_import_to_sqlite(database.inner(), parsed, selection).await?;
 
     drop(operation_guard);
-    if selection.appointments {
-        restore_pending_notifications(app, database.inner(), notifications.inner()).await?;
+    if !outcome.imported_appointment_ids.is_empty()
+        && let Err(error) = restore_notifications_for_ids(
+            app,
+            database.inner(),
+            notifications.inner(),
+            &outcome.imported_appointment_ids,
+        )
+        .await
+    {
+        outcome
+            .result
+            .warnings
+            .push(format!("预约已导入，但通知调度失败：{error}"));
     }
 
-    Ok(result)
+    Ok(outcome.result)
 }
 
-async fn commit_excel_import_with_vault(
+#[derive(Debug)]
+struct ImportCommitOutcome {
+    result: ExcelImportResult,
+    imported_appointment_ids: Vec<String>,
+}
+
+async fn commit_excel_import_to_sqlite(
     database: &Database,
-    vault: &VaultState,
     parsed: ParsedLegacyData,
     selection: ExcelImportSelection,
-) -> Result<ExcelImportResult, String> {
+) -> Result<ImportCommitOutcome, String> {
     validate_import_selection_for_workbook(selection, &parsed)?;
 
     let mut transaction = database
@@ -269,45 +311,36 @@ async fn commit_excel_import_with_vault(
         .begin()
         .await
         .map_err(|error| format!("无法开始导入事务：{error}"))?;
-    let mut secret_changes: Vec<(ImportedSecretTarget, Option<String>)> = Vec::new();
     let mut imported_profiles = 0;
     let mut imported_appointments = 0;
     let mut skipped_profile_duplicates = 0;
     let mut skipped_appointment_duplicates = 0;
+    let mut imported_appointment_ids = Vec::new();
 
     if selection.accounts {
         for profile in &parsed.profiles {
             let write = match insert_imported_account_profile(&mut transaction, profile).await {
                 Ok(write) => write,
                 Err(error) => {
-                    return Err(rollback_import(vault, transaction, secret_changes, error).await);
+                    return Err(rollback_import(transaction, error).await);
                 }
             };
             imported_profiles += write.inserted;
             skipped_profile_duplicates += write.skipped;
 
-            if write.inserted > 0 {
-                match set_imported_account_secret(
-                    vault,
-                    write.record_id.clone(),
-                    profile.password.clone(),
+            if write.inserted > 0
+                && !profile.password.is_empty()
+                && let Err(error) = sqlx::query(
+                    "INSERT INTO account_profile_credentials (profile_id, password) VALUES (?, ?)",
                 )
+                .bind(&write.record_id)
+                .bind(&profile.password)
+                .execute(&mut *transaction)
                 .await
-                {
-                    Ok(previous) => secret_changes.push((
-                        ImportedSecretTarget::AccountProfile(write.record_id),
-                        previous,
-                    )),
-                    Err(error) => {
-                        return Err(rollback_import(
-                            vault,
-                            transaction,
-                            secret_changes,
-                            format!("写入导入账号密码失败：{error}"),
-                        )
-                        .await);
-                    }
-                }
+            {
+                return Err(
+                    rollback_import(transaction, format!("写入导入账号密码失败：{error}")).await,
+                );
             }
         }
     }
@@ -317,56 +350,52 @@ async fn commit_excel_import_with_vault(
             let write = match insert_imported_appointment(&mut transaction, appointment).await {
                 Ok(write) => write,
                 Err(error) => {
-                    return Err(rollback_import(vault, transaction, secret_changes, error).await);
+                    return Err(rollback_import(transaction, error).await);
                 }
             };
             imported_appointments += write.inserted;
             skipped_appointment_duplicates += write.skipped;
 
-            if write.inserted > 0
-                && appointment.account_name.is_some()
-                && let Some(password) = appointment.account_password.as_deref()
-            {
-                match set_imported_appointment_secret(
-                    vault,
-                    write.record_id.clone(),
-                    password.to_string(),
-                )
-                .await
+            if write.inserted > 0 {
+                imported_appointment_ids.push(write.record_id.clone());
+                if appointment.account_name.is_some()
+                    && let Some(password) = appointment
+                        .account_password
+                        .as_deref()
+                        .filter(|password| !password.is_empty())
+                    && let Err(error) = sqlx::query(
+                        "INSERT INTO appointment_credentials (appointment_id, password) VALUES (?, ?)",
+                    )
+                    .bind(&write.record_id)
+                    .bind(password)
+                    .execute(&mut *transaction)
+                    .await
                 {
-                    Ok(previous) => secret_changes
-                        .push((ImportedSecretTarget::Appointment(write.record_id), previous)),
-                    Err(error) => {
-                        return Err(rollback_import(
-                            vault,
-                            transaction,
-                            secret_changes,
-                            format!("写入导入预约密码失败：{error}"),
-                        )
-                        .await);
-                    }
+                    return Err(rollback_import(
+                        transaction,
+                        format!("写入导入预约密码失败：{error}"),
+                    )
+                    .await);
                 }
             }
         }
     }
 
-    if let Err(error) = transaction.commit().await {
-        return Err(reconcile_secrets_after_commit_error(
-            database,
-            vault,
-            secret_changes,
-            format!("提交 Excel 导入事务返回错误：{error}"),
-        )
-        .await);
-    }
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("提交 Excel 导入事务失败：{error}"))?;
 
-    Ok(ExcelImportResult {
-        imported_appointments,
-        imported_profiles,
-        skipped_duplicates: skipped_appointment_duplicates + skipped_profile_duplicates,
-        skipped_appointment_duplicates,
-        skipped_profile_duplicates,
-        warnings: parsed.warnings,
+    Ok(ImportCommitOutcome {
+        result: ExcelImportResult {
+            imported_appointments,
+            imported_profiles,
+            skipped_duplicates: skipped_appointment_duplicates + skipped_profile_duplicates,
+            skipped_appointment_duplicates,
+            skipped_profile_duplicates,
+            warnings: parsed.warnings,
+        },
+        imported_appointment_ids,
     })
 }
 
@@ -380,160 +409,11 @@ fn validate_import_selection_for_workbook(
     Ok(())
 }
 
-async fn set_imported_account_secret(
-    vault: &VaultState,
-    account_id: String,
-    password: String,
-) -> Result<Option<String>, String> {
-    let worker_vault = vault.clone();
-    run_blocking_vault_operation(move || worker_vault.set_secret(&account_id, password)).await
-}
-
-async fn set_imported_appointment_secret(
-    vault: &VaultState,
-    appointment_id: String,
-    password: String,
-) -> Result<Option<String>, String> {
-    let worker_vault = vault.clone();
-    run_blocking_vault_operation(move || {
-        worker_vault.set_appointment_secret(&appointment_id, password)
-    })
-    .await
-}
-
-async fn rollback_import(
-    vault: &VaultState,
-    transaction: Transaction<'_, Sqlite>,
-    secret_changes: Vec<(ImportedSecretTarget, Option<String>)>,
-    primary_error: String,
-) -> String {
-    if let Err(error) = transaction.rollback().await {
-        let secret_safety_note = if secret_changes.is_empty() {
-            ""
-        } else {
-            "；数据库状态不确定，为避免可见记录缺少密码，已保留保险库中的密码"
-        };
-        return format!("{primary_error}；回滚 Excel 导入事务失败：{error}{secret_safety_note}");
-    }
-
-    append_secret_restore_result(vault, secret_changes, primary_error).await
-}
-
-async fn append_secret_restore_result(
-    vault: &VaultState,
-    secret_changes: Vec<(ImportedSecretTarget, Option<String>)>,
-    primary_error: String,
-) -> String {
-    match restore_secret_changes(vault, secret_changes).await {
+async fn rollback_import(transaction: Transaction<'_, Sqlite>, primary_error: String) -> String {
+    match transaction.rollback().await {
         Ok(()) => primary_error,
-        Err(restore_error) => format!("{primary_error}；{restore_error}"),
+        Err(error) => format!("{primary_error}；回滚 Excel 导入事务失败：{error}"),
     }
-}
-
-async fn restore_secret_changes(
-    vault: &VaultState,
-    changes: Vec<(ImportedSecretTarget, Option<String>)>,
-) -> Result<(), String> {
-    let mut failures = Vec::new();
-    for (index, (target, previous)) in changes.into_iter().rev().enumerate() {
-        let worker_vault = vault.clone();
-        let result = run_blocking_vault_operation(move || match (target, previous) {
-            (ImportedSecretTarget::AccountProfile(account_id), Some(password)) => {
-                worker_vault.set_secret(&account_id, password)
-            }
-            (ImportedSecretTarget::AccountProfile(account_id), None) => {
-                worker_vault.remove_secret(&account_id)
-            }
-            (ImportedSecretTarget::Appointment(appointment_id), Some(password)) => {
-                worker_vault.set_appointment_secret(&appointment_id, password)
-            }
-            (ImportedSecretTarget::Appointment(appointment_id), None) => {
-                worker_vault.remove_appointment_secret(&appointment_id)
-            }
-        })
-        .await;
-        if let Err(error) = result {
-            failures.push(format!("第 {} 项密码补偿失败：{error}", index + 1));
-        }
-    }
-
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(failures.join("；"))
-    }
-}
-
-async fn imported_secret_target_exists(
-    database: &Database,
-    target: &ImportedSecretTarget,
-) -> Result<bool, String> {
-    let (query, label, id) = match target {
-        ImportedSecretTarget::AccountProfile(id) => (
-            "SELECT EXISTS(SELECT 1 FROM account_profiles WHERE id = ?)",
-            "账号档案",
-            id,
-        ),
-        ImportedSecretTarget::Appointment(id) => (
-            "SELECT EXISTS(SELECT 1 FROM appointments WHERE id = ?)",
-            "预约",
-            id,
-        ),
-    };
-
-    sqlx::query_scalar::<_, i64>(query)
-        .bind(id)
-        .fetch_one(database.pool())
-        .await
-        .map(|exists| exists != 0)
-        .map_err(|error| format!("查询{label}密码对应记录失败：{error}"))
-}
-
-async fn reconcile_secrets_after_commit_error(
-    database: &Database,
-    vault: &VaultState,
-    changes: Vec<(ImportedSecretTarget, Option<String>)>,
-    primary_error: String,
-) -> String {
-    if changes.is_empty() {
-        return primary_error;
-    }
-
-    let mut confirmed_count = 0_usize;
-    let mut restore_changes = Vec::new();
-    let mut uncertain_failures = Vec::new();
-    for (index, change) in changes.into_iter().enumerate() {
-        match imported_secret_target_exists(database, &change.0).await {
-            Ok(true) => confirmed_count += 1,
-            Ok(false) => restore_changes.push(change),
-            Err(error) => uncertain_failures.push(format!("第 {} 项：{error}", index + 1)),
-        }
-    }
-
-    let restore_count = restore_changes.len();
-    let mut details = vec![primary_error];
-    if confirmed_count > 0 {
-        details.push(format!(
-            "已确认 {confirmed_count} 项密码对应记录存在，保留当前保险库值"
-        ));
-    }
-    if restore_count > 0 {
-        match restore_secret_changes(vault, restore_changes).await {
-            Ok(()) => details.push(format!("已恢复 {restore_count} 项未提交记录的原密码状态")),
-            Err(error) => details.push(format!(
-                "恢复 {restore_count} 项未提交记录的原密码状态失败：{error}"
-            )),
-        }
-    }
-    if !uncertain_failures.is_empty() {
-        details.push(format!(
-            "数据库状态不确定：{} 项密码对应记录查询失败，已保留当前保险库值（{}）",
-            uncertain_failures.len(),
-            uncertain_failures.join("；")
-        ));
-    }
-
-    details.join("；")
 }
 
 pub(crate) fn parse_legacy_workbook(
@@ -1099,16 +979,17 @@ fn fingerprint(parts: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vault::VaultError;
     use calamine::{ExcelDateTime, ExcelDateTimeType};
-    use sqlx::Row;
     use std::path::PathBuf;
 
     struct TestDataDir(PathBuf);
 
     impl TestDataDir {
         fn new(name: &str) -> Self {
-            Self(std::env::temp_dir().join(format!("timekeeper-import-{name}-{}", Uuid::now_v7())))
+            let path =
+                std::env::temp_dir().join(format!("timekeeper-import-{name}-{}", Uuid::now_v7()));
+            std::fs::create_dir_all(&path).expect("create temporary import test directory");
+            Self(path)
         }
 
         fn path(&self) -> &Path {
@@ -1173,181 +1054,10 @@ mod tests {
         }
     }
 
-    async fn insert_commit_reconciliation_rows(database: &Database) {
-        let now = "2099-08-03T00:00:00Z";
-        sqlx::query(
-            "INSERT INTO account_profiles (
-                id, account_name, created_at, updated_at
-             ) VALUES ('persisted-profile', 'persisted-account', ?, ?)",
-        )
-        .bind(now)
-        .bind(now)
-        .execute(database.pool())
-        .await
-        .expect("insert persisted account profile");
-        sqlx::query(
-            "INSERT INTO appointments (
-                id, service_date, contact_name, mode, service_status,
-                settlement_status, account_name, created_at, updated_at
-             ) VALUES (
-                'persisted-appointment', '2099-08-03', '持久化联系人', 'business',
-                'scheduled', 'unsettled', 'persisted-appointment-account', ?, ?
-             )",
-        )
-        .bind(now)
-        .bind(now)
-        .execute(database.pool())
-        .await
-        .expect("insert persisted appointment");
-    }
-
     #[test]
-    fn commit_error_reconciliation_keeps_persisted_and_restores_absent_secrets() {
-        tauri::async_runtime::block_on(async {
-            let data_dir = TestDataDir::new("commit-reconciliation");
-            let vault = VaultState::new(data_dir.path()).expect("create temporary vault");
-            vault
-                .initialize("temporary reconciliation password".into())
-                .expect("initialize temporary vault");
-            let database = Database::initialize(data_dir.path().join("timekeeper.db"))
-                .await
-                .expect("initialize temporary database");
-            insert_commit_reconciliation_rows(&database).await;
-
-            vault
-                .set_secret("persisted-profile", "old-persisted-profile-secret".into())
-                .unwrap();
-            let persisted_profile_previous = vault
-                .set_secret("persisted-profile", "new-persisted-profile-secret".into())
-                .unwrap();
-            vault
-                .set_appointment_secret(
-                    "persisted-appointment",
-                    "old-persisted-appointment-secret".into(),
-                )
-                .unwrap();
-            let persisted_appointment_previous = vault
-                .set_appointment_secret(
-                    "persisted-appointment",
-                    "new-persisted-appointment-secret".into(),
-                )
-                .unwrap();
-            vault
-                .set_secret("absent-profile", "old-absent-profile-secret".into())
-                .unwrap();
-            let absent_profile_previous = vault
-                .set_secret("absent-profile", "new-absent-profile-secret".into())
-                .unwrap();
-            let absent_appointment_previous = vault
-                .set_appointment_secret(
-                    "absent-appointment",
-                    "new-absent-appointment-secret".into(),
-                )
-                .unwrap();
-
-            let message = reconcile_secrets_after_commit_error(
-                &database,
-                &vault,
-                vec![
-                    (
-                        ImportedSecretTarget::AccountProfile("persisted-profile".into()),
-                        persisted_profile_previous,
-                    ),
-                    (
-                        ImportedSecretTarget::Appointment("persisted-appointment".into()),
-                        persisted_appointment_previous,
-                    ),
-                    (
-                        ImportedSecretTarget::AccountProfile("absent-profile".into()),
-                        absent_profile_previous,
-                    ),
-                    (
-                        ImportedSecretTarget::Appointment("absent-appointment".into()),
-                        absent_appointment_previous,
-                    ),
-                ],
-                "simulated commit error".into(),
-            )
-            .await;
-
-            assert!(message.contains("已确认 2 项密码对应记录存在"));
-            assert!(message.contains("已恢复 2 项未提交记录的原密码状态"));
-            assert!(!message.contains("数据库状态不确定"));
-            assert_eq!(
-                vault.get_secret("persisted-profile").unwrap(),
-                "new-persisted-profile-secret"
-            );
-            assert_eq!(
-                vault
-                    .get_appointment_secret("persisted-appointment")
-                    .unwrap(),
-                "new-persisted-appointment-secret"
-            );
-            assert_eq!(
-                vault.get_secret("absent-profile").unwrap(),
-                "old-absent-profile-secret"
-            );
-            assert!(matches!(
-                vault.get_appointment_secret("absent-appointment"),
-                Err(VaultError::PasswordNotFound)
-            ));
-
-            database.pool().close().await;
-            drop(database);
-            drop(vault);
-        });
-    }
-
-    #[test]
-    fn commit_error_reconciliation_reports_unknown_database_state_without_removing_secret() {
-        tauri::async_runtime::block_on(async {
-            let data_dir = TestDataDir::new("commit-reconciliation-unknown");
-            let vault = VaultState::new(data_dir.path()).expect("create temporary vault");
-            vault
-                .initialize("temporary reconciliation password".into())
-                .expect("initialize temporary vault");
-            let database = Database::initialize(data_dir.path().join("timekeeper.db"))
-                .await
-                .expect("initialize temporary database");
-            let previous = vault
-                .set_appointment_secret(
-                    "unknown-appointment",
-                    "new-unknown-appointment-secret".into(),
-                )
-                .unwrap();
-            database.pool().close().await;
-
-            let message = reconcile_secrets_after_commit_error(
-                &database,
-                &vault,
-                vec![(
-                    ImportedSecretTarget::Appointment("unknown-appointment".into()),
-                    previous,
-                )],
-                "simulated commit error".into(),
-            )
-            .await;
-
-            assert!(message.contains("数据库状态不确定"));
-            assert!(message.contains("已保留当前保险库值"));
-            assert_eq!(
-                vault.get_appointment_secret("unknown-appointment").unwrap(),
-                "new-unknown-appointment-secret"
-            );
-
-            drop(database);
-            drop(vault);
-        });
-    }
-
-    #[test]
-    fn commit_writes_appointment_password_to_real_vault_and_preserves_missing_flag() {
+    fn commit_writes_appointment_password_in_same_sqlite_transaction() {
         tauri::async_runtime::block_on(async {
             let data_dir = TestDataDir::new("appointment-passwords");
-            let vault = VaultState::new(data_dir.path()).expect("create temporary vault");
-            vault
-                .initialize("temporary import test password".into())
-                .expect("initialize temporary vault");
             let database = Database::initialize(data_dir.path().join("timekeeper.db"))
                 .await
                 .expect("initialize temporary database");
@@ -1364,111 +1074,103 @@ mod tests {
                 ),
             ]);
 
-            let result = commit_excel_import_with_vault(
-                &database,
-                &vault,
-                parsed,
-                appointments_only_selection(),
-            )
-            .await
-            .expect("commit appointment import");
-            assert_eq!(result.imported_appointments, 2);
+            let outcome =
+                commit_excel_import_to_sqlite(&database, parsed, appointments_only_selection())
+                    .await
+                    .expect("commit appointment import");
+            assert_eq!(outcome.result.imported_appointments, 2);
+            assert_eq!(outcome.imported_appointment_ids.len(), 2);
 
-            let with_password = sqlx::query(
-                "SELECT id, account_password_available FROM appointments
+            let with_password_id = sqlx::query_scalar::<_, String>(
+                "SELECT id FROM appointments
                  WHERE import_fingerprint = 'appointment-with-password'",
             )
             .fetch_one(database.pool())
             .await
             .expect("load imported appointment with password");
-            let with_password_id: String = with_password.try_get("id").unwrap();
             assert_eq!(
-                with_password
-                    .try_get::<i64, _>("account_password_available")
-                    .unwrap(),
-                1
-            );
-            assert_eq!(
-                vault
-                    .get_appointment_secret(&with_password_id)
-                    .expect("appointment password should exist"),
-                "row-password"
+                sqlx::query_scalar::<_, String>(
+                    "SELECT password FROM appointment_credentials WHERE appointment_id = ?",
+                )
+                .bind(&with_password_id)
+                .fetch_one(database.pool())
+                .await
+                .expect("appointment password should exist"),
+                "row-password",
             );
 
-            let without_password = sqlx::query(
-                "SELECT id, account_password_available FROM appointments
+            let without_password_id = sqlx::query_scalar::<_, String>(
+                "SELECT id FROM appointments
                  WHERE import_fingerprint = 'appointment-without-password'",
             )
             .fetch_one(database.pool())
             .await
             .expect("load imported appointment without password");
-            let without_password_id: String = without_password.try_get("id").unwrap();
             assert_eq!(
-                without_password
-                    .try_get::<i64, _>("account_password_available")
-                    .unwrap(),
-                0
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM appointment_credentials WHERE appointment_id = ?",
+                )
+                .bind(&without_password_id)
+                .fetch_one(database.pool())
+                .await
+                .expect("count absent appointment password"),
+                0,
             );
-            assert!(matches!(
-                vault.get_appointment_secret(&without_password_id),
-                Err(VaultError::PasswordNotFound)
-            ));
 
             database.pool().close().await;
             drop(database);
-            drop(vault);
         });
     }
 
     #[test]
-    fn locked_vault_rejects_password_import_without_database_or_secret_residue() {
+    fn credential_write_failure_rolls_back_imported_appointment() {
         tauri::async_runtime::block_on(async {
-            let data_dir = TestDataDir::new("locked-vault");
-            let vault = VaultState::new(data_dir.path()).expect("create temporary vault");
-            vault
-                .initialize("temporary import test password".into())
-                .expect("initialize temporary vault");
-            vault.lock().expect("lock temporary vault");
-            let snapshot_path = data_dir.path().join("vault.hold");
-            let snapshot_before =
-                std::fs::read(&snapshot_path).expect("read vault snapshot before import");
+            let data_dir = TestDataDir::new("credential-rollback");
             let database = Database::initialize(data_dir.path().join("timekeeper.db"))
                 .await
                 .expect("initialize temporary database");
+            sqlx::query(
+                "CREATE TRIGGER reject_imported_credentials
+                 BEFORE INSERT ON appointment_credentials
+                 BEGIN SELECT RAISE(ABORT, 'simulated credential failure'); END",
+            )
+            .execute(database.pool())
+            .await
+            .expect("create rollback trigger");
             let parsed = parsed_appointments(vec![imported_appointment(
-                "locked-vault-appointment",
-                "locked-vault-account",
+                "credential-rollback-appointment",
+                "credential-rollback-account",
                 Some("row-password"),
             )]);
 
-            let error = commit_excel_import_with_vault(
-                &database,
-                &vault,
-                parsed,
-                appointments_only_selection(),
-            )
-            .await
-            .expect_err("locked vault must reject password import");
-            assert!(error.contains("保险库已锁定"), "unexpected error: {error}");
+            let error =
+                commit_excel_import_to_sqlite(&database, parsed, appointments_only_selection())
+                    .await
+                    .expect_err("credential failure must reject the whole import");
+            assert!(
+                error.contains("写入导入预约密码失败"),
+                "unexpected error: {error}"
+            );
             assert_eq!(
                 sqlx::query_scalar::<_, i64>(
                     "SELECT COUNT(*) FROM appointments
-                     WHERE import_fingerprint = 'locked-vault-appointment'",
+                     WHERE import_fingerprint = 'credential-rollback-appointment'",
                 )
                 .fetch_one(database.pool())
                 .await
                 .expect("count rolled-back appointment"),
-                0
+                0,
             );
             assert_eq!(
-                std::fs::read(&snapshot_path).expect("read vault snapshot after import"),
-                snapshot_before,
-                "a locked import must not mutate the Stronghold snapshot"
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM appointment_credentials")
+                    .fetch_one(database.pool())
+                    .await
+                    .expect("count rolled-back credential"),
+                0,
             );
 
             database.pool().close().await;
             drop(database);
-            drop(vault);
         });
     }
 
@@ -1905,7 +1607,7 @@ mod tests {
 
     #[test]
     #[ignore = "set TIMEKEEPER_LEGACY_WORKBOOK and TIMEKEEPER_LEGACY_BASE_YEAR for isolated commit acceptance"]
-    fn commits_external_workbook_to_temporary_database_and_vault() {
+    fn commits_external_workbook_to_temporary_database() {
         tauri::async_runtime::block_on(async {
             let path = std::env::var("TIMEKEEPER_LEGACY_WORKBOOK")
                 .expect("TIMEKEEPER_LEGACY_WORKBOOK must point to a workbook");
@@ -1913,23 +1615,18 @@ mod tests {
                 .expect("TIMEKEEPER_LEGACY_BASE_YEAR must match the workbook")
                 .parse()
                 .expect("TIMEKEEPER_LEGACY_BASE_YEAR must be a year");
-            let mut parsed = parse_legacy_workbook(Path::new(&path), base_year)
+            let parsed = parse_legacy_workbook(Path::new(&path), base_year)
                 .expect("external workbook should parse");
             let appointment_count = parsed.appointments.len();
             let profile_count = parsed.profiles.len();
             let yy_channel_count = parsed.yy_channel_count;
             let mut password_probe = None;
-            for appointment in &mut parsed.appointments {
+            for appointment in &parsed.appointments {
                 if password_probe.is_none()
                     && let Some(password) = appointment.account_password.as_ref()
                 {
                     password_probe =
                         Some((appointment.import_fingerprint.clone(), password.clone()));
-                } else {
-                    // One real appointment secret per workbook is enough for this external smoke
-                    // test; focused unit tests cover multi-secret compensation without hundreds
-                    // of repeated Stronghold snapshot writes in debug builds.
-                    appointment.account_password = None;
                 }
             }
             let profile_password_probe = parsed
@@ -1938,10 +1635,6 @@ mod tests {
                 .map(|profile| (profile.import_fingerprint.clone(), profile.password.clone()));
 
             let data_dir = TestDataDir::new(&format!("external-{base_year}"));
-            let vault = VaultState::new(data_dir.path()).expect("create temporary vault");
-            vault
-                .initialize("temporary external import password".into())
-                .expect("initialize temporary vault");
             let database = Database::initialize(data_dir.path().join("timekeeper.db"))
                 .await
                 .expect("initialize temporary database");
@@ -1950,10 +1643,10 @@ mod tests {
                 accounts: true,
             };
 
-            let first =
-                commit_excel_import_with_vault(&database, &vault, parsed.clone(), selection)
-                    .await
-                    .expect("first external import should commit");
+            let first = commit_excel_import_to_sqlite(&database, parsed.clone(), selection)
+                .await
+                .expect("first external import should commit")
+                .result;
             assert_eq!(first.imported_appointments, appointment_count);
             assert_eq!(first.imported_profiles, profile_count);
             assert_eq!(
@@ -1975,8 +1668,14 @@ mod tests {
                 .await
                 .unwrap();
                 assert_eq!(
-                    vault.get_appointment_secret(&appointment_id).unwrap(),
-                    password
+                    sqlx::query_scalar::<_, String>(
+                        "SELECT password FROM appointment_credentials WHERE appointment_id = ?",
+                    )
+                    .bind(appointment_id)
+                    .fetch_one(database.pool())
+                    .await
+                    .unwrap(),
+                    password,
                 );
             }
             if let Some((fingerprint, password)) = profile_password_probe {
@@ -1987,12 +1686,22 @@ mod tests {
                 .fetch_one(database.pool())
                 .await
                 .unwrap();
-                assert_eq!(vault.get_secret(&profile_id).unwrap(), password);
+                assert_eq!(
+                    sqlx::query_scalar::<_, String>(
+                        "SELECT password FROM account_profile_credentials WHERE profile_id = ?",
+                    )
+                    .bind(profile_id)
+                    .fetch_one(database.pool())
+                    .await
+                    .unwrap(),
+                    password,
+                );
             }
 
-            let second = commit_excel_import_with_vault(&database, &vault, parsed, selection)
+            let second = commit_excel_import_to_sqlite(&database, parsed, selection)
                 .await
-                .expect("repeat import should skip duplicates");
+                .expect("repeat import should skip duplicates")
+                .result;
             assert_eq!(second.imported_appointments, 0);
             assert_eq!(second.imported_profiles, 0);
             assert_eq!(second.skipped_appointment_duplicates, appointment_count);
@@ -2000,7 +1709,6 @@ mod tests {
 
             database.pool().close().await;
             drop(database);
-            drop(vault);
         });
     }
 }

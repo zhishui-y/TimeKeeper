@@ -122,6 +122,31 @@ impl NotificationState {
         }
     }
 
+    pub(crate) fn cancel_many(
+        &self,
+        appointment_ids: &[String],
+    ) -> Result<usize, NotificationError> {
+        if appointment_ids
+            .iter()
+            .any(|id| id.trim().is_empty() || id.len() > 256)
+        {
+            return Err(NotificationError::InvalidAppointmentId);
+        }
+        let mut tasks = self
+            .inner
+            .tasks
+            .lock()
+            .map_err(|_| NotificationError::StatePoisoned)?;
+        let mut cancelled = 0;
+        for appointment_id in appointment_ids {
+            if let Some(task) = tasks.remove(appointment_id) {
+                task.handle.abort();
+                cancelled += 1;
+            }
+        }
+        Ok(cancelled)
+    }
+
     #[cfg(test)]
     fn scheduled_count(&self) -> usize {
         self.inner.tasks.lock().unwrap().len()
@@ -155,6 +180,13 @@ pub(crate) fn cancel_appointment_notification(
     appointment_id: &str,
 ) -> Result<bool, NotificationError> {
     state.cancel(appointment_id)
+}
+
+pub(crate) fn cancel_appointment_notifications(
+    state: &NotificationState,
+    appointment_ids: &[String],
+) -> Result<usize, NotificationError> {
+    state.cancel_many(appointment_ids)
 }
 
 fn validate_notification(
@@ -240,5 +272,20 @@ mod tests {
         let state = NotificationState::default();
         assert!(!state.cancel("missing").unwrap());
         assert_eq!(state.scheduled_count(), 0);
+    }
+
+    #[test]
+    fn cancelling_many_validates_before_locking_and_removing() {
+        let state = NotificationState::default();
+        assert_eq!(
+            state
+                .cancel_many(&["missing-a".into(), "missing-b".into()])
+                .unwrap(),
+            0
+        );
+        assert!(matches!(
+            state.cancel_many(&["valid".into(), " ".into()]),
+            Err(NotificationError::InvalidAppointmentId)
+        ));
     }
 }

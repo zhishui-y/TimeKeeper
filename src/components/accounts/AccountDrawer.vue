@@ -164,7 +164,7 @@ useModalFocus({
                   class="input"
                   type="password"
                   autocomplete="new-password"
-                  :placeholder="profile ? '留空则不修改' : '写入本地加密密码库'"
+                  :placeholder="profile ? '留空则不修改' : '仅保存在本机数据库'"
                 />
               </label>
             </section>

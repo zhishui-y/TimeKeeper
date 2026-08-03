@@ -19,9 +19,6 @@ const baseProps = {
   specializationOptions: ["冰心"],
   visibleCount: 2,
   selectedCount: 1,
-  vaultUnlocked: true,
-  vaultLoading: false,
-  vaultError: null,
   refreshBusy: false,
   deleting: false,
   canResetView: false,
@@ -64,24 +61,12 @@ describe("AccountToolbar", () => {
     expect(wrapper.emitted("create")).toHaveLength(1);
   });
 
-  it("uses one lock/unlock control and removes redundant toolbar guidance", async () => {
-    const wrapper = mount(AccountToolbar, {
-      attachTo: document.body,
-      props: { ...baseProps, vaultUnlocked: false },
-    });
+  it("keeps application access controls out of the account toolbar", () => {
+    const wrapper = mount(AccountToolbar, { props: baseProps });
 
-    expect(wrapper.findAll('[aria-label="解锁密码库"]')).toHaveLength(1);
-    expect(wrapper.text()).not.toContain("密码库已锁定");
+    expect(wrapper.find('button[title="锁定时约管家"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("本次运行已解锁");
     expect(wrapper.text()).not.toContain("拖动左侧手柄调整默认顺序");
     expect(wrapper.text()).not.toContain("筛选");
-
-    await wrapper.get('[aria-label="解锁密码库"]').trigger("click");
-    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
-
-    await wrapper.setProps({ vaultUnlocked: true });
-    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
-    await wrapper.get('[aria-label="锁定密码库"]').trigger("click");
-    expect(wrapper.emitted("lock")).toHaveLength(1);
-    wrapper.unmount();
   });
 });
