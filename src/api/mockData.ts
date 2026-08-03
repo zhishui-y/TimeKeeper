@@ -118,21 +118,21 @@ function appointment(input: DemoAppointmentInput): Appointment {
     serviceStatus: input.serviceStatus ?? "scheduled",
     settlementStatus:
       mode === "entertainment" ? "not_applicable" : (input.settlementStatus ?? "unsettled"),
-    accountProfileId: account?.id ?? null,
-    accountSnapshot: account
+    account: account
       ? {
           accountName: account.accountName,
-          contactName: account.contactName,
           server: account.server,
-          characterName: account.characterName,
           specialization: account.specialization,
           gearScore: account.gearScore,
+          passwordAvailable: true,
         }
       : null,
     rateNote: input.amount ? "按小时计费" : null,
     paymentMethod: input.paymentMethod ?? null,
     amountMinor: input.amount ?? null,
     reminderMinutes: 30,
+    voicePlatform: null,
+    voiceChannel: null,
     notes: input.note ?? null,
     createdAt,
     updatedAt: now.toISOString(),
@@ -299,3 +299,14 @@ export const demoPasswords = new Map<string, string>([
   ["account-3", "BeiBei-Game"],
   ["account-4", "Qinghe_09!"],
 ]);
+
+export const demoAppointmentPasswords = new Map<string, string>(
+  demoAppointments.flatMap((item) => {
+    if (!item.account) return [];
+    const profile = demoAccounts.find(
+      (account) => account.accountName === item.account?.accountName,
+    );
+    const password = profile ? demoPasswords.get(profile.id) : undefined;
+    return password ? [[item.id, password] as const] : [];
+  }),
+);

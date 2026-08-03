@@ -11,13 +11,35 @@ export function appointmentToInput(appointment: Appointment): AppointmentInput {
     mode: appointment.mode,
     serviceStatus: appointment.serviceStatus,
     settlementStatus: appointment.settlementStatus,
-    accountProfileId: appointment.accountProfileId,
+    account: appointment.account
+      ? {
+          kind: "embedded",
+          details: {
+            accountName: appointment.account.accountName,
+            server: appointment.account.server,
+            specialization: appointment.account.specialization,
+            gearScore: appointment.account.gearScore,
+          },
+          credential: { kind: "keep" },
+        }
+      : null,
     rateNote: appointment.rateNote,
     paymentMethod: appointment.paymentMethod,
     amountMinor: appointment.amountMinor,
     reminderMinutes: appointment.reminderMinutes,
+    voicePlatform: appointment.voicePlatform,
+    voiceChannel: appointment.voiceChannel,
     notes: appointment.notes,
   };
+}
+
+export function appointmentMutationNeedsVault(
+  input: AppointmentInput,
+  existing?: Appointment | null,
+): boolean {
+  if (!input.account) return Boolean(existing?.account?.passwordAvailable);
+  if (input.account.kind === "profile") return true;
+  return input.account.credential.kind !== "keep";
 }
 
 export function rescheduledInput(

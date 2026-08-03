@@ -55,6 +55,11 @@ string_enum!(SettlementStatus {
     Settled => "settled",
 });
 
+string_enum!(VoicePlatform {
+    Yy => "yy",
+    Qq => "qq",
+});
+
 string_enum!(ReportGranularity {
     Day => "day",
     Week => "week",
@@ -63,13 +68,49 @@ string_enum!(ReportGranularity {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AccountSnapshot {
-    pub account_name: String,
-    pub contact_name: Option<String>,
-    pub server: Option<String>,
-    pub character_name: Option<String>,
+pub struct AppointmentAccountDetails {
     pub specialization: Option<String>,
     pub gear_score: Option<String>,
+    pub server: Option<String>,
+    pub account_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppointmentAccount {
+    pub specialization: Option<String>,
+    pub gear_score: Option<String>,
+    pub server: Option<String>,
+    pub account_name: String,
+    pub password_available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AppointmentAccountCredentialInput {
+    Keep,
+    Replace { password: String },
+    CopyFromAppointment { source_appointment_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AppointmentAccountInput {
+    Profile {
+        profile_id: String,
+    },
+    Embedded {
+        details: AppointmentAccountDetails,
+        credential: AppointmentAccountCredentialInput,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,8 +125,9 @@ pub struct Appointment {
     pub mode: AppointmentMode,
     pub service_status: ServiceStatus,
     pub settlement_status: SettlementStatus,
-    pub account_profile_id: Option<String>,
-    pub account_snapshot: Option<AccountSnapshot>,
+    pub account: Option<AppointmentAccount>,
+    pub voice_platform: Option<VoicePlatform>,
+    pub voice_channel: Option<String>,
     pub rate_note: Option<String>,
     pub payment_method: Option<String>,
     pub amount_minor: Option<i64>,
@@ -111,7 +153,11 @@ pub struct AppointmentInput {
     pub service_status: ServiceStatus,
     pub settlement_status: SettlementStatus,
     #[serde(default)]
-    pub account_profile_id: Option<String>,
+    pub account: Option<AppointmentAccountInput>,
+    #[serde(default)]
+    pub voice_platform: Option<VoicePlatform>,
+    #[serde(default)]
+    pub voice_channel: Option<String>,
     #[serde(default)]
     pub rate_note: Option<String>,
     #[serde(default)]
@@ -133,7 +179,25 @@ pub struct AppointmentFilters {
     pub mode: Option<AppointmentMode>,
     pub service_status: Option<ServiceStatus>,
     pub settlement_status: Option<SettlementStatus>,
-    pub account_profile_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactPreset {
+    pub source_appointment_id: String,
+    pub contact_name: String,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+    pub content: Option<String>,
+    pub mode: AppointmentMode,
+    pub account: Option<AppointmentAccount>,
+    pub rate_note: Option<String>,
+    pub payment_method: Option<String>,
+    pub amount_minor: Option<i64>,
+    pub reminder_minutes: Option<i64>,
+    pub notes: Option<String>,
+    pub voice_platform: Option<VoicePlatform>,
+    pub voice_channel: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,18 +312,49 @@ mod tests {
 
     #[test]
     fn serializes_dtos_as_camel_case() {
-        let snapshot = AccountSnapshot {
-            account_name: "demo".into(),
-            contact_name: None,
-            server: None,
-            character_name: None,
+        let account = AppointmentAccount {
             specialization: None,
             gear_score: None,
+            server: None,
+            account_name: "demo".into(),
+            password_available: true,
         };
 
-        let value = serde_json::to_value(snapshot).unwrap();
+        let value = serde_json::to_value(account).unwrap();
         assert_eq!(value["accountName"], "demo");
+        assert_eq!(value["passwordAvailable"], true);
         assert!(value.get("account_name").is_none());
+    }
+
+    #[test]
+    fn account_input_uses_tagged_camel_case_union() {
+        let input = AppointmentAccountInput::Embedded {
+            details: AppointmentAccountDetails {
+                specialization: None,
+                gear_score: None,
+                server: Some("梦江南".into()),
+                account_name: "demo".into(),
+            },
+            credential: AppointmentAccountCredentialInput::CopyFromAppointment {
+                source_appointment_id: "appointment-1".into(),
+            },
+        };
+
+        let value = serde_json::to_value(input).unwrap();
+        assert_eq!(value["kind"], "embedded");
+        assert_eq!(value["details"]["accountName"], "demo");
+        assert_eq!(value["credential"]["kind"], "copyFromAppointment");
+        assert_eq!(value["credential"]["sourceAppointmentId"], "appointment-1");
+
+        let profile: AppointmentAccountInput = serde_json::from_value(serde_json::json!({
+            "kind": "profile",
+            "profileId": "profile-1"
+        }))
+        .unwrap();
+        assert!(matches!(
+            profile,
+            AppointmentAccountInput::Profile { profile_id } if profile_id == "profile-1"
+        ));
     }
 
     #[test]

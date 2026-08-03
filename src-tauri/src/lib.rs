@@ -135,6 +135,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             appointments::list_appointments,
+            appointments::list_contact_presets,
             appointments::get_appointment,
             appointments::create_appointment,
             appointments::update_appointment,
@@ -155,6 +156,7 @@ pub fn run() {
             accounts::delete_account_profiles,
             accounts::reorder_account_profiles,
             accounts::copy_account_name,
+            accounts::copy_account_character_name,
             accounts::refresh_account_profile_role_data,
             reports::get_dashboard_summary,
             reports::get_revenue_summary,
@@ -167,6 +169,7 @@ pub fn run() {
             vault::lock_vault,
             vault::reveal_account_password,
             vault::copy_account_password,
+            vault::copy_appointment_account_password,
             settings::get_settings,
             settings::update_settings,
             settings::update_account_table_column_widths,

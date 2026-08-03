@@ -2,15 +2,31 @@ export type AppointmentMode = "entertainment" | "business";
 export type ServiceStatus = "scheduled" | "in_progress" | "completed" | "cancelled";
 export type SettlementStatus = "not_applicable" | "unsettled" | "settled";
 export type ReportGranularity = "day" | "week" | "month";
+export type VoicePlatform = "yy" | "qq";
 
-export interface AccountSnapshot {
+export interface AppointmentAccountDetails {
   accountName: string;
-  contactName?: string | null;
   server?: string | null;
-  characterName?: string | null;
   specialization?: string | null;
   gearScore?: string | null;
 }
+
+export interface AppointmentAccount extends AppointmentAccountDetails {
+  passwordAvailable: boolean;
+}
+
+export type AppointmentAccountCredential =
+  | { kind: "keep" }
+  | { kind: "replace"; password: string }
+  | { kind: "copyFromAppointment"; sourceAppointmentId: string };
+
+export type AppointmentAccountInput =
+  | { kind: "profile"; profileId: string }
+  | {
+      kind: "embedded";
+      details: AppointmentAccountDetails;
+      credential: AppointmentAccountCredential;
+    };
 
 export interface Appointment {
   id: string;
@@ -22,12 +38,13 @@ export interface Appointment {
   mode: AppointmentMode;
   serviceStatus: ServiceStatus;
   settlementStatus: SettlementStatus;
-  accountProfileId?: string | null;
-  accountSnapshot?: AccountSnapshot | null;
+  account?: AppointmentAccount | null;
   rateNote?: string | null;
   paymentMethod?: string | null;
   amountMinor?: number | null;
   reminderMinutes?: number | null;
+  voicePlatform?: VoicePlatform | null;
+  voiceChannel?: string | null;
   notes?: string | null;
   importFingerprint?: string | null;
   createdAt: string;
@@ -43,11 +60,13 @@ export interface AppointmentInput {
   mode: AppointmentMode;
   serviceStatus: ServiceStatus;
   settlementStatus: SettlementStatus;
-  accountProfileId?: string | null;
+  account?: AppointmentAccountInput | null;
   rateNote?: string | null;
   paymentMethod?: string | null;
   amountMinor?: number | null;
   reminderMinutes?: number | null;
+  voicePlatform?: VoicePlatform | null;
+  voiceChannel?: string | null;
   notes?: string | null;
 }
 
@@ -58,7 +77,23 @@ export interface AppointmentFilters {
   mode?: AppointmentMode;
   serviceStatus?: ServiceStatus;
   settlementStatus?: SettlementStatus;
-  accountProfileId?: string;
+}
+
+export interface ContactPreset {
+  sourceAppointmentId: string;
+  contactName: string;
+  startTime?: string | null;
+  endTime?: string | null;
+  content?: string | null;
+  mode: AppointmentMode;
+  account?: AppointmentAccount | null;
+  rateNote?: string | null;
+  paymentMethod?: string | null;
+  amountMinor?: number | null;
+  reminderMinutes?: number | null;
+  notes?: string | null;
+  voicePlatform?: VoicePlatform | null;
+  voiceChannel?: string | null;
 }
 
 export interface AppointmentConflict {
@@ -167,6 +202,16 @@ export interface VaultStatus {
   initialized: boolean;
   unlocked: boolean;
   autoLockMinutes: number;
+}
+
+export interface AppointmentPasswordMigrationResult {
+  migratedCount: number;
+  missingCount: number;
+  pendingCount: number;
+}
+
+export interface VaultUnlockResult extends VaultStatus {
+  appointmentPasswordMigration?: AppointmentPasswordMigrationResult;
 }
 
 export interface AccountTableColumnWidths {

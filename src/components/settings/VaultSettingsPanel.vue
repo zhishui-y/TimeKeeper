@@ -3,6 +3,7 @@ import { KeyRound, LockKeyhole, ShieldCheck, TimerOff } from "@lucide/vue";
 import { computed, onMounted, shallowRef, watch } from "vue";
 import { useVault } from "../../composables/useVault";
 import { useUiStore } from "../../stores/ui";
+import { vaultUnlockFeedback } from "../../utils/vault";
 import VaultPasswordChangeForm from "./VaultPasswordChangeForm.vue";
 
 const autoLockMinutes = defineModel<number>("autoLockMinutes", { required: true });
@@ -56,7 +57,8 @@ async function submitVault(): Promise<void> {
     : await initialize(unlockPassword.value);
   if (!result) return;
   unlockPassword.value = "";
-  ui.notify("密码库已解锁", "success");
+  const feedback = vaultUnlockFeedback(result);
+  ui.notify(feedback.message, feedback.tone);
 }
 
 async function lockVault(): Promise<void> {

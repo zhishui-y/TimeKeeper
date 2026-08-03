@@ -31,7 +31,7 @@ defineProps<{
         <div class="day-appointment__main">
           <strong>{{ appointment.contactName }}</strong>
           <span>{{ appointment.content || "未填写预约内容" }}</span>
-          <small>{{ appointment.accountSnapshot?.accountName || "未关联账号" }}</small>
+          <small>{{ appointment.account?.accountName || "未使用账号" }}</small>
         </div>
         <div class="day-appointment__status">
           <span class="day-appointment__mode" :class="`is-${appointment.mode}`">

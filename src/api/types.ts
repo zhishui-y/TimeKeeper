@@ -10,6 +10,7 @@ import type {
   AppointmentInput,
   AppointmentMutationResult,
   BackupResult,
+  ContactPreset,
   DashboardSummary,
   ExcelImportPreview,
   ExcelImportResult,
@@ -18,6 +19,7 @@ import type {
   RevenueSummary,
   ServiceStatus,
   VaultStatus,
+  VaultUnlockResult,
 } from "../types/domain";
 
 export interface ApiClient {
@@ -31,6 +33,8 @@ export interface ApiClient {
   syncAppointmentServiceStatuses(): Promise<number>;
   setAppointmentServiceStatus(id: string, status: ServiceStatus): Promise<Appointment>;
   settleAppointment(id: string, amountMinor: number, paymentMethod?: string): Promise<Appointment>;
+  listContactPresets(query?: string, limit?: number): Promise<ContactPreset[]>;
+  copyAppointmentAccountPassword(id: string): Promise<void>;
 
   listAccountProfiles(query?: string, needsReview?: boolean): Promise<AccountProfile[]>;
   getAccountProfile(id: string): Promise<AccountProfile>;
@@ -43,11 +47,12 @@ export interface ApiClient {
   deleteAccountProfiles(ids: string[]): Promise<number>;
   reorderAccountProfiles(ids: string[]): Promise<void>;
   copyAccountName(id: string): Promise<void>;
+  copyAccountCharacterName(id: string): Promise<void>;
   refreshAccountProfileRoleData(ids: string[]): Promise<AccountRoleDataRefreshResult>;
 
   vaultStatus(): Promise<VaultStatus>;
   initializeVault(password: string): Promise<VaultStatus>;
-  unlockVault(password: string): Promise<VaultStatus>;
+  unlockVault(password: string): Promise<VaultUnlockResult>;
   changeVaultPassword(currentPassword: string, newPassword: string): Promise<VaultStatus>;
   lockVault(): Promise<VaultStatus>;
   revealAccountPassword(id: string): Promise<string>;

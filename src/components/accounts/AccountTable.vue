@@ -63,6 +63,7 @@ const emit = defineEmits<{
   edit: [profile: AccountProfile];
   copy: [profile: AccountProfile];
   copyAccount: [profile: AccountProfile];
+  copyCharacterName: [profile: AccountProfile];
   delete: [profile: AccountProfile];
   refreshRoleData: [profile: AccountProfile];
   updateUsageDraft: [profileId: string, value: string];
@@ -481,7 +482,19 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
               </div>
             </td>
             <td class="truncate">{{ profile.server || "—" }}</td>
-            <td class="truncate">{{ profile.characterName || "—" }}</td>
+            <td class="truncate">
+              <button
+                v-if="profile.characterName"
+                class="character-name-copy"
+                type="button"
+                :title="`复制角色名 ${profile.characterName}`"
+                :aria-label="`复制角色名 ${profile.characterName}`"
+                @click.stop="emit('copyCharacterName', profile)"
+              >
+                {{ profile.characterName }}
+              </button>
+              <span v-else>—</span>
+            </td>
             <td class="truncate">{{ profile.specialization || "—" }}</td>
             <td class="mono-number">{{ profile.gearScore || "—" }}</td>
             <td class="copy-cell">
@@ -692,6 +705,26 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
   color: var(--ink-strong);
   font-size: 12px;
   font-weight: 700;
+}
+
+.character-name-copy {
+  max-width: 100%;
+  padding: 2px 4px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 4px;
+  color: var(--brand-strong);
+  background: transparent;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: copy;
+}
+
+.character-name-copy:hover,
+.character-name-copy:focus-visible {
+  background: var(--brand-soft);
+  outline: none;
 }
 
 .account-table .copy-cell {

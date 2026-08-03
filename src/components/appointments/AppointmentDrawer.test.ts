@@ -2,7 +2,7 @@
 
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Appointment } from "../../types/domain";
+import type { AccountProfile, Appointment } from "../../types/domain";
 import AppointmentDrawer from "./AppointmentDrawer.vue";
 
 describe("AppointmentDrawer", () => {
@@ -18,6 +18,7 @@ describe("AppointmentDrawer", () => {
     defaultReminderMinutes = 30,
     appointment: Appointment | null = null,
     initialFocus: "default" | "amount" = "default",
+    accounts: AccountProfile[] = [],
   ) {
     const wrapper = mount(AppointmentDrawer, {
       attachTo: document.body,
@@ -27,7 +28,7 @@ describe("AppointmentDrawer", () => {
         initialFocus,
         requestedDate: "2026-07-13",
         requestedStartTime: null,
-        accounts: [],
+        accounts,
         defaultReminderMinutes,
       },
       global: { stubs: { teleport: true } },
@@ -52,12 +53,76 @@ describe("AppointmentDrawer", () => {
     };
   }
 
-  it("uses the configured reminder default for new appointments", () => {
+  it("keeps the configured reminder value but leaves a new reminder disabled", () => {
     const wrapper = mountDrawer(60);
 
+    const reminder = wrapper.get('input[aria-label="提前提醒分钟数"]');
+    expect((reminder.element as HTMLInputElement).value).toBe("60");
+    expect(reminder.attributes("disabled")).toBeDefined();
+    expect((wrapper.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("starts a blank appointment in profile mode with YY and shows the full profile label", () => {
+    const account: AccountProfile = {
+      id: "account-label",
+      contactName: "联系人",
+      server: "梦江南",
+      characterName: "清心",
+      specialization: "冰心",
+      gearScore: "128000",
+      accountName: "login-account",
+      currentScore: 2100,
+      highestScore: 2300,
+      scoreUpdatedAt: "2026-07-28",
+      usageInfo: null,
+      notes: null,
+      needsReview: false,
+      createdAt: "2026-07-28T00:00:00Z",
+      updatedAt: "2026-07-28T00:00:00Z",
+    };
+    const wrapper = mountDrawer(30, null, "default", [account]);
+
+    expect(wrapper.get(".account-kind__item.is-active").text()).toContain("从档案选择");
+    expect((wrapper.get('select[aria-label="语音平台"]').element as HTMLSelectElement).value).toBe(
+      "yy",
+    );
+    expect(wrapper.get(".profile-picker option[value='account-label']").text()).toBe(
+      "清心 · 梦江南 · 当前分 2100 · 最高分 2300",
+    );
+  });
+
+  it("shows an YY channel only for YY voice and filters non-digits", async () => {
+    const wrapper = mountDrawer();
+    const voice = wrapper.get('select[aria-label="语音平台"]');
+
+    await voice.setValue("yy");
+    const channel = wrapper.get('input[placeholder="可留空"]');
+    await channel.setValue("12A");
+    expect((channel.element as HTMLInputElement).value).toBe("12");
+
+    await voice.setValue("qq");
+    expect(wrapper.find('input[placeholder="可留空"]').exists()).toBe(false);
+  });
+
+  it("clears a one-time password when switching away from the embedded account", async () => {
+    const wrapper = mountDrawer();
+    const oneTimeButton = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("一次性账号"));
+    expect(oneTimeButton).toBeDefined();
+    await oneTimeButton?.trigger("click");
+    await wrapper.get('input[placeholder="仅写入本条预约的加密保险库"]').setValue("secret");
+
+    const noneButton = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("不使用账号"));
+    await noneButton?.trigger("click");
+    await oneTimeButton?.trigger("click");
+
     expect(
-      (wrapper.get('input[aria-label="提前提醒分钟数"]').element as HTMLInputElement).value,
-    ).toBe("60");
+      (wrapper.get('input[placeholder="仅写入本条预约的加密保险库"]').element as HTMLInputElement)
+        .value,
+    ).toBe("");
   });
 
   it("hides billing fields when entertainment mode is selected", async () => {
@@ -98,6 +163,10 @@ describe("AppointmentDrawer", () => {
     await wrapper.get('button[aria-label="清空结束时间"]').trigger("click");
     expect((timeInputs[1]?.element as HTMLInputElement).value).toBe("");
     await wrapper.get('input[placeholder="谁约的"]').setValue("结束时间待定");
+    const noneButton = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("不使用账号"));
+    await noneButton?.trigger("click");
     await wrapper.get('button.button--primary[type="submit"]').trigger("click");
 
     expect(wrapper.emitted("save")?.[0]?.[0]).toMatchObject({
@@ -134,6 +203,32 @@ describe("AppointmentDrawer", () => {
     const saveButton = wrapper.get('button.button--primary[type="submit"]');
 
     expect(saveButton.attributes("form")).toBe(form.attributes("id"));
+  });
+
+  it("only shows the delete action while editing and emits a delete request", async () => {
+    const createWrapper = mountDrawer();
+    expect(createWrapper.find("button.button--danger").exists()).toBe(false);
+    createWrapper.unmount();
+
+    const editWrapper = mountDrawer(30, completedAppointment());
+    const deleteButton = editWrapper.get("button.button--danger");
+    expect(deleteButton.text()).toContain("删除预约");
+
+    await deleteButton.trigger("click");
+
+    expect(editWrapper.emitted("delete")).toHaveLength(1);
+    expect(editWrapper.emitted("save")).toBeUndefined();
+  });
+
+  it("disables conflicting footer actions while deletion is in progress", async () => {
+    const wrapper = mountDrawer(30, completedAppointment());
+    await wrapper.setProps({ deleting: true });
+
+    const deleteButton = wrapper.get("button.button--danger");
+    const saveButton = wrapper.get('button.button--primary[type="submit"]');
+    expect(deleteButton.attributes("disabled")).toBeDefined();
+    expect(deleteButton.text()).toContain("删除中");
+    expect(saveButton.attributes("disabled")).toBeDefined();
   });
 
   it("moves Tab directly between appointment fields", async () => {

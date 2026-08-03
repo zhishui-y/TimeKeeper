@@ -628,6 +628,34 @@ pub async fn copy_account_name(database: State<'_, Database>, id: String) -> Res
     copy_text_to_clipboard(account_name).await
 }
 
+pub(crate) async fn get_account_character_name_impl(
+    database: &Database,
+    id: &str,
+) -> Result<String, String> {
+    let character_name = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT character_name FROM account_profiles WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(database.pool())
+    .await
+    .map_err(db_error)?
+    .ok_or_else(|| format!("账号档案不存在: {id}"))?;
+
+    character_name
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "角色名未填写".to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn copy_account_character_name(
+    database: State<'_, Database>,
+    id: String,
+) -> Result<(), String> {
+    let character_name = get_account_character_name_impl(&database, &id).await?;
+    copy_text_to_clipboard(character_name).await
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn refresh_account_profile_role_data(
     database: State<'_, Database>,
@@ -925,24 +953,6 @@ pub(crate) async fn insert_imported_account_profile(
     })
 }
 
-pub(crate) async fn find_imported_account_profile_id(
-    transaction: &mut Transaction<'_, Sqlite>,
-    account_name: &str,
-) -> Result<Option<String>, String> {
-    let row = sqlx::query(
-        "SELECT id FROM account_profiles
-         WHERE lower(trim(account_name)) = lower(trim(?))
-         ORDER BY needs_review ASC, updated_at DESC
-         LIMIT 1",
-    )
-    .bind(account_name)
-    .fetch_optional(&mut **transaction)
-    .await
-    .map_err(db_error)?;
-    row.map(|row| row.try_get("id").map_err(db_error))
-        .transpose()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1011,6 +1021,41 @@ mod tests {
                 get_account_profile_impl(&database, &created.id)
                     .await
                     .is_err()
+            );
+        });
+    }
+
+    #[test]
+    fn reads_character_name_for_clipboard_copy() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let mut with_character = input("character-copy-account");
+            with_character.character_name = Some("  清心  ".into());
+            let created = create_account_profile_impl(&database, with_character)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                get_account_character_name_impl(&database, &created.id)
+                    .await
+                    .unwrap(),
+                "清心"
+            );
+
+            let without_character = create_account_profile_impl(&database, input("no-character"))
+                .await
+                .unwrap();
+            assert_eq!(
+                get_account_character_name_impl(&database, &without_character.id)
+                    .await
+                    .unwrap_err(),
+                "角色名未填写"
+            );
+            assert!(
+                get_account_character_name_impl(&database, "missing-account")
+                    .await
+                    .unwrap_err()
+                    .contains("账号档案不存在")
             );
         });
     }
@@ -1208,18 +1253,17 @@ mod tests {
     }
 
     #[test]
-    fn deleting_profile_clears_live_link_and_keeps_non_secret_snapshot() {
+    fn deleting_profile_does_not_modify_embedded_appointment_account() {
         run_async(async {
             let database = Database::in_memory().await.unwrap();
             let profile = create_account_profile_impl(&database, input("linked-account"))
                 .await
                 .unwrap();
             let now = Utc::now().to_rfc3339();
-            let snapshot = r#"{"accountName":"linked-account"}"#;
             sqlx::query(
                 "INSERT INTO appointments (
                     id, service_date, contact_name, mode, service_status,
-                    settlement_status, account_profile_id, account_snapshot_json,
+                    settlement_status, account_name, account_server,
                     created_at, updated_at
                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
@@ -1229,8 +1273,8 @@ mod tests {
             .bind("business")
             .bind("scheduled")
             .bind("unsettled")
-            .bind(&profile.id)
-            .bind(snapshot)
+            .bind("linked-account")
+            .bind("梦江南")
             .bind(&now)
             .bind(&now)
             .execute(database.pool())
@@ -1242,7 +1286,7 @@ mod tests {
                 .unwrap();
 
             let row = sqlx::query(
-                "SELECT account_profile_id, account_snapshot_json
+                "SELECT account_name, account_server
                  FROM appointments WHERE id = ?",
             )
             .bind("linked-appointment")
@@ -1250,15 +1294,12 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(
-                row.try_get::<Option<String>, _>("account_profile_id")
-                    .unwrap(),
-                None
+                row.try_get::<String, _>("account_name").unwrap(),
+                "linked-account"
             );
             assert_eq!(
-                row.try_get::<Option<String>, _>("account_snapshot_json")
-                    .unwrap()
-                    .as_deref(),
-                Some(snapshot)
+                row.try_get::<String, _>("account_server").unwrap(),
+                "梦江南"
             );
         });
     }

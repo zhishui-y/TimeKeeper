@@ -28,6 +28,7 @@ import {
   type AccountProfileSortKey,
   type SortDirection,
 } from "../../utils/accounts";
+import { vaultUnlockFeedback } from "../../utils/vault";
 import AccountDrawer from "./AccountDrawer.vue";
 import AccountRoleDataRefreshFeedback from "./AccountRoleDataRefreshFeedback.vue";
 import AccountTable from "./AccountTable.vue";
@@ -301,6 +302,15 @@ async function copyAccount(profile: AccountProfile): Promise<void> {
   }
 }
 
+async function copyCharacterName(profile: AccountProfile): Promise<void> {
+  try {
+    await api.copyAccountCharacterName(profile.id);
+    ui.notify("角色名已复制", "success");
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  }
+}
+
 function updateUsageDraft(profileId: string, value: string): void {
   usageDrafts[profileId] = value;
   const profile = items.value.find((item) => item.id === profileId);
@@ -434,7 +444,8 @@ async function submitVault(password: string): Promise<void> {
     ? await unlock(password)
     : await initialize(password);
   if (result) {
-    ui.notify("密码库已解锁", "success");
+    const feedback = vaultUnlockFeedback(result);
+    ui.notify(feedback.message, feedback.tone);
   }
 }
 
@@ -620,6 +631,7 @@ watch(
       @edit="openEdit"
       @copy="copy"
       @copy-account="copyAccount"
+      @copy-character-name="copyCharacterName"
       @refresh-role-data="refreshSingleRoleData"
       @update-usage-draft="updateUsageDraft"
       @save-usage="saveUsage"

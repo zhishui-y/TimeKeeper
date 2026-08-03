@@ -1,6 +1,6 @@
 import { readonly, shallowRef } from "vue";
 import { api, errorMessage } from "../api/client";
-import type { VaultStatus } from "../types/domain";
+import type { VaultStatus, VaultUnlockResult } from "../types/domain";
 
 const status = shallowRef<VaultStatus>({
   initialized: false,
@@ -65,7 +65,8 @@ export function useVault() {
   const load = () => run("load", undefined, () => api.vaultStatus());
   const initialize = (password: string) =>
     run("initialize", password, () => api.initializeVault(password));
-  const unlock = (password: string) => run("unlock", password, () => api.unlockVault(password));
+  const unlock = async (password: string): Promise<VaultUnlockResult | null> =>
+    (await run("unlock", password, () => api.unlockVault(password))) as VaultUnlockResult | null;
   const changePassword = (currentPassword: string, newPassword: string) =>
     run("change-password", undefined, () => api.changeVaultPassword(currentPassword, newPassword));
   const lock = () => run("lock", undefined, () => api.lockVault());

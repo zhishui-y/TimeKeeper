@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { ListFilter, RotateCcw, Search } from "@lucide/vue";
 import { reactive, watch } from "vue";
-import type { AccountProfile, AppointmentFilters } from "../../types/domain";
+import type { AppointmentFilters } from "../../types/domain";
 
 const props = defineProps<{
   filters: AppointmentFilters;
-  accounts: readonly AccountProfile[];
 }>();
 
 const emit = defineEmits<{
@@ -62,12 +61,6 @@ function reset(): void {
       <option value="completed">已完成</option>
       <option value="cancelled">已取消</option>
     </select>
-    <select v-model="draft.accountProfileId" class="select filters__account" aria-label="关联账号">
-      <option :value="undefined">全部账号</option>
-      <option v-for="account in accounts" :key="account.id" :value="account.id">
-        {{ account.contactName || account.accountName }}
-      </option>
-    </select>
     <button class="button button--compact filters__apply" type="submit">
       <ListFilter :size="14" />
       筛选
@@ -105,17 +98,13 @@ function reset(): void {
   width: 104px;
 }
 
-.filters__account {
-  width: 112px;
-}
-
 @media (max-width: 1260px) {
   .filters {
     display: grid;
     flex: 1;
     grid-template-areas:
       "search from separator to mode status"
-      "account account account account apply reset";
+      "apply apply apply apply apply reset";
     grid-template-columns: minmax(170px, 1fr) 120px auto 120px 94px 94px;
     gap: 5px;
   }
@@ -152,11 +141,6 @@ function reset(): void {
 
   .filters__status {
     grid-area: status;
-  }
-
-  .filters__account {
-    grid-area: account;
-    width: min(240px, 100%);
   }
 
   .filters__apply {

@@ -19,9 +19,9 @@ async function createBusinessAppointment(
   const drawer = page.getByRole("dialog", { name: /新建预约|编辑预约/ });
   await expect(drawer).toBeVisible();
   await drawer.getByLabel("日期 *").fill(serviceDate);
-  await drawer.getByLabel("开始时间").fill(draft.startTime);
-  await drawer.getByLabel("结束时间").fill(draft.endTime);
-  await drawer.getByLabel("联系人 *").fill(draft.contactName);
+  await drawer.getByLabel("开始时间", { exact: true }).fill(draft.startTime);
+  await drawer.getByLabel("结束时间（可留空）", { exact: true }).fill(draft.endTime);
+  await drawer.getByLabel("联系人", { exact: true }).fill(draft.contactName);
   await drawer.getByLabel("金额（元）").fill(draft.amountYuan);
   if (draft.serviceStatus) {
     await drawer.getByLabel("预约进度").selectOption(draft.serviceStatus);
@@ -90,7 +90,8 @@ test("核心页面在桌面窗口中可访问且没有横向溢出", async ({ pa
     await page.getByRole("link", { name: linkName }).click();
     await expect(page.getByRole("heading", { name: headingName, level: 1 })).toBeVisible();
     if (linkName === "预约记录") {
-      await expect(page.getByLabel("关联账号")).toBeVisible();
+      await expect(page.getByPlaceholder("搜索联系人、内容或账号")).toBeVisible();
+      await expect(page.getByLabel("预约模式")).toBeVisible();
     }
     if (linkName === "数据与设置") {
       const backup = page.locator(".settings-section--backup");
@@ -180,13 +181,19 @@ test("账号档案可通过左侧手柄拖动排序", async ({ page }) => {
   await page.goto("/#/accounts");
 
   const rows = page.locator(".account-table tbody tr");
-  const originalFirstAccount = await rows.first().locator("td:nth-child(7) strong").innerText();
+  const originalFirstAccount = await rows
+    .first()
+    .getByRole("button", { name: /复制账号 / })
+    .getAttribute("aria-label");
   const sourceHandle = rows.first().getByRole("button", { name: /拖动账号.+调整顺序/ });
   const targetHandle = rows.last().getByRole("button", { name: /拖动账号.+调整顺序/ });
 
   await sourceHandle.dragTo(targetHandle);
 
-  await expect(rows.first().locator("td:nth-child(7) strong")).not.toHaveText(originalFirstAccount);
+  await expect(rows.first().getByRole("button", { name: /复制账号 / })).not.toHaveAttribute(
+    "aria-label",
+    originalFirstAccount!,
+  );
   await expect(page.getByRole("status")).toContainText("账号顺序已保存");
 });
 
@@ -210,11 +217,10 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
   await page.getByRole("link", { name: "数据与设置" }).click();
   await page.getByRole("button", { name: "立即锁定" }).click();
 
-  const vaultGate = page.locator(".vault-gate");
-  await expect(vaultGate.getByRole("heading", { name: "解锁时约管家" })).toBeVisible();
-  await vaultGate.getByLabel("主密码").fill("demo-master-password");
-  await vaultGate.getByRole("button", { name: "解锁", exact: true }).click();
-  await expect(vaultGate).toBeHidden();
+  const settingsUnlock = page.locator(".vault-unlock");
+  await settingsUnlock.getByLabel("密码库主密码").fill("demo-master-password");
+  await settingsUnlock.getByRole("button", { name: "解锁", exact: true }).click();
+  await expect(settingsUnlock).toBeHidden();
 
   await page.getByRole("link", { name: "收益总结" }).click();
   const baselineSettledMinor = await readSettledMinor(page);
@@ -286,10 +292,9 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
   await page.getByRole("button", { name: "从备份恢复" }).click();
   await expect(page.getByRole("status")).toContainText("备份校验与恢复流程已完成");
 
-  await expect(vaultGate.getByRole("heading", { name: "解锁时约管家" })).toBeVisible();
-  await vaultGate.getByLabel("主密码").fill("demo-master-password");
-  await vaultGate.getByRole("button", { name: "解锁", exact: true }).click();
-  await expect(vaultGate).toBeHidden();
+  await settingsUnlock.getByLabel("密码库主密码").fill("demo-master-password");
+  await settingsUnlock.getByRole("button", { name: "解锁", exact: true }).click();
+  await expect(settingsUnlock).toBeHidden();
 
   await page.getByRole("link", { name: "预约记录" }).click();
   const restoredRow = page.locator("tbody tr").filter({ hasText: "闭环验收目标" });

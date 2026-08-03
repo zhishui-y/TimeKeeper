@@ -2,16 +2,17 @@
 import { Plus, Trash2 } from "@lucide/vue";
 import { computed, ref, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
-import { useAccounts } from "../../composables/useAccounts";
 import { useAppointments } from "../../composables/useAppointments";
+import { useAppointmentPasswordCopy } from "../../composables/useAppointmentPasswordCopy";
 import { useUiStore } from "../../stores/ui";
 import type { Appointment, AppointmentFilters } from "../../types/domain";
 import AppointmentFiltersBar from "./AppointmentFiltersBar.vue";
 import AppointmentTable from "./AppointmentTable.vue";
+import AccountVaultUnlockDialog from "../accounts/AccountVaultUnlockDialog.vue";
 
 const ui = useUiStore();
 const { filters, items, loading, error, load } = useAppointments();
-const { items: accounts } = useAccounts();
+const passwordCopy = useAppointmentPasswordCopy();
 const selectedIds = ref<string[]>([]);
 const selectedCount = computed(() => selectedIds.value.length);
 
@@ -29,12 +30,19 @@ async function resetFilters(): Promise<void> {
 }
 
 async function duplicate(appointment: Appointment): Promise<void> {
-  try {
+  const action = async () => {
     const result = await api.duplicateAppointment(appointment.id);
     ui.markDataChanged();
     await load();
     ui.openEditAppointment(result.appointment);
     ui.notify("已复制预约，请确认日期和时间", "success");
+  };
+  try {
+    if (appointment.account?.passwordAvailable) {
+      await passwordCopy.runWhenUnlocked(action);
+    } else {
+      await passwordCopy.runWithUnlockRetry(action);
+    }
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
   }
@@ -53,32 +61,58 @@ async function cancel(appointment: Appointment): Promise<void> {
 
 async function remove(appointment: Appointment): Promise<void> {
   if (!globalThis.confirm(`确定永久删除 ${appointment.contactName} 的这条预约吗？`)) return;
-  try {
-    await api.deleteAppointment(appointment.id);
-    selectedIds.value = selectedIds.value.filter((id) => id !== appointment.id);
-    ui.markDataChanged();
-    await load();
-    ui.notify("预约已永久删除", "success");
-  } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
+  const action = async () => {
+    try {
+      await api.deleteAppointment(appointment.id);
+      selectedIds.value = selectedIds.value.filter((id) => id !== appointment.id);
+      ui.markDataChanged();
+      await load();
+      ui.notify("预约已永久删除", "success");
+    } catch (cause) {
+      ui.notify(errorMessage(cause), "danger");
+    }
+  };
+  if (appointment.account?.passwordAvailable) {
+    try {
+      await passwordCopy.runWhenUnlocked(action);
+    } catch (cause) {
+      ui.notify(errorMessage(cause), "danger");
+    }
+  } else {
+    await action();
   }
 }
 
 async function removeBatch(): Promise<void> {
   if (selectedCount.value === 0) return;
   if (!globalThis.confirm(`确定永久删除选中的 ${selectedCount.value} 条预约吗？`)) return;
-  try {
-    const deletedCount = await api.deleteAppointments(selectedIds.value);
-    selectedIds.value = [];
-    ui.markDataChanged();
-    await load();
-    if (deletedCount > 0) {
-      ui.notify(`已永久删除 ${deletedCount} 条预约`, "success");
-    } else {
-      ui.notify("未找到可删除的预约", "warning");
+  const ids = [...selectedIds.value];
+  const action = async () => {
+    try {
+      const deletedCount = await api.deleteAppointments(ids);
+      selectedIds.value = [];
+      ui.markDataChanged();
+      await load();
+      if (deletedCount > 0) {
+        ui.notify(`已永久删除 ${deletedCount} 条预约`, "success");
+      } else {
+        ui.notify("未找到可删除的预约", "warning");
+      }
+    } catch (cause) {
+      ui.notify(errorMessage(cause), "danger");
     }
-  } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
+  };
+  const needsVault = items.value.some(
+    (item) => ids.includes(item.id) && item.account?.passwordAvailable,
+  );
+  if (needsVault) {
+    try {
+      await passwordCopy.runWhenUnlocked(action);
+    } catch (cause) {
+      ui.notify(errorMessage(cause), "danger");
+    }
+  } else {
+    await action();
   }
 }
 
@@ -105,12 +139,7 @@ watch(
 <template>
   <div class="appointments-workspace page-stack">
     <div class="page-toolbar appointments-workspace__toolbar">
-      <AppointmentFiltersBar
-        :filters="filters"
-        :accounts="accounts"
-        @apply="applyFilters"
-        @reset="resetFilters"
-      />
+      <AppointmentFiltersBar :filters="filters" @apply="applyFilters" @reset="resetFilters" />
       <button
         class="button button--ghost"
         type="button"
@@ -138,7 +167,16 @@ watch(
       @edit="ui.openEditAppointment"
       @duplicate="duplicate"
       @cancel="cancel"
+      @copy-password="passwordCopy.copy($event.id)"
       @delete="remove"
+    />
+    <AccountVaultUnlockDialog
+      v-if="passwordCopy.ownsUnlockDialog"
+      :open="passwordCopy.unlockOpen.value"
+      :loading="passwordCopy.unlockLoading.value"
+      :error="passwordCopy.unlockError.value"
+      @close="passwordCopy.closeUnlock"
+      @submit="passwordCopy.unlockAndRetry"
     />
   </div>
 </template>

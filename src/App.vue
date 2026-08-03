@@ -6,11 +6,18 @@ import AppToast from "./components/common/AppToast.vue";
 import AppHeader from "./components/layout/AppHeader.vue";
 import AppSidebar from "./components/layout/AppSidebar.vue";
 import VaultGate from "./components/security/VaultGate.vue";
+import AccountVaultUnlockDialog from "./components/accounts/AccountVaultUnlockDialog.vue";
 import { useAccounts } from "./composables/useAccounts";
 import { useAppointmentStatusAutomation } from "./composables/useAppointmentStatusAutomation";
+import {
+  provideAppointmentPasswordCopy,
+  useAppointmentPasswordCopy,
+} from "./composables/useAppointmentPasswordCopy";
 import { useVault } from "./composables/useVault";
 import { useUiStore } from "./stores/ui";
 import type { AppointmentInput } from "./types/domain";
+import { appointmentMutationNeedsVault } from "./utils/appointment";
+import { vaultUnlockFeedback } from "./utils/vault";
 
 const AppointmentDrawer = defineAsyncComponent(
   () => import("./components/appointments/AppointmentDrawer.vue"),
@@ -26,9 +33,12 @@ const {
   load: loadAccounts,
 } = useAccounts({ immediate: false });
 const vault = useVault();
+const appointmentPasswordCopy = useAppointmentPasswordCopy();
+provideAppointmentPasswordCopy(appointmentPasswordCopy);
 useAppointmentStatusAutomation();
 const vaultReady = shallowRef(false);
 const savingAppointment = shallowRef(false);
+const deletingAppointment = shallowRef(false);
 const appointmentDrawerLoaded = shallowRef(false);
 const loadedAccountRevision = shallowRef<number | null>(null);
 let vaultTimer: ReturnType<typeof globalThis.setInterval> | undefined;
@@ -36,7 +46,7 @@ let vaultTimer: ReturnType<typeof globalThis.setInterval> | undefined;
 const pageTitle = computed(() => String(route.meta.title ?? "时约管家"));
 const pageSubtitle = computed(() => String(route.meta.subtitle ?? ""));
 
-async function saveAppointment(input: AppointmentInput): Promise<void> {
+async function persistAppointment(input: AppointmentInput): Promise<void> {
   if (savingAppointment.value) return;
   savingAppointment.value = true;
   const isEditing = Boolean(ui.activeAppointment);
@@ -67,11 +77,58 @@ async function saveAppointment(input: AppointmentInput): Promise<void> {
   }
 }
 
+async function saveAppointment(input: AppointmentInput): Promise<void> {
+  const action = () => persistAppointment(input);
+  if (appointmentMutationNeedsVault(input, ui.activeAppointment)) {
+    try {
+      await appointmentPasswordCopy.runWhenUnlocked(action);
+    } catch (cause) {
+      ui.notify(errorMessage(cause), "danger");
+    }
+    return;
+  }
+  await action();
+}
+
+async function removeActiveAppointment(): Promise<void> {
+  const appointment = ui.activeAppointment;
+  if (!appointment || savingAppointment.value || deletingAppointment.value) return;
+  if (!globalThis.confirm(`确定永久删除 ${appointment.contactName} 的这条预约吗？`)) return;
+
+  const action = async () => {
+    if (deletingAppointment.value) return;
+    deletingAppointment.value = true;
+    try {
+      await api.deleteAppointment(appointment.id);
+      ui.closeAppointmentDrawer();
+      ui.markDataChanged();
+      ui.notify("预约已永久删除", "success");
+    } catch (cause) {
+      ui.notify(errorMessage(cause), "danger");
+    } finally {
+      deletingAppointment.value = false;
+    }
+  };
+
+  if (appointment.account?.passwordAvailable) {
+    try {
+      await appointmentPasswordCopy.runWhenUnlocked(action);
+    } catch (cause) {
+      ui.notify(errorMessage(cause), "danger");
+    }
+    return;
+  }
+  await action();
+}
+
 async function submitVault(password: string): Promise<void> {
   const result = vault.status.value.initialized
     ? await vault.unlock(password)
     : await vault.initialize(password);
-  if (result) ui.notify("密码库已解锁", "success");
+  if (result) {
+    const feedback = vaultUnlockFeedback(result);
+    ui.notify(feedback.message, feedback.tone);
+  }
 }
 
 async function loadAppointmentDefaults(): Promise<void> {
@@ -144,8 +201,19 @@ onUnmounted(() => {
       :accounts-loading="accountsLoading"
       :default-reminder-minutes="ui.appointmentDefaultReminderMinutes"
       :saving="savingAppointment"
+      :deleting="deletingAppointment"
       @close="ui.closeAppointmentDrawer"
+      @copy-password="appointmentPasswordCopy.copy"
+      @delete="removeActiveAppointment"
       @save="saveAppointment"
+    />
+
+    <AccountVaultUnlockDialog
+      :open="appointmentPasswordCopy.unlockOpen.value"
+      :loading="appointmentPasswordCopy.unlockLoading.value"
+      :error="appointmentPasswordCopy.unlockError.value"
+      @close="appointmentPasswordCopy.closeUnlock"
+      @submit="appointmentPasswordCopy.unlockAndRetry"
     />
 
     <Transition name="toast">

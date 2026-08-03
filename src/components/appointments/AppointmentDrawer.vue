@@ -1,35 +1,14 @@
 <script setup lang="ts">
-import { BriefcaseBusiness, Gamepad2, Save, X } from "@lucide/vue";
-import { format } from "date-fns";
-import { reactive, shallowRef, useTemplateRef, watch } from "vue";
+import { BriefcaseBusiness, Gamepad2, Save, Trash2, X } from "@lucide/vue";
+import { computed, useTemplateRef } from "vue";
+import AppointmentAccountFields from "./AppointmentAccountFields.vue";
+import AppointmentContactFields from "./AppointmentContactFields.vue";
+import {
+  useAppointmentDraft,
+  type AppointmentAccountDraft,
+} from "../../composables/useAppointmentDraft";
 import { useModalFocus } from "../../composables/useModalFocus";
-import type {
-  AccountProfile,
-  Appointment,
-  AppointmentInput,
-  AppointmentMode,
-  ServiceStatus,
-  SettlementStatus,
-} from "../../types/domain";
-import { appointmentToInput } from "../../utils/appointment";
-
-interface Draft {
-  serviceDate: string;
-  startTime: string;
-  endTime: string;
-  contactName: string;
-  content: string;
-  mode: AppointmentMode;
-  serviceStatus: ServiceStatus;
-  settlementStatus: SettlementStatus;
-  accountProfileId: string;
-  rateNote: string;
-  paymentMethod: string;
-  amountYuan: string;
-  reminderEnabled: boolean;
-  reminderMinutes: number;
-  notes: string;
-}
+import type { AccountProfile, Appointment, AppointmentInput } from "../../types/domain";
 
 interface FocusTarget {
   focus(): void;
@@ -52,78 +31,56 @@ const props = withDefaults(
     accountsLoading?: boolean;
     defaultReminderMinutes: number;
     saving?: boolean;
+    deleting?: boolean;
   }>(),
-  { accountsLoading: false, initialFocus: "default", saving: false },
+  { accountsLoading: false, deleting: false, initialFocus: "default", saving: false },
 );
 
 const emit = defineEmits<{
   close: [];
+  delete: [];
   save: [input: AppointmentInput];
+  copyPassword: [appointmentId: string];
 }>();
-
-const draft = reactive<Draft>({
-  serviceDate: "",
-  startTime: "",
-  endTime: "",
-  contactName: "",
-  content: "",
-  mode: "business",
-  serviceStatus: "scheduled",
-  settlementStatus: "unsettled",
-  accountProfileId: "",
-  rateNote: "",
-  paymentMethod: "",
-  amountYuan: "",
-  reminderEnabled: true,
-  reminderMinutes: 30,
-  notes: "",
-});
-
-const errors = shallowRef<string[]>([]);
 const drawerRef = useTemplateRef("drawer");
 const appointmentFormRef = useTemplateRef("appointmentForm");
 const amountInputRef = useTemplateRef<FocusTarget>("amountInput");
 const formFieldSelector = "input:not([disabled]), select:not([disabled]), textarea:not([disabled])";
 
-function resetDraft(): void {
-  const source = props.appointment ? appointmentToInput(props.appointment) : null;
-  Object.assign(draft, {
-    serviceDate: source?.serviceDate ?? props.requestedDate,
-    startTime: source?.startTime ?? props.requestedStartTime ?? "",
-    endTime: source?.endTime ?? "",
-    contactName: source?.contactName ?? "",
-    content: source?.content ?? "",
-    mode: source?.mode ?? "business",
-    serviceStatus: source?.serviceStatus ?? "scheduled",
-    settlementStatus: source?.settlementStatus ?? "unsettled",
-    accountProfileId: source?.accountProfileId ?? "",
-    rateNote: source?.rateNote ?? "",
-    paymentMethod: source?.paymentMethod ?? "",
-    amountYuan:
-      source?.amountMinor === null || source?.amountMinor === undefined
-        ? ""
-        : String(source.amountMinor / 100),
-    reminderEnabled: source?.reminderMinutes !== null,
-    reminderMinutes: source?.reminderMinutes ?? props.defaultReminderMinutes,
-    notes: source?.notes ?? "",
-  });
-  errors.value = [];
+const {
+  draft,
+  errors,
+  applyContactPreset,
+  clearEndTime,
+  clearSecrets,
+  markTimeModified,
+  selectMode,
+  setCurrentTime,
+  submit,
+} = useAppointmentDraft({
+  open: () => props.open,
+  appointment: () => props.appointment,
+  requestedDate: () => props.requestedDate,
+  requestedStartTime: () => props.requestedStartTime,
+  defaultReminderMinutes: () => props.defaultReminderMinutes,
+  saving: () => props.saving,
+  onSave: (input) => emit("save", input),
+});
+
+const accountModel = computed<AppointmentAccountDraft>({
+  get: () => draft.account,
+  set: (value) => {
+    draft.account = value;
+  },
+});
+
+function close(): void {
+  clearSecrets();
+  emit("close");
 }
 
-function selectMode(mode: AppointmentMode): void {
-  draft.mode = mode;
-  if (mode === "entertainment") {
-    draft.settlementStatus = "not_applicable";
-    draft.rateNote = "";
-    draft.paymentMethod = "";
-    draft.amountYuan = "";
-  } else if (draft.settlementStatus === "not_applicable") {
-    draft.settlementStatus = "unsettled";
-  }
-}
-
-function setCurrentTime(field: "startTime" | "endTime"): void {
-  draft[field] = format(new Date(), "HH:mm");
+function updateVoiceChannel(value: string): void {
+  draft.voiceChannel = value.replace(/\D/g, "");
 }
 
 function focusAdjacentField(event: FieldTabEvent): void {
@@ -139,55 +96,10 @@ function focusAdjacentField(event: FieldTabEvent): void {
   (nextField as unknown as FocusTarget).focus();
 }
 
-function submit(): void {
-  if (props.saving) return;
-  const nextErrors: string[] = [];
-  if (!draft.serviceDate) nextErrors.push("请选择预约日期");
-  if (!draft.contactName.trim()) nextErrors.push("请填写联系人");
-  if (draft.endTime && !draft.startTime) nextErrors.push("填写结束时间前，需要先填写开始时间");
-  if (draft.startTime && draft.endTime && draft.startTime === draft.endTime) {
-    nextErrors.push("开始时间和结束时间不能相同");
-  }
-  const amount = draft.amountYuan ? Number(draft.amountYuan) : null;
-  if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
-    nextErrors.push("账单金额格式不正确");
-  }
-  if (draft.mode === "business" && draft.settlementStatus === "settled" && amount === null) {
-    nextErrors.push("已结算预约必须填写金额");
-  }
-  errors.value = nextErrors;
-  if (nextErrors.length > 0) return;
-
-  emit("save", {
-    serviceDate: draft.serviceDate,
-    startTime: draft.startTime || null,
-    endTime: draft.endTime || null,
-    contactName: draft.contactName.trim(),
-    content: draft.content.trim() || null,
-    mode: draft.mode,
-    serviceStatus: draft.serviceStatus,
-    settlementStatus: draft.mode === "entertainment" ? "not_applicable" : draft.settlementStatus,
-    accountProfileId: draft.accountProfileId || null,
-    rateNote: draft.mode === "business" ? draft.rateNote.trim() || null : null,
-    paymentMethod: draft.mode === "business" ? draft.paymentMethod.trim() || null : null,
-    amountMinor: draft.mode === "business" && amount !== null ? Math.round(amount * 100) : null,
-    reminderMinutes: draft.reminderEnabled ? Number(draft.reminderMinutes) : null,
-    notes: draft.notes.trim() || null,
-  });
-}
-
-watch(
-  () => [props.open, props.appointment, props.requestedDate, props.requestedStartTime] as const,
-  ([open]) => {
-    if (open) resetDraft();
-  },
-  { immediate: true },
-);
-
 useModalFocus({
   open: () => props.open,
   container: drawerRef,
-  close: () => emit("close"),
+  close,
   initialFocus: () => (props.initialFocus === "amount" ? amountInputRef.value : null),
 });
 </script>
@@ -196,12 +108,7 @@ useModalFocus({
   <Teleport to="body">
     <Transition name="drawer">
       <div v-if="open" class="drawer-layer">
-        <button
-          class="drawer-backdrop"
-          type="button"
-          aria-label="关闭预约编辑"
-          @click="emit('close')"
-        />
+        <button class="drawer-backdrop" type="button" aria-label="关闭预约编辑" @click="close" />
         <aside
           ref="drawer"
           class="drawer"
@@ -215,7 +122,7 @@ useModalFocus({
               <span class="section-kicker">APPOINTMENT</span>
               <h2 id="appointment-drawer-title">{{ appointment ? "编辑预约" : "新建预约" }}</h2>
             </div>
-            <button class="icon-button" type="button" aria-label="关闭" @click="emit('close')">
+            <button class="icon-button" type="button" aria-label="关闭" @click="close">
               <X :size="18" />
             </button>
           </header>
@@ -267,6 +174,7 @@ useModalFocus({
                       v-model="draft.startTime"
                       class="input"
                       type="time"
+                      @input="markTimeModified"
                     />
                     <button
                       class="time-field__button"
@@ -286,6 +194,7 @@ useModalFocus({
                       v-model="draft.endTime"
                       class="input"
                       type="time"
+                      @input="markTimeModified"
                     />
                     <button
                       class="time-field__button"
@@ -300,7 +209,7 @@ useModalFocus({
                       type="button"
                       aria-label="清空结束时间"
                       :disabled="!draft.endTime"
-                      @click="draft.endTime = ''"
+                      @click="clearEndTime"
                     >
                       清空
                     </button>
@@ -308,10 +217,10 @@ useModalFocus({
                 </div>
               </div>
               <div class="form-grid">
-                <label class="field">
-                  <span class="field__label">联系人 *</span>
-                  <input v-model="draft.contactName" class="input" placeholder="谁约的" />
-                </label>
+                <AppointmentContactFields
+                  v-model="draft.contactName"
+                  @select="applyContactPreset"
+                />
                 <label class="field">
                   <span class="field__label">预约内容</span>
                   <input v-model="draft.content" class="input" placeholder="上分、陪练、日常…" />
@@ -321,7 +230,7 @@ useModalFocus({
 
             <section class="form-section">
               <h3>进度与账号</h3>
-              <div class="form-grid">
+              <div class="form-grid form-grid--status">
                 <label class="field">
                   <span class="field__label">预约进度</span>
                   <select v-model="draft.serviceStatus" class="select">
@@ -331,21 +240,14 @@ useModalFocus({
                     <option value="cancelled">已取消</option>
                   </select>
                 </label>
-                <label class="field">
-                  <span class="field__label">关联账号</span>
-                  <select
-                    v-model="draft.accountProfileId"
-                    class="select"
-                    :disabled="accountsLoading"
-                  >
-                    <option value="">{{ accountsLoading ? "账号加载中…" : "不关联账号" }}</option>
-                    <option v-for="account in accounts" :key="account.id" :value="account.id">
-                      {{ account.contactName || account.accountName }} ·
-                      {{ account.server || "区服待补" }}
-                    </option>
-                  </select>
-                </label>
               </div>
+              <AppointmentAccountFields
+                v-model="accountModel"
+                :accounts="accounts"
+                :accounts-loading="accountsLoading"
+                :appointment-id="appointment?.id"
+                @copy-password="emit('copyPassword', $event)"
+              />
             </section>
 
             <section v-if="draft.mode === 'business'" class="form-section form-section--billing">
@@ -396,7 +298,28 @@ useModalFocus({
             </section>
 
             <section class="form-section">
-              <h3>提醒与备注</h3>
+              <h3>语音、提醒与备注</h3>
+              <div class="form-grid">
+                <label class="field">
+                  <span class="field__label">语音</span>
+                  <select v-model="draft.voicePlatform" class="select" aria-label="语音平台">
+                    <option value="">不使用语音</option>
+                    <option value="yy">YY语音</option>
+                    <option value="qq">QQ语音</option>
+                  </select>
+                </label>
+                <label v-if="draft.voicePlatform === 'yy'" class="field">
+                  <span class="field__label">YY频道号码</span>
+                  <input
+                    class="input mono-number"
+                    inputmode="numeric"
+                    pattern="[0-9]*"
+                    :value="draft.voiceChannel"
+                    placeholder="可留空"
+                    @input="updateVoiceChannel(($event.target as HTMLInputElement).value)"
+                  />
+                </label>
+              </div>
               <div class="reminder-row">
                 <label class="check-label">
                   <input v-model="draft.reminderEnabled" type="checkbox" />
@@ -427,16 +350,28 @@ useModalFocus({
           </form>
 
           <footer class="drawer__footer">
-            <button class="button" type="button" @click="emit('close')">取消</button>
             <button
-              class="button button--primary"
-              type="submit"
-              form="appointment-form"
-              :disabled="saving"
+              v-if="appointment"
+              class="button button--danger"
+              type="button"
+              :disabled="saving || deleting"
+              @click="emit('delete')"
             >
-              <Save :size="16" />
-              {{ saving ? "保存中…" : "保存预约" }}
+              <Trash2 :size="16" />
+              {{ deleting ? "删除中…" : "删除预约" }}
             </button>
+            <div class="drawer__footer-actions">
+              <button class="button" type="button" @click="close">取消</button>
+              <button
+                class="button button--primary"
+                type="submit"
+                form="appointment-form"
+                :disabled="saving || deleting"
+              >
+                <Save :size="16" />
+                {{ saving ? "保存中…" : "保存预约" }}
+              </button>
+            </div>
           </footer>
         </aside>
       </div>
@@ -467,7 +402,7 @@ useModalFocus({
   right: 12px;
   bottom: 12px;
   display: grid;
-  width: min(600px, calc(100vw - 32px));
+  width: min(640px, calc(100vw - 32px));
   height: auto;
   grid-template-rows: 78px minmax(0, 1fr) 70px;
   overflow: hidden;
@@ -503,10 +438,17 @@ useModalFocus({
 }
 
 .drawer__footer {
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 8px;
   border-top: 1px solid var(--line);
   border-bottom: 0;
+}
+
+.drawer__footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .mode-switch {
@@ -605,6 +547,10 @@ useModalFocus({
 
 .form-grid--3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.form-grid--status {
+  grid-template-columns: minmax(180px, 0.5fr);
 }
 
 .form-grid__wide {

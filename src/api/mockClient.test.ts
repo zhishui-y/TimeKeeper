@@ -76,6 +76,18 @@ describe("browser mock API", () => {
     );
   });
 
+  it("copies a profile character name through the demo client", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const profile = (await mockApi.listAccountProfiles()).find((item) => item.characterName);
+    expect(profile).toBeDefined();
+
+    await mockApi.copyAccountCharacterName(profile!.id);
+
+    expect(writeText).toHaveBeenCalledWith(profile!.characterName);
+    vi.unstubAllGlobals();
+  });
+
   it("removes billing data from entertainment appointments", async () => {
     const result = await mockApi.createAppointment({
       serviceDate: "2026-07-20",
@@ -95,20 +107,20 @@ describe("browser mock API", () => {
     expect(result.appointment.paymentMethod).toBeNull();
   });
 
-  it("uses the reminder setting only when reminder minutes are omitted", async () => {
+  it("keeps reminders disabled when reminder minutes are omitted or null", async () => {
     const previousSettings = await mockApi.getSettings();
     await mockApi.updateSettings({ ...previousSettings, defaultReminderMinutes: 60 });
 
     try {
-      const inherited = await mockApi.createAppointment(
-        businessInput("2099-08-05", "10:00", "11:00", "继承默认提醒", 1_000),
+      const omitted = await mockApi.createAppointment(
+        businessInput("2099-08-05", "10:00", "11:00", "省略提醒", 1_000),
       );
       const disabled = await mockApi.createAppointment({
         ...businessInput("2099-08-05", "12:00", "13:00", "关闭提醒", 1_000),
         reminderMinutes: null,
       });
 
-      expect(inherited.appointment.reminderMinutes).toBe(60);
+      expect(omitted.appointment.reminderMinutes).toBeNull();
       expect(disabled.appointment.reminderMinutes).toBeNull();
     } finally {
       await mockApi.updateSettings(previousSettings);
@@ -213,7 +225,7 @@ describe("browser mock API", () => {
     expect((await mockApi.getDashboardSummary(date)).todaySettledMinor).toBe(0);
   });
 
-  it("clears a deleted account link while preserving the appointment snapshot", async () => {
+  it("keeps an appointment account independent after its source profile is deleted", async () => {
     await mockApi.unlockVault("test-password");
     const account = await mockApi.createAccountProfile({
       accountName: `snapshot-account-${Date.now()}`,
@@ -224,15 +236,15 @@ describe("browser mock API", () => {
     });
     const created = await mockApi.createAppointment({
       ...businessInput("2099-08-06", "10:00", "11:00", "快照保留", 8_800),
-      accountProfileId: account.id,
+      account: { kind: "profile", profileId: account.id },
     });
 
     await mockApi.deleteAccountProfile(account.id);
     const unlinked = await mockApi.getAppointment(created.appointment.id);
-    expect(unlinked.accountProfileId).toBeNull();
-    expect(unlinked.accountSnapshot).toMatchObject({
+    expect(unlinked.account).toMatchObject({
       accountName: account.accountName,
-      characterName: "历史角色",
+      server: "历史区服",
+      passwordAvailable: true,
     });
 
     await mockApi.updateAppointment(unlinked.id, {
@@ -240,11 +252,10 @@ describe("browser mock API", () => {
       notes: "删除账号后编辑",
     });
     const edited = await mockApi.getAppointment(unlinked.id);
-    expect(edited.accountProfileId).toBeNull();
-    expect(edited.accountSnapshot).toEqual(unlinked.accountSnapshot);
+    expect(edited.account).toEqual(unlinked.account);
   });
 
-  it("batch deletes account profiles, passwords, and live appointment links", async () => {
+  it("batch deletes account profiles without rewriting embedded appointment accounts", async () => {
     await mockApi.unlockVault("test-password");
     const suffix = Date.now();
     const first = await mockApi.createAccountProfile({
@@ -257,7 +268,7 @@ describe("browser mock API", () => {
     });
     const linked = await mockApi.createAppointment({
       ...businessInput("2099-08-07", "10:00", "11:00", "批量账号删除", 6_600),
-      accountProfileId: first.id,
+      account: { kind: "profile", profileId: first.id },
     });
 
     await expect(
@@ -267,7 +278,7 @@ describe("browser mock API", () => {
     await expect(mockApi.getAccountProfile(second.id)).rejects.toThrow("账号档案不存在");
     await expect(mockApi.revealAccountPassword(first.id)).rejects.toThrow("尚未保存密码");
     await expect(mockApi.getAppointment(linked.appointment.id)).resolves.toMatchObject({
-      accountProfileId: null,
+      account: { accountName: first.accountName, passwordAvailable: true },
     });
     await expect(mockApi.deleteAccountProfiles(["unknown-account"])).resolves.toBe(0);
   });
@@ -322,7 +333,7 @@ describe("browser mock API", () => {
 
   it("preserves the first weekly usage marker then clears at China Monday", async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-02T12:00:00Z"));
+    vi.setSystemTime(new Date("2098-08-03T12:00:00Z"));
     const profile = (await mockApi.listAccountProfiles())[0]!;
     await mockApi.updateAccountProfileUsage(profile.id, "周日安排");
     const populatedCount = (await mockApi.listAccountProfiles()).filter(
@@ -330,13 +341,13 @@ describe("browser mock API", () => {
     ).length;
 
     await expect(mockApi.syncAccountProfileUsageWeek()).resolves.toMatchObject({
-      weekStart: "2026-07-27",
+      weekStart: "2098-07-28",
       clearedCount: 0,
     });
 
-    vi.setSystemTime(new Date("2026-08-02T16:00:00Z"));
+    vi.setSystemTime(new Date("2098-08-03T16:00:00Z"));
     await expect(mockApi.syncAccountProfileUsageWeek()).resolves.toMatchObject({
-      weekStart: "2026-08-03",
+      weekStart: "2098-08-04",
       clearedCount: populatedCount,
     });
     await expect(mockApi.getAccountProfile(profile.id)).resolves.toMatchObject({
@@ -351,6 +362,44 @@ describe("browser mock API", () => {
     await expect(mockApi.getAccountProfile(profile.id)).resolves.toMatchObject({
       usageInfo: null,
     });
+  });
+
+  it("stores a one-time appointment secret outside response DTOs and returns safe contact presets", async () => {
+    await mockApi.unlockVault("test-password");
+    const suffix = Date.now();
+    const contactName = `模板联系人-${suffix}`;
+    const first = await mockApi.createAppointment({
+      ...businessInput("2099-08-11", "18:00", "19:00", contactName, 9_900),
+      account: {
+        kind: "embedded",
+        details: {
+          accountName: `temporary-${suffix}`,
+          specialization: "冰心",
+          server: "梦江南",
+          gearScore: "20万",
+        },
+        credential: { kind: "replace", password: "one-time-secret" },
+      },
+      voicePlatform: "yy",
+      voiceChannel: "123456",
+    });
+
+    expect(first.appointment.account).toMatchObject({
+      accountName: `temporary-${suffix}`,
+      passwordAvailable: true,
+    });
+    expect(JSON.stringify(first.appointment)).not.toContain("one-time-secret");
+
+    const presets = await mockApi.listContactPresets(contactName, 10);
+    expect(presets).toHaveLength(1);
+    expect(presets[0]).toMatchObject({
+      sourceAppointmentId: first.appointment.id,
+      contactName,
+      voicePlatform: "yy",
+      voiceChannel: "123456",
+      account: { passwordAvailable: true },
+    });
+    expect(JSON.stringify(presets)).not.toContain("one-time-secret");
   });
 
   it("restores the in-memory demo data captured by a backup", async () => {

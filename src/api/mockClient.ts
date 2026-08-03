@@ -10,6 +10,7 @@ import type {
   AppointmentFilters,
   AppointmentInput,
   AppointmentMutationResult,
+  ContactPreset,
   ReportGranularity,
   RevenuePoint,
   ServiceStatus,
@@ -27,7 +28,12 @@ import {
 } from "../utils/accountRoleData";
 import { MIN_MASTER_PASSWORD_CHARACTERS, isMasterPasswordLongEnough } from "../utils/security";
 import { combineDateTime } from "../utils/appointment";
-import { demoAccounts, demoAppointments, demoPasswords } from "./mockData";
+import {
+  demoAccounts,
+  demoAppointmentPasswords,
+  demoAppointments,
+  demoPasswords,
+} from "./mockData";
 import type { ApiClient } from "./types";
 
 let appointments = structuredClone(demoAppointments);
@@ -39,6 +45,7 @@ let accounts = structuredClone(demoAccounts).sort((a, b) => {
   );
 });
 const passwords = new Map(demoPasswords);
+const appointmentPasswords = new Map(demoAppointmentPasswords);
 let vault: VaultStatus = { initialized: true, unlocked: true, autoLockMinutes: 15 };
 let vaultPassword: string | null = null;
 const ACCOUNT_TABLE_WIDTHS_STORAGE_KEY = "timekeeper.demo.accountTableColumnWidths";
@@ -86,6 +93,7 @@ interface MockBackupSnapshot {
   appointments: Appointment[];
   accounts: AccountProfile[];
   passwords: Array<[string, string]>;
+  appointmentPasswords: Array<[string, string]>;
   settings: AppSettings;
   vault: Omit<VaultStatus, "unlocked">;
   vaultPassword: string | null;
@@ -180,19 +188,6 @@ function syncMockAccountUsageWeek(): AccountUsageWeekSyncResult {
   return { weekStart, clearedCount };
 }
 
-function accountSnapshot(accountProfileId?: string | null): Appointment["accountSnapshot"] {
-  const account = accounts.find((item) => item.id === accountProfileId);
-  if (!account) return null;
-  return {
-    accountName: account.accountName,
-    contactName: account.contactName,
-    server: account.server,
-    characterName: account.characterName,
-    specialization: account.specialization,
-    gearScore: account.gearScore,
-  };
-}
-
 function toAppointment(input: AppointmentInput, existing?: Appointment): Appointment {
   const timestamp = new Date().toISOString();
   if (input.amountMinor !== null && input.amountMinor !== undefined && input.amountMinor < 0) {
@@ -207,14 +202,13 @@ function toAppointment(input: AppointmentInput, existing?: Appointment): Appoint
   }
   const { startsAt, endsAt } = combineDateTime(input.serviceDate, input.startTime, input.endTime);
   const entertainment = input.mode === "entertainment";
-  const nextAccountProfileId = input.accountProfileId || null;
-  const nextAccountSnapshot = nextAccountProfileId
-    ? existing?.accountProfileId === nextAccountProfileId && existing.accountSnapshot
-      ? existing.accountSnapshot
-      : accountSnapshot(nextAccountProfileId)
-    : (existing?.accountSnapshot ?? null);
+  if (input.voicePlatform === "yy" && input.voiceChannel && !/^\d+$/.test(input.voiceChannel)) {
+    throw new Error("YY频道号只能填写数字");
+  }
+  const id = existing?.id ?? makeId("appointment");
+  const account = resolveAppointmentAccount(id, input, existing);
   return {
-    id: existing?.id ?? makeId("appointment"),
+    id,
     serviceDate: input.serviceDate,
     startsAt,
     endsAt,
@@ -223,18 +217,73 @@ function toAppointment(input: AppointmentInput, existing?: Appointment): Appoint
     mode: input.mode,
     serviceStatus: input.serviceStatus,
     settlementStatus: entertainment ? "not_applicable" : input.settlementStatus,
-    accountProfileId: nextAccountProfileId,
-    accountSnapshot: nextAccountSnapshot,
+    account,
     rateNote: entertainment ? null : input.rateNote?.trim() || null,
     paymentMethod: entertainment ? null : input.paymentMethod?.trim() || null,
     amountMinor: entertainment ? null : (input.amountMinor ?? null),
-    reminderMinutes:
-      input.reminderMinutes === undefined ? settings.defaultReminderMinutes : input.reminderMinutes,
+    reminderMinutes: input.reminderMinutes ?? null,
+    voicePlatform: input.voicePlatform ?? null,
+    voiceChannel: input.voicePlatform === "yy" ? input.voiceChannel?.trim() || null : null,
     notes: input.notes?.trim() || null,
     importFingerprint: existing?.importFingerprint ?? null,
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
   };
+}
+
+function accountDetailsFromProfile(profile: AccountProfile): NonNullable<Appointment["account"]> {
+  return {
+    accountName: profile.accountName,
+    server: profile.server,
+    specialization: profile.specialization,
+    gearScore: profile.gearScore,
+    passwordAvailable: true,
+  };
+}
+
+function resolveAppointmentAccount(
+  appointmentId: string,
+  input: AppointmentInput,
+  existing?: Appointment,
+): Appointment["account"] {
+  if (!input.account) {
+    if (existing?.account?.passwordAvailable) requireVault();
+    appointmentPasswords.delete(appointmentId);
+    return null;
+  }
+
+  if (input.account.kind === "profile") {
+    requireVault();
+    const profile = getAccountOrThrow(input.account.profileId);
+    appointmentPasswords.set(appointmentId, getPasswordOrThrow(profile.id));
+    return accountDetailsFromProfile(profile);
+  }
+
+  const details = input.account.details;
+  const account = {
+    accountName: details.accountName.trim(),
+    server: details.server?.trim() || null,
+    specialization: details.specialization?.trim() || null,
+    gearScore: details.gearScore?.trim() || null,
+    passwordAvailable: false,
+  };
+  const credential = input.account.credential;
+  if (credential.kind === "keep") {
+    account.passwordAvailable =
+      Boolean(existing?.account?.passwordAvailable) && appointmentPasswords.has(appointmentId);
+  } else if (credential.kind === "replace") {
+    requireVault();
+    if (!credential.password) throw new Error("临时账号必须填写密码");
+    appointmentPasswords.set(appointmentId, credential.password);
+    account.passwordAvailable = true;
+  } else {
+    requireVault();
+    const password = appointmentPasswords.get(credential.sourceAppointmentId);
+    if (password === undefined) throw new Error("上次预约的账号密码不可用");
+    appointmentPasswords.set(appointmentId, password);
+    account.passwordAvailable = true;
+  }
+  return account;
 }
 
 function findConflicts(candidate: Appointment): AppointmentConflict[] {
@@ -272,14 +321,17 @@ function filteredAppointments(filters: AppointmentFilters = {}): Appointment[] {
     .filter(
       (item) => !filters.settlementStatus || item.settlementStatus === filters.settlementStatus,
     )
-    .filter(
-      (item) => !filters.accountProfileId || item.accountProfileId === filters.accountProfileId,
-    )
     .filter((item) => {
       if (!query) return true;
-      return [item.contactName, item.content, item.notes, item.accountSnapshot?.accountName].some(
-        (value) => value?.toLocaleLowerCase().includes(query),
-      );
+      return [
+        item.contactName,
+        item.content,
+        item.notes,
+        item.account?.accountName,
+        item.account?.server,
+        item.account?.specialization,
+        item.account?.gearScore,
+      ].some((value) => value?.toLocaleLowerCase().includes(query));
     })
     .sort((a, b) => {
       const left = a.startsAt ?? `${a.serviceDate}T23:59:59`;
@@ -333,10 +385,26 @@ function getAppointmentOrThrow(id: string): Appointment {
   return item;
 }
 
+function scheduleClipboardClear(expectedText: string): void {
+  globalThis.setTimeout(async () => {
+    const clipboard = globalThis.navigator?.clipboard;
+    if (!clipboard?.readText) return;
+    try {
+      if ((await clipboard.readText()) === expectedText) await clipboard.writeText("");
+    } catch {
+      // 浏览器演示模式无法再次读取剪贴板时保持现状，避免误清除用户后来复制的内容。
+    }
+  }, 30_000);
+}
+
 function deleteAppointmentsByIds(ids: readonly string[]): number {
   const targets = new Set(ids.map((id) => id.trim()).filter(Boolean));
+  if (appointments.some((item) => targets.has(item.id) && item.account?.passwordAvailable)) {
+    requireVault();
+  }
   const before = appointments.length;
   appointments = appointments.filter((item) => !targets.has(item.id));
+  targets.forEach((id) => appointmentPasswords.delete(id));
   return before - appointments.length;
 }
 
@@ -378,11 +446,6 @@ function deleteAccountProfilesByIds(ids: readonly string[]): number {
     accounts.filter((account) => targets.has(account.id)).map((account) => account.id),
   );
   accounts = accounts.filter((account) => !existingIds.has(account.id));
-  appointments = appointments.map((appointment) =>
-    appointment.accountProfileId && existingIds.has(appointment.accountProfileId)
-      ? { ...appointment, accountProfileId: null }
-      : appointment,
-  );
   existingIds.forEach((id) => passwords.delete(id));
   return existingIds.size;
 }
@@ -424,13 +487,76 @@ export const mockApi: ApiClient = {
       mode: source.mode,
       serviceStatus: "scheduled",
       settlementStatus: source.mode === "business" ? "unsettled" : "not_applicable",
-      accountProfileId: source.accountProfileId,
+      account: source.account
+        ? {
+            kind: "embedded",
+            details: {
+              accountName: source.account.accountName,
+              server: source.account.server,
+              specialization: source.account.specialization,
+              gearScore: source.account.gearScore,
+            },
+            credential: source.account.passwordAvailable
+              ? { kind: "copyFromAppointment", sourceAppointmentId: source.id }
+              : { kind: "keep" },
+          }
+        : null,
       rateNote: source.rateNote,
       paymentMethod: null,
       amountMinor: source.amountMinor,
       reminderMinutes: source.reminderMinutes,
+      voicePlatform: source.voicePlatform,
+      voiceChannel: source.voiceChannel,
       notes: source.notes,
     });
+  },
+  async listContactPresets(query, limit = 10) {
+    const normalized = query?.trim().toLocaleLowerCase();
+    const seen = new Set<string>();
+    const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 50);
+    const sorted = appointments
+      .filter((item) => item.serviceStatus !== "cancelled")
+      .filter((item) => !normalized || item.contactName.toLocaleLowerCase().includes(normalized))
+      .sort((left, right) => {
+        const dateOrder = right.serviceDate.localeCompare(left.serviceDate);
+        if (dateOrder !== 0) return dateOrder;
+        const timeOrder = (right.startsAt ?? "").localeCompare(left.startsAt ?? "");
+        return timeOrder || right.createdAt.localeCompare(left.createdAt);
+      });
+    const result: ContactPreset[] = [];
+    for (const item of sorted) {
+      const key = item.contactName.trim().toLocaleLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({
+        sourceAppointmentId: item.id,
+        contactName: item.contactName,
+        startTime: item.startsAt ? format(parseISO(item.startsAt), "HH:mm") : null,
+        endTime: item.endsAt ? format(parseISO(item.endsAt), "HH:mm") : null,
+        content: item.content,
+        mode: item.mode,
+        account: item.account,
+        rateNote: item.rateNote,
+        paymentMethod: item.paymentMethod,
+        amountMinor: item.amountMinor,
+        reminderMinutes: item.reminderMinutes,
+        notes: item.notes,
+        voicePlatform: item.voicePlatform,
+        voiceChannel: item.voiceChannel,
+      });
+      if (result.length >= safeLimit) break;
+    }
+    return structuredClone(result);
+  },
+  async copyAppointmentAccountPassword(id) {
+    requireVault();
+    const appointment = getAppointmentOrThrow(id);
+    if (!appointment.account?.passwordAvailable) throw new Error("该预约没有可复制的账号密码");
+    const password = appointmentPasswords.get(id);
+    if (password === undefined) throw new Error("该预约尚未保存账号密码");
+    if (!globalThis.navigator?.clipboard) throw new Error("当前环境无法访问剪贴板");
+    await globalThis.navigator.clipboard.writeText(password);
+    scheduleClipboardClear(password);
   },
   async deleteAppointments(ids) {
     return deleteAppointmentsByIds(ids);
@@ -565,6 +691,13 @@ export const mockApi: ApiClient = {
     if (!globalThis.navigator?.clipboard) throw new Error("当前环境无法访问剪贴板");
     await globalThis.navigator.clipboard.writeText(profile.accountName);
   },
+  async copyAccountCharacterName(id) {
+    const profile = getAccountOrThrow(id);
+    const characterName = profile.characterName?.trim();
+    if (!characterName) throw new Error("角色名未填写");
+    if (!globalThis.navigator?.clipboard) throw new Error("当前环境无法访问剪贴板");
+    await globalThis.navigator.clipboard.writeText(characterName);
+  },
   async refreshAccountProfileRoleData(ids) {
     if (accountRoleDataRefreshBusy) throw new Error("已有角色数据更新任务正在进行");
     const validationError = validateAccountRoleDataServerUrl(settings.accountRoleDataServerUrl);
@@ -623,10 +756,7 @@ export const mockApi: ApiClient = {
     const password = getPasswordOrThrow(id);
     if (navigator.clipboard) {
       await navigator.clipboard.writeText(password);
-      window.setTimeout(
-        () => void navigator.clipboard.writeText("").catch(() => undefined),
-        30_000,
-      );
+      scheduleClipboardClear(password);
     }
   },
 
@@ -739,14 +869,13 @@ export const mockApi: ApiClient = {
       baseYear,
       appointmentCount: 357,
       profileCount: 22,
-      unmatchedProfileCount: 15,
+      unmatchedProfileCount: 0,
       crossMidnightCount: 50,
       passwordConflictCount: 1,
       skippedCount: 0,
-      warningCount: 3,
+      warningCount: 2,
       warnings: [
-        "15个流水账号未匹配到完整档案，将标记为待完善",
-        "1个账号存在多个历史密码，将以账号档案表为准",
+        "1个同名账号存在多个历史密码，账号档案和各预约将分别保留各自密码",
         "50条跨午夜记录已按次日结束处理",
       ],
       previewToken: makeId("preview"),
@@ -758,11 +887,11 @@ export const mockApi: ApiClient = {
     }
     return {
       importedAppointments: selection.appointments ? 357 : 0,
-      importedProfiles: selection.accounts ? 37 : 0,
+      importedProfiles: selection.accounts ? 22 : 0,
       skippedDuplicates: 0,
       skippedAppointmentDuplicates: 0,
       skippedProfileDuplicates: 0,
-      warnings: ["15个账号档案已标记为待完善"],
+      warnings: [],
     };
   },
   async createBackup(destination) {
@@ -772,6 +901,7 @@ export const mockApi: ApiClient = {
       appointments: structuredClone(appointments),
       accounts: structuredClone(accounts),
       passwords: structuredClone([...passwords.entries()]),
+      appointmentPasswords: structuredClone([...appointmentPasswords.entries()]),
       settings: structuredClone(settings),
       vault: {
         initialized: vault.initialized,
@@ -795,6 +925,10 @@ export const mockApi: ApiClient = {
     accounts = structuredClone(backupSnapshot.accounts);
     passwords.clear();
     for (const [id, password] of backupSnapshot.passwords) passwords.set(id, password);
+    appointmentPasswords.clear();
+    for (const [id, password] of backupSnapshot.appointmentPasswords) {
+      appointmentPasswords.set(id, password);
+    }
     settings = structuredClone(backupSnapshot.settings);
     vault = { ...structuredClone(backupSnapshot.vault), unlocked: false };
     vaultPassword = backupSnapshot.vaultPassword;
@@ -810,7 +944,8 @@ export const mockApi: ApiClient = {
     if (serverUrlError) throw new Error(serverUrlError);
     storeAccountTableColumnWidths(nextSettings.accountTableColumnWidths);
     settings = {
-      ...structuredClone(nextSettings),
+      ...nextSettings,
+      accountTableColumnWidths: { ...nextSettings.accountTableColumnWidths },
       accountRoleDataServerUrl: nextSettings.accountRoleDataServerUrl.trim(),
       lastAccountUsageWeekStart: settings.lastAccountUsageWeekStart,
     };

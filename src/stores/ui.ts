@@ -21,7 +21,9 @@ export const useUiStore = defineStore("ui", () => {
   const accountRevision = shallowRef(0);
   const appointmentDefaultReminderMinutes = shallowRef(30);
   const toast = shallowRef<ToastMessage | null>(null);
+  const queuedToasts: Array<Omit<ToastMessage, "id">> = [];
   let toastTimer: number | undefined;
+  let toastSequence = 0;
 
   function openCreateAppointment(
     serviceDate = format(new Date(), "yyyy-MM-dd"),
@@ -68,17 +70,34 @@ export const useUiStore = defineStore("ui", () => {
     appointmentDefaultReminderMinutes.value = minutes;
   }
 
-  function notify(message: string, tone: ToastTone = "neutral"): void {
+  function showToast(message: string, tone: ToastTone): void {
     window.clearTimeout(toastTimer);
-    toast.value = { id: Date.now(), message, tone };
-    toastTimer = window.setTimeout(() => {
-      toast.value = null;
-    }, 3600);
+    toastSequence += 1;
+    toast.value = { id: Date.now() + toastSequence, message, tone };
+    toastTimer = window.setTimeout(dismissToast, 3600);
+  }
+
+  function notify(message: string, tone: ToastTone = "neutral"): void {
+    queuedToasts.splice(0);
+    showToast(message, tone);
+  }
+
+  function notifyAfterCurrent(message: string, tone: ToastTone = "neutral"): void {
+    if (!toast.value) {
+      showToast(message, tone);
+      return;
+    }
+    queuedToasts.push({ message, tone });
   }
 
   function dismissToast(): void {
     window.clearTimeout(toastTimer);
-    toast.value = null;
+    const next = queuedToasts.shift();
+    if (next) {
+      showToast(next.message, next.tone);
+    } else {
+      toast.value = null;
+    }
   }
 
   return {
@@ -99,6 +118,7 @@ export const useUiStore = defineStore("ui", () => {
     markAccountsChanged,
     setAppointmentDefaultReminderMinutes,
     notify,
+    notifyAfterCurrent,
     dismissToast,
   };
 });

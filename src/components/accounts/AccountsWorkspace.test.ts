@@ -164,6 +164,9 @@ describe("AccountsWorkspace batch delete feedback", () => {
     });
     const reorder = vi.spyOn(mockApi, "reorderAccountProfiles").mockResolvedValue();
     const copyAccountName = vi.spyOn(mockApi, "copyAccountName").mockResolvedValue();
+    const copyAccountCharacterName = vi
+      .spyOn(mockApi, "copyAccountCharacterName")
+      .mockResolvedValue();
     const copyAccountPassword = vi.spyOn(mockApi, "copyAccountPassword").mockResolvedValue();
     await useVault().load();
 
@@ -184,6 +187,11 @@ describe("AccountsWorkspace batch delete feedback", () => {
     await flushPromises();
     expect(copyAccountName).toHaveBeenCalledWith("account-2");
     expect(ui.toast?.message).toBe("账号已复制");
+
+    await wrapper.get('button[aria-label="复制角色名 角色二"]').trigger("click");
+    await flushPromises();
+    expect(copyAccountCharacterName).toHaveBeenCalledWith("account-2");
+    expect(ui.toast?.message).toBe("角色名已复制");
 
     await wrapper.get('button[aria-label="复制密码 账号二"]').trigger("click");
     await flushPromises();

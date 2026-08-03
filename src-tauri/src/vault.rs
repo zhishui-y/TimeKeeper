@@ -4,7 +4,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     str,
-    sync::{Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard},
     time::{Duration, Instant},
 };
 
@@ -12,6 +12,7 @@ use arboard::Clipboard;
 use iota_stronghold::{KeyProvider, SnapshotPath};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use sqlx::Row;
 use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_plugin_stronghold::{
     kdf::KeyDerivation,
@@ -20,7 +21,7 @@ use tauri_plugin_stronghold::{
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-use crate::{backup, backup::BackupState, settings::SettingsState};
+use crate::{backup, backup::BackupState, db::Database, settings::SettingsState};
 
 const VAULT_FILE_NAME: &str = "vault.hold";
 const SALT_FILE_NAME: &str = "vault.salt";
@@ -28,6 +29,7 @@ const CLIENT_ID: &[u8] = b"timekeeper-accounts-v1";
 const VERIFIER_KEY: &[u8] = b"timekeeper:vault-verifier";
 const VERIFIER_VALUE: &[u8] = b"timekeeper-vault-v1";
 const PASSWORD_KEY_PREFIX: &str = "account-password:";
+const APPOINTMENT_PASSWORD_KEY_PREFIX: &str = "appointment-password:";
 const MIN_MASTER_PASSWORD_CHARACTERS: usize = 4;
 const DEFAULT_AUTO_LOCK_MINUTES: u32 = 15;
 const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(30);
@@ -41,6 +43,23 @@ pub struct VaultStatus {
     pub initialized: bool,
     pub unlocked: bool,
     pub auto_lock_minutes: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppointmentPasswordMigrationResult {
+    pub migrated_count: usize,
+    pub missing_count: usize,
+    pub pending_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultUnlockResult {
+    #[serde(flatten)]
+    pub status: VaultStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub appointment_password_migration: Option<AppointmentPasswordMigrationResult>,
 }
 
 #[derive(Debug, Error)]
@@ -65,8 +84,8 @@ pub enum VaultError {
     InvalidSalt,
     #[error("Stronghold 快照文件格式无效")]
     InvalidSnapshot,
-    #[error("账号 ID 不合法")]
-    InvalidAccountId,
+    #[error("密码记录 ID 不合法")]
+    InvalidSecretId,
     #[error("该账号尚未保存密码")]
     PasswordNotFound,
     #[error("密码不是有效的 UTF-8 文本")]
@@ -91,10 +110,11 @@ struct VaultSession {
     auto_lock_after: Option<Duration>,
 }
 
+#[derive(Clone)]
 pub struct VaultState {
     snapshot_path: PathBuf,
     salt_path: PathBuf,
-    session: Mutex<VaultSession>,
+    session: Arc<Mutex<VaultSession>>,
 }
 
 impl VaultState {
@@ -104,13 +124,13 @@ impl VaultState {
         Ok(Self {
             snapshot_path: data_dir.join(VAULT_FILE_NAME),
             salt_path: data_dir.join(SALT_FILE_NAME),
-            session: Mutex::new(VaultSession {
+            session: Arc::new(Mutex::new(VaultSession {
                 stronghold: None,
                 last_activity: None,
                 auto_lock_after: Some(Duration::from_secs(
                     u64::from(DEFAULT_AUTO_LOCK_MINUTES) * 60,
                 )),
-            }),
+            })),
         })
     }
 
@@ -275,7 +295,53 @@ impl VaultState {
         account_id: &str,
         password: String,
     ) -> Result<Option<String>, VaultError> {
-        let key = password_key(account_id)?;
+        self.set_keyed_secret(password_key(account_id)?, password)
+    }
+
+    pub(crate) fn remove_secret(&self, account_id: &str) -> Result<Option<String>, VaultError> {
+        self.remove_keyed_secret(password_key(account_id)?)
+    }
+
+    pub(crate) fn get_secret(&self, account_id: &str) -> Result<String, VaultError> {
+        self.get_keyed_secret(password_key(account_id)?)
+    }
+
+    pub(crate) fn set_appointment_secret(
+        &self,
+        appointment_id: &str,
+        password: String,
+    ) -> Result<Option<String>, VaultError> {
+        self.set_keyed_secret(appointment_password_key(appointment_id)?, password)
+    }
+
+    pub(crate) fn remove_appointment_secret(
+        &self,
+        appointment_id: &str,
+    ) -> Result<Option<String>, VaultError> {
+        self.remove_keyed_secret(appointment_password_key(appointment_id)?)
+    }
+
+    pub(crate) fn get_appointment_secret(
+        &self,
+        appointment_id: &str,
+    ) -> Result<String, VaultError> {
+        self.get_keyed_secret(appointment_password_key(appointment_id)?)
+    }
+
+    pub(crate) fn copy_appointment_secret(
+        &self,
+        source_appointment_id: &str,
+        target_appointment_id: &str,
+    ) -> Result<Option<String>, VaultError> {
+        let password = self.get_appointment_secret(source_appointment_id)?;
+        self.set_appointment_secret(target_appointment_id, password)
+    }
+
+    fn set_keyed_secret(
+        &self,
+        key: Vec<u8>,
+        password: String,
+    ) -> Result<Option<String>, VaultError> {
         let mut session = self.active_session()?;
         let stronghold = session.stronghold.as_ref().ok_or(VaultError::Locked)?;
         let client = stronghold.get_client(CLIENT_ID).map_err(operation_error)?;
@@ -299,8 +365,7 @@ impl VaultState {
         decode_optional_password(previous)
     }
 
-    pub(crate) fn remove_secret(&self, account_id: &str) -> Result<Option<String>, VaultError> {
-        let key = password_key(account_id)?;
+    fn remove_keyed_secret(&self, key: Vec<u8>) -> Result<Option<String>, VaultError> {
         let mut session = self.active_session()?;
         let stronghold = session.stronghold.as_ref().ok_or(VaultError::Locked)?;
         let client = stronghold.get_client(CLIENT_ID).map_err(operation_error)?;
@@ -316,8 +381,7 @@ impl VaultState {
         decode_optional_password(previous)
     }
 
-    pub(crate) fn get_secret(&self, account_id: &str) -> Result<String, VaultError> {
-        let key = password_key(account_id)?;
+    fn get_keyed_secret(&self, key: Vec<u8>) -> Result<String, VaultError> {
         let mut session = self.active_session()?;
         let stronghold = session.stronghold.as_ref().ok_or(VaultError::Locked)?;
         let client = stronghold.get_client(CLIENT_ID).map_err(operation_error)?;
@@ -397,15 +461,206 @@ pub async fn unlock_vault<R: Runtime>(
     password: String,
     app: AppHandle<R>,
     backup: State<'_, BackupState>,
-) -> Result<VaultStatus, String> {
+    database: State<'_, Database>,
+) -> Result<VaultUnlockResult, String> {
     let backup = backup.inner().clone();
     let _operation_guard = backup.lock_data_operation().await;
     let worker_app = app.clone();
     let status =
         run_blocking_vault_operation(move || worker_app.state::<VaultState>().unlock(password))
             .await?;
+    let vault = app.state::<VaultState>().inner().clone();
+    let appointment_password_migration =
+        backfill_appointment_passwords(&vault, database.inner()).await?;
     schedule_daily_backup(&app);
-    Ok(status)
+    Ok(VaultUnlockResult {
+        status,
+        appointment_password_migration,
+    })
+}
+
+async fn backfill_appointment_passwords(
+    vault: &VaultState,
+    database: &Database,
+) -> Result<Option<AppointmentPasswordMigrationResult>, String> {
+    let pending_before =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM appointment_password_backfill")
+            .fetch_one(database.pool())
+            .await
+            .map_err(|error| format!("读取预约密码迁移状态失败：{error}"))?;
+    if pending_before == 0 {
+        return Ok(None);
+    }
+
+    let rows = sqlx::query(
+        "SELECT backfill.appointment_id, backfill.source_profile_id,
+                appointment.id AS existing_appointment_id,
+                profile.id AS existing_profile_id
+         FROM appointment_password_backfill AS backfill
+         LEFT JOIN appointments AS appointment
+           ON appointment.id = backfill.appointment_id
+         LEFT JOIN account_profiles AS profile
+           ON profile.id = backfill.source_profile_id
+         ORDER BY backfill.appointment_id",
+    )
+    .fetch_all(database.pool())
+    .await
+    .map_err(|error| format!("读取待迁移预约密码失败：{error}"))?;
+
+    let mut migrated_count = 0_usize;
+    let mut missing_count = 0_usize;
+    for row in rows {
+        let appointment_id: String = row
+            .try_get("appointment_id")
+            .map_err(|error| format!("读取待迁移预约 ID 失败：{error}"))?;
+        let source_profile_id: String = row
+            .try_get("source_profile_id")
+            .map_err(|error| format!("读取待迁移账号档案 ID 失败：{error}"))?;
+        let appointment_exists = row
+            .try_get::<Option<String>, _>("existing_appointment_id")
+            .map_err(|error| format!("读取预约迁移状态失败：{error}"))?
+            .is_some();
+        let profile_exists = row
+            .try_get::<Option<String>, _>("existing_profile_id")
+            .map_err(|error| format!("读取账号迁移状态失败：{error}"))?
+            .is_some();
+
+        if !appointment_exists || !profile_exists {
+            if finish_missing_backfill(database, &appointment_id).await? {
+                missing_count += 1;
+            }
+            continue;
+        }
+
+        let password = {
+            let worker_vault = vault.clone();
+            let source_profile_id = source_profile_id.clone();
+            run_blocking_vault_operation(move || {
+                match worker_vault.get_secret(&source_profile_id) {
+                    Ok(password) => Ok(Some(password)),
+                    Err(VaultError::PasswordNotFound) => Ok(None),
+                    Err(error) => Err(error),
+                }
+            })
+            .await
+        };
+        let password = match password {
+            Ok(Some(password)) => password,
+            Ok(None) => {
+                if finish_missing_backfill(database, &appointment_id).await? {
+                    missing_count += 1;
+                }
+                continue;
+            }
+            Err(_) => continue,
+        };
+
+        let previous = {
+            let worker_vault = vault.clone();
+            let appointment_id = appointment_id.clone();
+            match run_blocking_vault_operation(move || {
+                worker_vault.set_appointment_secret(&appointment_id, password)
+            })
+            .await
+            {
+                Ok(previous) => previous,
+                Err(_) => continue,
+            }
+        };
+
+        let mut transaction = match database.pool().begin().await {
+            Ok(transaction) => transaction,
+            Err(_) => {
+                let _ = restore_appointment_secret(vault, appointment_id, previous).await;
+                continue;
+            }
+        };
+        let metadata_result = sqlx::query(
+            "UPDATE appointments
+             SET account_password_available = 1
+             WHERE id = ? AND account_name IS NOT NULL",
+        )
+        .bind(&appointment_id)
+        .execute(&mut *transaction)
+        .await;
+        let delete_result = match metadata_result {
+            Ok(result) if result.rows_affected() == 1 => {
+                sqlx::query("DELETE FROM appointment_password_backfill WHERE appointment_id = ?")
+                    .bind(&appointment_id)
+                    .execute(&mut *transaction)
+                    .await
+            }
+            _ => {
+                let _ = transaction.rollback().await;
+                let _ = restore_appointment_secret(vault, appointment_id, previous).await;
+                continue;
+            }
+        };
+        if delete_result.is_err() {
+            let _ = transaction.rollback().await;
+            let _ = restore_appointment_secret(vault, appointment_id, previous).await;
+            continue;
+        }
+        if transaction.commit().await.is_ok() {
+            migrated_count += 1;
+        }
+        // 提交失败时数据库结果不确定。保留已写入的预约密码，避免可见预约缺少密码；
+        // 若迁移记录仍在，下次解锁会幂等覆盖同一个 Stronghold key。
+    }
+
+    let pending_count =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM appointment_password_backfill")
+            .fetch_one(database.pool())
+            .await
+            .map_err(|error| format!("读取预约密码迁移剩余数量失败：{error}"))?;
+    Ok(Some(AppointmentPasswordMigrationResult {
+        migrated_count,
+        missing_count,
+        pending_count: pending_count.max(0) as usize,
+    }))
+}
+
+async fn finish_missing_backfill(
+    database: &Database,
+    appointment_id: &str,
+) -> Result<bool, String> {
+    let mut transaction = database
+        .pool()
+        .begin()
+        .await
+        .map_err(|error| format!("开始预约密码迁移事务失败：{error}"))?;
+    sqlx::query("UPDATE appointments SET account_password_available = 0 WHERE id = ?")
+        .bind(appointment_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| format!("标记预约密码缺失失败：{error}"))?;
+    let result = sqlx::query("DELETE FROM appointment_password_backfill WHERE appointment_id = ?")
+        .bind(appointment_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| format!("完成预约密码迁移记录失败：{error}"))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| format!("提交预约密码迁移状态失败：{error}"))?;
+    Ok(result.rows_affected() == 1)
+}
+
+async fn restore_appointment_secret(
+    vault: &VaultState,
+    appointment_id: String,
+    previous: Option<String>,
+) -> Result<(), String> {
+    let worker_vault = vault.clone();
+    run_blocking_vault_operation(move || match previous {
+        Some(password) => worker_vault
+            .set_appointment_secret(&appointment_id, password)
+            .map(|_| ()),
+        None => worker_vault
+            .remove_appointment_secret(&appointment_id)
+            .map(|_| ()),
+    })
+    .await
 }
 
 #[tauri::command]
@@ -468,6 +723,42 @@ pub async fn copy_account_password<R: Runtime>(
     let worker_app = app.clone();
     let password_hash = run_blocking_vault_operation(move || {
         let password = worker_app.state::<VaultState>().get_secret(&id)?;
+        let password_hash = Sha256::digest(password.as_bytes()).to_vec();
+        Clipboard::new()
+            .and_then(|mut clipboard| clipboard.set_text(password))
+            .map_err(|error| VaultError::Clipboard(error.to_string()))?;
+        Ok(password_hash)
+    })
+    .await?;
+
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(CLIPBOARD_CLEAR_AFTER).await;
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            let Ok(mut clipboard) = Clipboard::new() else {
+                return;
+            };
+            let Ok(current) = clipboard.get_text() else {
+                return;
+            };
+            if Sha256::digest(current.as_bytes()).as_slice() == password_hash.as_slice() {
+                let _ = clipboard.set_text(String::new());
+            }
+        })
+        .await;
+    });
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn copy_appointment_account_password<R: Runtime>(
+    id: String,
+    app: AppHandle<R>,
+) -> Result<(), String> {
+    let worker_app = app.clone();
+    let password_hash = run_blocking_vault_operation(move || {
+        let password = worker_app
+            .state::<VaultState>()
+            .get_appointment_secret(&id)?;
         let password_hash = Sha256::digest(password.as_bytes()).to_vec();
         Clipboard::new()
             .and_then(|mut clipboard| clipboard.set_text(password))
@@ -582,11 +873,19 @@ fn derive_key(
 }
 
 fn password_key(account_id: &str) -> Result<Vec<u8>, VaultError> {
-    let account_id = account_id.trim();
-    if account_id.is_empty() || account_id.len() > 256 {
-        return Err(VaultError::InvalidAccountId);
+    secret_key(PASSWORD_KEY_PREFIX, account_id)
+}
+
+fn appointment_password_key(appointment_id: &str) -> Result<Vec<u8>, VaultError> {
+    secret_key(APPOINTMENT_PASSWORD_KEY_PREFIX, appointment_id)
+}
+
+fn secret_key(prefix: &str, record_id: &str) -> Result<Vec<u8>, VaultError> {
+    let record_id = record_id.trim();
+    if record_id.is_empty() || record_id.len() > 256 {
+        return Err(VaultError::InvalidSecretId);
     }
-    Ok(format!("{PASSWORD_KEY_PREFIX}{account_id}").into_bytes())
+    Ok(format!("{prefix}{record_id}").into_bytes())
 }
 
 fn decode_optional_password(value: Option<Vec<u8>>) -> Result<Option<String>, VaultError> {
@@ -642,6 +941,14 @@ fn status_from_session(initialized: bool, session: &VaultSession) -> VaultStatus
 mod tests {
     use super::*;
 
+    fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
+
     fn test_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("timekeeper-vault-{name}-{}", uuid::Uuid::now_v7()))
     }
@@ -693,6 +1000,264 @@ mod tests {
             Err(VaultError::PasswordNotFound)
         ));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn appointment_password_namespace_is_independent_from_account_passwords() {
+        let dir = test_dir("appointment-passwords");
+        let state = VaultState::new(&dir).unwrap();
+        state
+            .initialize("a sufficiently long password".into())
+            .unwrap();
+
+        state
+            .set_secret("same-id", "profile-secret".into())
+            .unwrap();
+        state
+            .set_appointment_secret("same-id", "appointment-secret".into())
+            .unwrap();
+        state
+            .copy_appointment_secret("same-id", "copied-appointment")
+            .unwrap();
+
+        assert_eq!(state.get_secret("same-id").unwrap(), "profile-secret");
+        assert_eq!(
+            state.get_appointment_secret("same-id").unwrap(),
+            "appointment-secret"
+        );
+        assert_eq!(
+            state.get_appointment_secret("copied-appointment").unwrap(),
+            "appointment-secret"
+        );
+        state.remove_appointment_secret("same-id").unwrap();
+        assert_eq!(state.get_secret("same-id").unwrap(), "profile-secret");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unlock_result_flattens_vault_status_for_the_frontend_contract() {
+        let value = serde_json::to_value(VaultUnlockResult {
+            status: VaultStatus {
+                initialized: true,
+                unlocked: true,
+                auto_lock_minutes: 15,
+            },
+            appointment_password_migration: Some(AppointmentPasswordMigrationResult {
+                migrated_count: 2,
+                missing_count: 1,
+                pending_count: 3,
+            }),
+        })
+        .unwrap();
+        assert_eq!(value["initialized"], true);
+        assert_eq!(value["unlocked"], true);
+        assert_eq!(value["autoLockMinutes"], 15);
+        assert_eq!(value["appointmentPasswordMigration"]["migratedCount"], 2);
+        assert!(value.get("status").is_none());
+    }
+
+    async fn insert_backfill_fixture(database: &Database, appointment_id: &str, profile_id: &str) {
+        let now = "2026-08-03T00:00:00Z";
+        sqlx::query(
+            "INSERT INTO account_profiles (
+                id, account_name, needs_review, sort_order, created_at, updated_at
+             ) VALUES (?, 'legacy-account', 0, 0, ?, ?)",
+        )
+        .bind(profile_id)
+        .bind(now)
+        .bind(now)
+        .execute(database.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO appointments (
+                id, service_date, contact_name, mode, service_status,
+                settlement_status, account_name, created_at, updated_at
+             ) VALUES (?, '2026-08-03', '联系人', 'business', 'scheduled',
+                       'unsettled', 'legacy-account', ?, ?)",
+        )
+        .bind(appointment_id)
+        .bind(now)
+        .bind(now)
+        .execute(database.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO appointment_password_backfill (
+                appointment_id, source_profile_id
+             ) VALUES (?, ?)",
+        )
+        .bind(appointment_id)
+        .bind(profile_id)
+        .execute(database.pool())
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn locked_backfill_stays_pending_and_succeeds_after_unlock() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            insert_backfill_fixture(&database, "appointment-1", "profile-1").await;
+            let dir = test_dir("backfill-locked-retry");
+            let vault = VaultState::new(&dir).unwrap();
+            vault
+                .initialize("a sufficiently long password".into())
+                .unwrap();
+            vault
+                .set_secret("profile-1", "legacy-profile-password".into())
+                .unwrap();
+            vault.lock().unwrap();
+            let pending = backfill_appointment_passwords(&vault, &database)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(pending.migrated_count, 0);
+            assert_eq!(pending.missing_count, 0);
+            assert_eq!(pending.pending_count, 1);
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT account_password_available FROM appointments
+                     WHERE id = 'appointment-1'",
+                )
+                .fetch_one(database.pool())
+                .await
+                .unwrap(),
+                0
+            );
+
+            vault.unlock("a sufficiently long password".into()).unwrap();
+            let migrated = backfill_appointment_passwords(&vault, &database)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(migrated.migrated_count, 1);
+            assert_eq!(migrated.missing_count, 0);
+            assert_eq!(migrated.pending_count, 0);
+            assert_eq!(
+                vault.get_appointment_secret("appointment-1").unwrap(),
+                "legacy-profile-password"
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT account_password_available FROM appointments
+                     WHERE id = 'appointment-1'",
+                )
+                .fetch_one(database.pool())
+                .await
+                .unwrap(),
+                1
+            );
+
+            drop(vault);
+            std::fs::remove_dir_all(dir).unwrap();
+        });
+    }
+
+    #[test]
+    fn database_failure_restores_secret_and_backfill_retries_idempotently() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            insert_backfill_fixture(&database, "appointment-1", "profile-1").await;
+            sqlx::raw_sql(
+                "CREATE TRIGGER reject_backfill_update
+                 BEFORE UPDATE OF account_password_available ON appointments
+                 WHEN NEW.id = 'appointment-1'
+                 BEGIN
+                     SELECT RAISE(FAIL, 'blocked for retry test');
+                 END;",
+            )
+            .execute(database.pool())
+            .await
+            .unwrap();
+
+            let dir = test_dir("backfill-database-retry");
+            let vault = VaultState::new(&dir).unwrap();
+            vault
+                .initialize("a sufficiently long password".into())
+                .unwrap();
+            vault
+                .set_secret("profile-1", "legacy-profile-password".into())
+                .unwrap();
+            let pending = backfill_appointment_passwords(&vault, &database)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(pending.migrated_count, 0);
+            assert_eq!(pending.pending_count, 1);
+            assert!(matches!(
+                vault.get_appointment_secret("appointment-1"),
+                Err(VaultError::PasswordNotFound)
+            ));
+
+            sqlx::query("DROP TRIGGER reject_backfill_update")
+                .execute(database.pool())
+                .await
+                .unwrap();
+            let migrated = backfill_appointment_passwords(&vault, &database)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(migrated.migrated_count, 1);
+            assert_eq!(migrated.pending_count, 0);
+            assert_eq!(
+                vault.get_appointment_secret("appointment-1").unwrap(),
+                "legacy-profile-password"
+            );
+
+            drop(vault);
+            std::fs::remove_dir_all(dir).unwrap();
+        });
+    }
+
+    #[test]
+    fn finishes_missing_legacy_password_backfill_without_touching_appointment_metadata() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let now = "2026-08-03T00:00:00Z";
+            sqlx::query(
+                "INSERT INTO appointments (
+                    id, service_date, contact_name, mode, service_status,
+                    settlement_status, account_name, created_at, updated_at
+                 ) VALUES ('appointment-missing', '2026-08-03', '联系人', 'business',
+                           'scheduled', 'unsettled', 'legacy-account', ?, ?)",
+            )
+            .bind(now)
+            .bind(now)
+            .execute(database.pool())
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO appointment_password_backfill (
+                    appointment_id, source_profile_id
+                 ) VALUES ('appointment-missing', 'profile-missing')",
+            )
+            .execute(database.pool())
+            .await
+            .unwrap();
+
+            assert!(
+                finish_missing_backfill(&database, "appointment-missing")
+                    .await
+                    .unwrap()
+            );
+            let row = sqlx::query(
+                "SELECT account_name, account_password_available
+                 FROM appointments WHERE id = 'appointment-missing'",
+            )
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+            assert_eq!(row.get::<String, _>("account_name"), "legacy-account");
+            assert_eq!(row.get::<i64, _>("account_password_available"), 0);
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM appointment_password_backfill",)
+                    .fetch_one(database.pool())
+                    .await
+                    .unwrap(),
+                0
+            );
+        });
     }
 
     #[test]

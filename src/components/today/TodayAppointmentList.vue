@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CheckCircle2, CircleDollarSign, Pencil, Play, Trash2 } from "@lucide/vue";
+import { CheckCircle2, CircleDollarSign, ClipboardCopy, Pencil, Play, Trash2 } from "@lucide/vue";
 import type { Appointment, ServiceStatus } from "../../types/domain";
 import { formatCurrency, formatTimeRange } from "../../utils/formatters";
 import StatusBadge from "../common/StatusBadge.vue";
@@ -16,6 +16,7 @@ const emit = defineEmits<{
   settle: [appointment: Appointment];
   changeStatus: [appointment: Appointment, status: ServiceStatus];
   delete: [appointment: Appointment];
+  copyPassword: [appointment: Appointment];
 }>();
 </script>
 
@@ -60,6 +61,16 @@ const emit = defineEmits<{
           />
         </div>
         <div class="appointment-row__actions">
+          <button
+            class="icon-button"
+            type="button"
+            title="复制账号密码"
+            aria-label="复制账号密码"
+            :disabled="!appointment.account?.passwordAvailable"
+            @click="emit('copyPassword', appointment)"
+          >
+            <ClipboardCopy :size="15" />
+          </button>
           <button
             v-if="appointment.serviceStatus === 'scheduled'"
             class="icon-button"
@@ -165,7 +176,7 @@ const emit = defineEmits<{
 .appointment-row {
   display: grid;
   min-height: 72px;
-  grid-template-columns: 96px 4px minmax(140px, 1fr) 96px 104px;
+  grid-template-columns: 96px 4px minmax(140px, 1fr) 96px 132px;
   align-items: center;
   gap: 12px;
   padding: 9px 11px 9px 18px;
@@ -311,7 +322,7 @@ const emit = defineEmits<{
 
   .appointment-row {
     min-height: 68px;
-    grid-template-columns: 90px 4px minmax(120px, 1fr) 88px 96px;
+    grid-template-columns: 90px 4px minmax(120px, 1fr) 88px 126px;
     gap: 9px;
     padding-inline: 15px 9px;
   }

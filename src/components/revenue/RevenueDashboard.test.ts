@@ -96,14 +96,17 @@ describe("RevenueDashboard", () => {
     await flushPromises();
 
     expect(listAppointments).not.toHaveBeenCalled();
-    expect(wrapper.get(".revenue-chart-stub").text()).toBe("true");
+    const chart = wrapper.getComponent(RevenueChartStub);
+    const selectedPeriod = (chart.props("points") as Array<{ period: string }>)[0]?.period;
+    if (!selectedPeriod) throw new Error("日收益图缺少可下钻的数据点");
+    expect(chart.text()).toBe("true");
     await wrapper.get(".revenue-chart-stub").trigger("click");
     await flushPromises();
 
     const detail = wrapper.get(".period-detail-stub");
     expect(detail.attributes("data-granularity")).toBe("day");
-    expect(detail.text()).toBe("2026-07-27—2026-07-27");
-    expect(listAppointments).toHaveBeenCalledWith({ from: "2026-07-27", to: "2026-07-27" });
+    expect(detail.text()).toBe(`${selectedPeriod}—${selectedPeriod}`);
+    expect(listAppointments).toHaveBeenCalledWith({ from: selectedPeriod, to: selectedPeriod });
 
     wrapper.unmount();
   });

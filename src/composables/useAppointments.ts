@@ -25,7 +25,6 @@ export function useAppointments(
       value.mode ?? null,
       value.serviceStatus ?? null,
       value.settlementStatus ?? null,
-      value.accountProfileId ?? null,
     ]);
   }
 

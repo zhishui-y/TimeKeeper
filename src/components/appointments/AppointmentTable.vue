@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Ban, Pencil, Trash2, CopyPlus } from "@lucide/vue";
+import { Ban, ClipboardCopy, CopyPlus, Pencil, Trash2 } from "@lucide/vue";
 import type { Appointment } from "../../types/domain";
 import {
   formatCompactDate,
@@ -21,6 +21,7 @@ const emit = defineEmits<{
   duplicate: [appointment: Appointment];
   cancel: [appointment: Appointment];
   delete: [appointment: Appointment];
+  copyPassword: [appointment: Appointment];
 }>();
 
 const allSelectRef = useTemplateRef("all-select");
@@ -125,9 +126,7 @@ function toggleOne(appointmentId: string, event: unknown): void {
             <td>
               <div class="cell-stack">
                 <strong class="truncate">{{ appointment.content || "未填写内容" }}</strong>
-                <span class="truncate">{{
-                  appointment.accountSnapshot?.accountName || "未关联账号"
-                }}</span>
+                <span class="truncate">{{ appointment.account?.accountName || "未使用账号" }}</span>
               </div>
             </td>
             <td>
@@ -143,6 +142,16 @@ function toggleOne(appointmentId: string, event: unknown): void {
             <td class="muted">{{ appointment.paymentMethod || "—" }}</td>
             <td>
               <div class="row-actions">
+                <button
+                  class="icon-button"
+                  type="button"
+                  title="复制账号密码"
+                  aria-label="复制账号密码"
+                  :disabled="!appointment.account?.passwordAvailable"
+                  @click="emit('copyPassword', appointment)"
+                >
+                  <ClipboardCopy :size="14" />
+                </button>
                 <button
                   class="icon-button"
                   type="button"

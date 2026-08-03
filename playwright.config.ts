@@ -5,6 +5,7 @@ export default defineConfig({
   outputDir: "./test-results",
   use: {
     baseURL: "http://127.0.0.1:1420",
+    permissions: ["clipboard-read", "clipboard-write"],
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
   },

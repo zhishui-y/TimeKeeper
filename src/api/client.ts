@@ -8,12 +8,14 @@ import type {
   Appointment,
   AppointmentMutationResult,
   BackupResult,
+  ContactPreset,
   DashboardSummary,
   ExcelImportPreview,
   ExcelImportResult,
   ExcelImportSelection,
   RevenueSummary,
   VaultStatus,
+  VaultUnlockResult,
 } from "../types/domain";
 import type { ApiClient } from "./types";
 
@@ -34,6 +36,9 @@ const nativeApi: ApiClient = {
     invoke<Appointment>("set_appointment_service_status", { id, status }),
   settleAppointment: (id, amountMinor, paymentMethod) =>
     invoke<Appointment>("settle_appointment", { id, amountMinor, paymentMethod }),
+  listContactPresets: (query, limit) =>
+    invoke<ContactPreset[]>("list_contact_presets", { query, limit }),
+  copyAppointmentAccountPassword: (id) => invoke<void>("copy_appointment_account_password", { id }),
 
   listAccountProfiles: (query, needsReview) =>
     invoke<AccountProfile[]>("list_account_profiles", { query, needsReview }),
@@ -50,12 +55,13 @@ const nativeApi: ApiClient = {
   deleteAccountProfiles: (ids) => invoke<number>("delete_account_profiles", { ids }),
   reorderAccountProfiles: (ids) => invoke<void>("reorder_account_profiles", { ids }),
   copyAccountName: (id) => invoke<void>("copy_account_name", { id }),
+  copyAccountCharacterName: (id) => invoke<void>("copy_account_character_name", { id }),
   refreshAccountProfileRoleData: (ids) =>
     invoke<AccountRoleDataRefreshResult>("refresh_account_profile_role_data", { ids }),
 
   vaultStatus: () => invoke<VaultStatus>("vault_status"),
   initializeVault: (password) => invoke<VaultStatus>("initialize_vault", { password }),
-  unlockVault: (password) => invoke<VaultStatus>("unlock_vault", { password }),
+  unlockVault: (password) => invoke<VaultUnlockResult>("unlock_vault", { password }),
   changeVaultPassword: (currentPassword, newPassword) =>
     invoke<VaultStatus>("change_vault_password", { currentPassword, newPassword }),
   lockVault: () => invoke<VaultStatus>("lock_vault"),

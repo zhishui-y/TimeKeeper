@@ -109,6 +109,38 @@ mod tests {
             .unwrap();
             assert!(profile_columns.iter().any(|name| name == "sort_order"));
             assert!(profile_columns.iter().any(|name| name == "usage_info"));
+            let appointment_columns = sqlx::query_scalar::<_, String>(
+                "SELECT name FROM pragma_table_info('appointments') ORDER BY cid",
+            )
+            .fetch_all(database.pool())
+            .await
+            .unwrap();
+            for expected in [
+                "account_specialization",
+                "account_gear_score",
+                "account_server",
+                "account_name",
+                "account_password_available",
+                "voice_platform",
+                "voice_channel",
+            ] {
+                assert!(appointment_columns.iter().any(|name| name == expected));
+            }
+            assert!(
+                !appointment_columns
+                    .iter()
+                    .any(|name| name == "account_profile_id")
+            );
+            assert!(
+                !appointment_columns
+                    .iter()
+                    .any(|name| name == "account_snapshot_json")
+            );
+            assert!(
+                tables
+                    .iter()
+                    .any(|name| name == "appointment_password_backfill")
+            );
         });
     }
 
@@ -204,6 +236,107 @@ mod tests {
                 .unwrap();
             assert_eq!(row.get::<String, _>("account_name"), "existing-name");
             assert_eq!(row.get::<Option<String>, _>("usage_info"), None);
+        });
+    }
+
+    #[test]
+    fn embedded_account_migration_preserves_snapshots_and_records_password_backfill() {
+        run_async(async {
+            let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:")
+                .await
+                .unwrap();
+            for migration in [
+                include_str!("../migrations/0001_initial.sql"),
+                include_str!("../migrations/0002_account_profile_sort_order.sql"),
+                include_str!("../migrations/0003_account_profile_usage_info.sql"),
+            ] {
+                sqlx::raw_sql(migration)
+                    .execute(&mut connection)
+                    .await
+                    .unwrap();
+            }
+            sqlx::query(
+                "INSERT INTO account_profiles (
+                    id, server, specialization, gear_score, account_name,
+                    needs_review, sort_order, created_at, updated_at
+                 ) VALUES ('profile-1', '档案区服', '档案职业', '9999', 'profile-name',
+                           0, 0, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')",
+            )
+            .execute(&mut connection)
+            .await
+            .unwrap();
+            let insert = "INSERT INTO appointments (
+                id, service_date, contact_name, mode, service_status, settlement_status,
+                account_profile_id, account_snapshot_json, created_at, updated_at
+             ) VALUES (?, '2026-08-01', '联系人', 'business', 'scheduled', 'unsettled',
+                       'profile-1', ?, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')";
+            sqlx::query(insert)
+                .bind("snapshot-appointment")
+                .bind(
+                    r#"{"accountName":"snapshot-name","server":"快照区服","specialization":"快照职业","gearScore":"8888","characterName":"不迁移","contactName":"不迁移"}"#,
+                )
+                .execute(&mut connection)
+                .await
+                .unwrap();
+            sqlx::query(insert)
+                .bind("fallback-appointment")
+                .bind(Option::<String>::None)
+                .execute(&mut connection)
+                .await
+                .unwrap();
+
+            sqlx::raw_sql(include_str!(
+                "../migrations/0004_appointment_embedded_account_voice.sql"
+            ))
+            .execute(&mut connection)
+            .await
+            .unwrap();
+
+            let snapshot = sqlx::query(
+                "SELECT account_name, account_server, account_specialization,
+                        account_gear_score, account_password_available
+                 FROM appointments WHERE id = 'snapshot-appointment'",
+            )
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+            assert_eq!(snapshot.get::<String, _>("account_name"), "snapshot-name");
+            assert_eq!(snapshot.get::<String, _>("account_server"), "快照区服");
+            assert_eq!(
+                snapshot.get::<String, _>("account_specialization"),
+                "快照职业"
+            );
+            assert_eq!(snapshot.get::<String, _>("account_gear_score"), "8888");
+            assert_eq!(snapshot.get::<i64, _>("account_password_available"), 0);
+
+            let fallback = sqlx::query(
+                "SELECT account_name, account_server, account_specialization, account_gear_score
+                 FROM appointments WHERE id = 'fallback-appointment'",
+            )
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+            assert_eq!(fallback.get::<String, _>("account_name"), "profile-name");
+            assert_eq!(fallback.get::<String, _>("account_server"), "档案区服");
+            assert_eq!(
+                fallback.get::<String, _>("account_specialization"),
+                "档案职业"
+            );
+            assert_eq!(fallback.get::<String, _>("account_gear_score"), "9999");
+
+            let backfill_count =
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM appointment_password_backfill")
+                    .fetch_one(&mut connection)
+                    .await
+                    .unwrap();
+            assert_eq!(backfill_count, 2);
+            let foreign_key_count = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM pragma_foreign_key_list('appointments')",
+            )
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+            assert_eq!(foreign_key_count, 0);
         });
     }
 }

@@ -317,10 +317,6 @@ onMounted(() => {
                 >跨夜{{ importSelection.appointments ? "" : "（不导入）" }}</span
               >
               <span :class="{ 'is-excluded': !importSelection.accounts }"
-                ><strong>{{ importPreview.unmatchedProfileCount }}</strong
-                >待完善{{ importSelection.accounts ? "" : "（不导入）" }}</span
-              >
-              <span :class="{ 'is-excluded': !importSelection.accounts }"
                 ><strong>{{ importPreview.passwordConflictCount }}</strong
                 >密码冲突{{ importSelection.accounts ? "" : "（不处理）" }}</span
               >

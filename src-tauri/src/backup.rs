@@ -18,7 +18,7 @@ use crate::{
     accounts::profile_from_row,
     appointments::appointment_from_row,
     db::MIGRATOR,
-    models::{AppointmentMode, SettlementStatus},
+    models::{AppointmentMode, SettlementStatus, VoicePlatform},
     settings::{AppSettings, SettingsError, SettingsState},
     vault,
 };
@@ -37,8 +37,12 @@ const REQUIRED_ARCHIVE_FILES: [&str; 4] = [
     VAULT_ARCHIVE_NAME,
     SALT_ARCHIVE_NAME,
 ];
-const REQUIRED_DATABASE_TABLES: [&str; 3] =
-    ["account_profiles", "appointments", "_sqlx_migrations"];
+const REQUIRED_DATABASE_TABLES: [&str; 4] = [
+    "account_profiles",
+    "appointment_password_backfill",
+    "appointments",
+    "_sqlx_migrations",
+];
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_ENTRY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -72,7 +76,7 @@ const ACCOUNT_PROFILE_COLUMNS: [RequiredColumn; 17] = [
     required_column("usage_info", "TEXT", false, None, 0),
 ];
 
-const APPOINTMENT_COLUMNS: [RequiredColumn; 19] = [
+const APPOINTMENT_COLUMNS: [RequiredColumn; 24] = [
     required_column("id", "TEXT", true, None, 1),
     required_column("service_date", "TEXT", true, None, 0),
     required_column("starts_at", "TEXT", false, None, 0),
@@ -82,8 +86,13 @@ const APPOINTMENT_COLUMNS: [RequiredColumn; 19] = [
     required_column("mode", "TEXT", true, None, 0),
     required_column("service_status", "TEXT", true, None, 0),
     required_column("settlement_status", "TEXT", true, None, 0),
-    required_column("account_profile_id", "TEXT", false, None, 0),
-    required_column("account_snapshot_json", "TEXT", false, None, 0),
+    required_column("account_specialization", "TEXT", false, None, 0),
+    required_column("account_gear_score", "TEXT", false, None, 0),
+    required_column("account_server", "TEXT", false, None, 0),
+    required_column("account_name", "TEXT", false, None, 0),
+    required_column("account_password_available", "INTEGER", true, Some("0"), 0),
+    required_column("voice_platform", "TEXT", false, None, 0),
+    required_column("voice_channel", "TEXT", false, None, 0),
     required_column("rate_note", "TEXT", false, None, 0),
     required_column("payment_method", "TEXT", false, None, 0),
     required_column("amount_minor", "INTEGER", false, None, 0),
@@ -92,6 +101,11 @@ const APPOINTMENT_COLUMNS: [RequiredColumn; 19] = [
     required_column("import_fingerprint", "TEXT", false, None, 0),
     required_column("created_at", "TEXT", true, None, 0),
     required_column("updated_at", "TEXT", true, None, 0),
+];
+
+const APPOINTMENT_PASSWORD_BACKFILL_COLUMNS: [RequiredColumn; 2] = [
+    required_column("appointment_id", "TEXT", true, None, 1),
+    required_column("source_profile_id", "TEXT", true, None, 0),
 ];
 
 const MIGRATION_COLUMNS: [RequiredColumn; 6] = [
@@ -943,6 +957,12 @@ async fn validate_database_contract(connection: &mut SqliteConnection) -> Result
     }
 
     validate_table_columns(connection, "account_profiles", &ACCOUNT_PROFILE_COLUMNS).await?;
+    validate_table_columns(
+        connection,
+        "appointment_password_backfill",
+        &APPOINTMENT_PASSWORD_BACKFILL_COLUMNS,
+    )
+    .await?;
     validate_table_columns(connection, "appointments", &APPOINTMENT_COLUMNS).await?;
     validate_table_columns(connection, "_sqlx_migrations", &MIGRATION_COLUMNS).await?;
     validate_migration_records(connection).await?;
@@ -1038,30 +1058,43 @@ async fn validate_database_constraints(
 ) -> Result<(), BackupError> {
     validate_unique_column(connection, "account_profiles", "import_fingerprint").await?;
     validate_unique_column(connection, "appointments", "import_fingerprint").await?;
-    validate_foreign_key(connection).await?;
+    validate_no_foreign_keys(connection, "account_profiles").await?;
+    validate_no_foreign_keys(connection, "appointment_password_backfill").await?;
+    validate_no_foreign_keys(connection, "appointments").await?;
+    validate_user_index_set(
+        connection,
+        &[
+            "idx_account_profiles_account_name",
+            "idx_appointments_contact_recent",
+            "idx_appointments_service_date",
+            "idx_appointments_status",
+            "idx_appointments_time_range",
+        ],
+    )
+    .await?;
 
     validate_named_index(
         connection,
         "account_profiles",
         "idx_account_profiles_account_name",
-        &[("account_name", "NOCASE")],
-        false,
+        &[("account_name", "NOCASE", false)],
+        None,
     )
     .await?;
     validate_named_index(
         connection,
         "appointments",
         "idx_appointments_service_date",
-        &[("service_date", "BINARY")],
-        false,
+        &[("service_date", "BINARY", false)],
+        None,
     )
     .await?;
     validate_named_index(
         connection,
         "appointments",
         "idx_appointments_time_range",
-        &[("starts_at", "BINARY"), ("ends_at", "BINARY")],
-        true,
+        &[("starts_at", "BINARY", false), ("ends_at", "BINARY", false)],
+        Some("WHERE starts_at IS NOT NULL AND ends_at IS NOT NULL"),
     )
     .await?;
     validate_named_index(
@@ -1069,18 +1102,23 @@ async fn validate_database_constraints(
         "appointments",
         "idx_appointments_status",
         &[
-            ("service_status", "BINARY"),
-            ("settlement_status", "BINARY"),
+            ("service_status", "BINARY", false),
+            ("settlement_status", "BINARY", false),
         ],
-        false,
+        None,
     )
     .await?;
     validate_named_index(
         connection,
         "appointments",
-        "idx_appointments_account_profile",
-        &[("account_profile_id", "BINARY")],
-        false,
+        "idx_appointments_contact_recent",
+        &[
+            ("contact_name", "NOCASE", false),
+            ("service_date", "BINARY", true),
+            ("starts_at", "BINARY", true),
+            ("created_at", "BINARY", true),
+        ],
+        Some("WHERE service_status != 'cancelled'"),
     )
     .await?;
 
@@ -1098,6 +1136,15 @@ async fn validate_database_constraints(
     .await?;
     validate_check_constraints(
         connection,
+        "appointment_password_backfill",
+        &[
+            "check(length(trim(appointment_id))>0)",
+            "check(length(trim(source_profile_id))>0)",
+        ],
+    )
+    .await?;
+    validate_check_constraints(
+        connection,
         "appointments",
         &[
             "check(modein('entertainment','business'))",
@@ -1108,6 +1155,11 @@ async fn validate_database_constraints(
             "check(ends_atisnullorends_at>starts_at)",
             "check(amount_minorisnulloramount_minor>=0)",
             "check(reminder_minutesisnullorreminder_minutes>=0)",
+            "check(account_password_availablein(0,1))",
+            "check(voice_platformin('yy','qq'))",
+            "account_nameisnullandaccount_specializationisnullandaccount_gear_scoreisnullandaccount_serverisnullandaccount_password_available=0",
+            "account_nameisnotnullandlength(trim(account_name))>0",
+            "voice_channelisnullor(voice_platform='yy'andlength(voice_channel)>0andvoice_channelnotglob'*[^0-9]*')",
             "mode='entertainment'andsettlement_status='not_applicable'andrate_noteisnullandpayment_methodisnullandamount_minorisnull",
             "mode='business'andsettlement_statusin('unsettled','settled')",
             "check(settlement_status!='settled'oramount_minorisnotnull)",
@@ -1148,37 +1200,52 @@ async fn validate_unique_column(
     )))
 }
 
-async fn validate_foreign_key(connection: &mut SqliteConnection) -> Result<(), BackupError> {
-    let rows = sqlx::query(
-        "SELECT \"table\" AS target_table, \"from\" AS source_column,
-                \"to\" AS target_column, on_delete
-         FROM pragma_foreign_key_list('appointments') ORDER BY id, seq",
+async fn validate_no_foreign_keys(
+    connection: &mut SqliteConnection,
+    table: &str,
+) -> Result<(), BackupError> {
+    let rows = sqlx::query("SELECT id FROM pragma_foreign_key_list(?) ORDER BY id, seq")
+        .bind(table)
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(|error| {
+            BackupError::InvalidBackup(format!("读取表 {table} 的外键结构失败：{error}"))
+        })?;
+    if !rows.is_empty() {
+        return Err(BackupError::InvalidBackup(format!(
+            "表 {table} 不应包含外键"
+        )));
+    }
+    Ok(())
+}
+
+async fn validate_user_index_set(
+    connection: &mut SqliteConnection,
+    expected: &[&str],
+) -> Result<(), BackupError> {
+    let actual = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM sqlite_master
+         WHERE type = 'index' AND sql IS NOT NULL ORDER BY name",
     )
     .fetch_all(&mut *connection)
     .await
-    .map_err(|error| BackupError::InvalidBackup(format!("读取预约外键结构失败：{error}")))?;
-    if rows.len() != 1 {
-        return Err(BackupError::InvalidBackup(
-            "appointments 的账号档案外键结构无效".into(),
-        ));
-    }
-    let row = &rows[0];
-    let target_table: String = row.try_get("target_table").map_err(database_schema_error)?;
-    let source_column: String = row
-        .try_get("source_column")
-        .map_err(database_schema_error)?;
-    let target_column: String = row
-        .try_get("target_column")
-        .map_err(database_schema_error)?;
-    let on_delete: String = row.try_get("on_delete").map_err(database_schema_error)?;
-    if target_table != "account_profiles"
-        || source_column != "account_profile_id"
-        || target_column != "id"
-        || !on_delete.eq_ignore_ascii_case("SET NULL")
-    {
-        return Err(BackupError::InvalidBackup(
-            "appointments 的账号档案外键结构无效".into(),
-        ));
+    .map_err(|error| BackupError::InvalidBackup(format!("读取数据库索引清单失败：{error}")))?
+    .into_iter()
+    .collect::<HashSet<_>>();
+    let expected = expected
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect::<HashSet<_>>();
+    if actual != expected {
+        let mut missing = expected.difference(&actual).cloned().collect::<Vec<_>>();
+        let mut unexpected = actual.difference(&expected).cloned().collect::<Vec<_>>();
+        missing.sort();
+        unexpected.sort();
+        return Err(BackupError::InvalidBackup(format!(
+            "数据库索引清单不符合当前 TimeKeeper 契约；缺少：{}；未知：{}",
+            missing.join("、"),
+            unexpected.join("、")
+        )));
     }
     Ok(())
 }
@@ -1187,8 +1254,8 @@ async fn validate_named_index(
     connection: &mut SqliteConnection,
     table: &str,
     index: &str,
-    expected_columns: &[(&str, &str)],
-    partial: bool,
+    expected_columns: &[(&str, &str, bool)],
+    partial_predicate: Option<&str>,
 ) -> Result<(), BackupError> {
     let index_row = sqlx::query(
         "SELECT \"unique\" AS is_unique, partial
@@ -1206,14 +1273,14 @@ async fn validate_named_index(
     let is_partial: bool = index_row
         .try_get("partial")
         .map_err(database_schema_error)?;
-    if is_unique || is_partial != partial {
+    if is_unique || is_partial != partial_predicate.is_some() {
         return Err(BackupError::InvalidBackup(format!(
             "索引 {index} 的属性不符合当前 TimeKeeper 契约"
         )));
     }
 
     let rows = sqlx::query(
-        "SELECT name, coll FROM pragma_index_xinfo(?)
+        "SELECT name, coll, \"desc\" AS is_desc FROM pragma_index_xinfo(?)
          WHERE key = 1 ORDER BY seqno",
     )
     .bind(index)
@@ -1225,13 +1292,17 @@ async fn validate_named_index(
             "索引 {index} 的列结构不符合当前 TimeKeeper 契约"
         )));
     }
-    for (row, (expected_name, expected_collation)) in rows.iter().zip(expected_columns) {
+    for (row, (expected_name, expected_collation, expected_descending)) in
+        rows.iter().zip(expected_columns)
+    {
         let name: Option<String> = row.try_get("name").map_err(database_schema_error)?;
         let collation: Option<String> = row.try_get("coll").map_err(database_schema_error)?;
+        let descending: bool = row.try_get("is_desc").map_err(database_schema_error)?;
         if name.as_deref() != Some(*expected_name)
             || !collation
                 .as_deref()
                 .is_some_and(|value| value.eq_ignore_ascii_case(expected_collation))
+            || descending != *expected_descending
         {
             return Err(BackupError::InvalidBackup(format!(
                 "索引 {index} 的列结构不符合当前 TimeKeeper 契约"
@@ -1239,7 +1310,7 @@ async fn validate_named_index(
         }
     }
 
-    if partial {
+    if let Some(partial_predicate) = partial_predicate {
         let sql = sqlx::query_scalar::<_, String>(
             "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
         )
@@ -1249,7 +1320,7 @@ async fn validate_named_index(
         .map_err(|error| {
             BackupError::InvalidBackup(format!("读取索引 {index} 定义失败：{error}"))
         })?;
-        if !normalize_schema_sql(&sql).contains("wherestarts_atisnotnullandends_atisnotnull") {
+        if !normalize_schema_sql(&sql).contains(&normalize_schema_sql(partial_predicate)) {
             return Err(BackupError::InvalidBackup(format!(
                 "索引 {index} 的条件不符合当前 TimeKeeper 契约"
             )));
@@ -1321,6 +1392,41 @@ async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(),
         validate_rfc3339(&profile.updated_at, "账号档案更新时间", &profile.id)?;
     }
 
+    let backfill_rows = sqlx::query(
+        "SELECT appointment_id, source_profile_id
+         FROM appointment_password_backfill ORDER BY appointment_id",
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(|error| BackupError::InvalidBackup(format!("读取预约密码迁移队列失败：{error}")))?;
+    for row in &backfill_rows {
+        let appointment_id: String = row
+            .try_get("appointment_id")
+            .map_err(database_schema_error)?;
+        let source_profile_id: String = row
+            .try_get("source_profile_id")
+            .map_err(database_schema_error)?;
+        if appointment_id.trim().is_empty() || source_profile_id.trim().is_empty() {
+            return Err(BackupError::InvalidBackup(
+                "预约密码迁移队列包含空标识".into(),
+            ));
+        }
+    }
+    let orphaned_backfill_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)
+         FROM appointment_password_backfill AS backfill
+         LEFT JOIN appointments AS appointment ON appointment.id = backfill.appointment_id
+         WHERE appointment.id IS NULL",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|error| BackupError::InvalidBackup(format!("校验预约密码迁移队列失败：{error}")))?;
+    if orphaned_backfill_count != 0 {
+        return Err(BackupError::InvalidBackup(format!(
+            "预约密码迁移队列包含 {orphaned_backfill_count} 条无对应预约的记录"
+        )));
+    }
+
     let appointment_rows = sqlx::query("SELECT * FROM appointments ORDER BY id")
         .fetch_all(&mut *connection)
         .await
@@ -1328,6 +1434,20 @@ async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(),
     for row in &appointment_rows {
         let appointment = appointment_from_row(row)
             .map_err(|error| BackupError::InvalidBackup(format!("预约记录无法读取：{error}")))?;
+        let account_password_available: i64 = row
+            .try_get("account_password_available")
+            .map_err(database_schema_error)?;
+        let account_name: Option<String> =
+            row.try_get("account_name").map_err(database_schema_error)?;
+        let account_specialization: Option<String> = row
+            .try_get("account_specialization")
+            .map_err(database_schema_error)?;
+        let account_gear_score: Option<String> = row
+            .try_get("account_gear_score")
+            .map_err(database_schema_error)?;
+        let account_server: Option<String> = row
+            .try_get("account_server")
+            .map_err(database_schema_error)?;
         let service_date = NaiveDate::parse_from_str(&appointment.service_date, "%Y-%m-%d")
             .map_err(|_| {
                 BackupError::InvalidBackup(format!("预约 {} 的服务日期无效", appointment.id))
@@ -1358,6 +1478,16 @@ async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(),
             || appointment.contact_name.trim().is_empty()
             || appointment.amount_minor.is_some_and(|value| value < 0)
             || appointment.reminder_minutes.is_some_and(|value| value < 0)
+            || !matches!(account_password_available, 0 | 1)
+            || match account_name.as_deref() {
+                Some(value) => value.trim().is_empty(),
+                None => {
+                    account_specialization.is_some()
+                        || account_gear_score.is_some()
+                        || account_server.is_some()
+                        || account_password_available != 0
+                }
+            }
         {
             return Err(BackupError::InvalidBackup(format!(
                 "预约 {} 的字段值不符合当前 TimeKeeper 契约",
@@ -1394,7 +1524,34 @@ async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(),
                 appointment.id
             )));
         }
-        validate_snapshot_json(row, &appointment.id)?;
+        match appointment.account.as_ref() {
+            Some(account)
+                if account.account_name.trim().is_empty()
+                    || account.password_available != (account_password_available != 0) =>
+            {
+                return Err(BackupError::InvalidBackup(format!(
+                    "预约 {} 的内嵌账号数据无效",
+                    appointment.id
+                )));
+            }
+            None if account_password_available != 0 => {
+                return Err(BackupError::InvalidBackup(format!(
+                    "预约 {} 没有账号却标记了可用密码",
+                    appointment.id
+                )));
+            }
+            _ => {}
+        }
+        if let Some(channel) = appointment.voice_channel.as_deref()
+            && (appointment.voice_platform != Some(VoicePlatform::Yy)
+                || channel.is_empty()
+                || !channel.chars().all(|character| character.is_ascii_digit()))
+        {
+            return Err(BackupError::InvalidBackup(format!(
+                "预约 {} 的语音频道无效",
+                appointment.id
+            )));
+        }
         validate_rfc3339(&appointment.created_at, "预约创建时间", &appointment.id)?;
         validate_rfc3339(&appointment.updated_at, "预约更新时间", &appointment.id)?;
     }
@@ -1414,38 +1571,6 @@ fn validate_rfc3339(value: &str, field: &str, record_id: &str) -> Result<(), Bac
     chrono::DateTime::parse_from_rfc3339(value)
         .map(|_| ())
         .map_err(|_| BackupError::InvalidBackup(format!("{field}无效：{record_id}")))
-}
-
-fn validate_snapshot_json(row: &sqlx::sqlite::SqliteRow, id: &str) -> Result<(), BackupError> {
-    let raw: Option<String> = row
-        .try_get("account_snapshot_json")
-        .map_err(database_schema_error)?;
-    let Some(raw) = raw else {
-        return Ok(());
-    };
-    let value = serde_json::from_str::<serde_json::Value>(&raw).map_err(|error| {
-        BackupError::InvalidBackup(format!("预约 {id} 的账号快照数据损坏：{error}"))
-    })?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| BackupError::InvalidBackup(format!("预约 {id} 的账号快照必须是对象")))?;
-    const ALLOWED_KEYS: [&str; 6] = [
-        "accountName",
-        "contactName",
-        "server",
-        "characterName",
-        "specialization",
-        "gearScore",
-    ];
-    if let Some(key) = object
-        .keys()
-        .find(|key| !ALLOWED_KEYS.contains(&key.as_str()))
-    {
-        return Err(BackupError::InvalidBackup(format!(
-            "预约 {id} 的账号快照包含不允许的字段：{key}"
-        )));
-    }
-    Ok(())
 }
 
 fn validate_staged_settings(path: &Path) -> Result<(), BackupError> {
@@ -1640,6 +1765,7 @@ mod tests {
             let mut connection = SqliteConnection::connect_with(&options).await.unwrap();
             for statement in [
                 "CREATE TABLE account_profiles (id TEXT)",
+                "CREATE TABLE appointment_password_backfill (appointment_id TEXT)",
                 "CREATE TABLE appointments (id TEXT)",
                 "CREATE TABLE _sqlx_migrations (version BIGINT)",
             ] {
@@ -1652,20 +1778,62 @@ mod tests {
         });
     }
 
+    fn create_database_without_0004_contract(path: &Path) {
+        runtime().block_on(async {
+            let database = Database::initialize(path).await.unwrap();
+            sqlx::query("DROP TABLE appointment_password_backfill")
+                .execute(database.pool())
+                .await
+                .unwrap();
+            sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 4")
+                .execute(database.pool())
+                .await
+                .unwrap();
+            sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .fetch_all(database.pool())
+                .await
+                .unwrap();
+            database.pool().close().await;
+        });
+    }
+
+    fn create_database_with_orphaned_password_backfill(path: &Path) {
+        runtime().block_on(async {
+            let database = Database::initialize(path).await.unwrap();
+            sqlx::query(
+                "INSERT INTO appointment_password_backfill (appointment_id, source_profile_id)
+                 VALUES ('missing-appointment', 'legacy-profile')",
+            )
+            .execute(database.pool())
+            .await
+            .unwrap();
+            sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .fetch_all(database.pool())
+                .await
+                .unwrap();
+            database.pool().close().await;
+        });
+    }
+
     fn create_database_with_invalid_appointment(
         path: &Path,
         service_date: &str,
         starts_at: Option<&str>,
         ends_at: Option<&str>,
-        snapshot_json: Option<&str>,
+        account_specialization: Option<&str>,
     ) {
         runtime().block_on(async {
             let database = Database::initialize(path).await.unwrap();
             let now = Utc::now().to_rfc3339();
+            let mut connection = database.pool().acquire().await.unwrap();
+            sqlx::query("PRAGMA ignore_check_constraints = ON")
+                .execute(&mut *connection)
+                .await
+                .unwrap();
             sqlx::query(
                 "INSERT INTO appointments (
                     id, service_date, starts_at, ends_at, contact_name, mode,
-                    service_status, settlement_status, account_snapshot_json, created_at, updated_at
+                    service_status, settlement_status, account_specialization, created_at, updated_at
                  ) VALUES (?, ?, ?, ?, ?, 'entertainment', 'scheduled', 'not_applicable', ?, ?, ?)",
             )
             .bind("invalid-future-appointment")
@@ -1673,12 +1841,13 @@ mod tests {
             .bind(starts_at)
             .bind(ends_at)
             .bind("损坏数据测试")
-            .bind(snapshot_json)
+            .bind(account_specialization)
             .bind(&now)
             .bind(&now)
-            .execute(database.pool())
+            .execute(&mut *connection)
             .await
             .unwrap();
+            drop(connection);
             sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
                 .fetch_all(database.pool())
                 .await
@@ -1709,7 +1878,9 @@ mod tests {
             mode: AppointmentMode::Business,
             service_status: ServiceStatus::Scheduled,
             settlement_status: SettlementStatus::Unsettled,
-            account_profile_id: None,
+            account: None,
+            voice_platform: None,
+            voice_channel: None,
             rate_note: Some("测试计费".into()),
             payment_method: None,
             amount_minor: Some(amount_minor),
@@ -2048,29 +2219,65 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("列"));
 
-        let invalid_snapshot_database = dir.join("invalid-snapshot.sqlite3");
-        create_database_with_invalid_appointment(
-            &invalid_snapshot_database,
-            "2099-01-01",
-            None,
-            None,
-            Some("not-json"),
-        );
-        let invalid_snapshot_backup = dir.join("invalid-snapshot.tkbackup");
-        let invalid_snapshot_bytes = fs::read(&invalid_snapshot_database).unwrap();
+        let pre_0004_database = dir.join("pre-0004.sqlite3");
+        create_database_without_0004_contract(&pre_0004_database);
+        let pre_0004_backup = dir.join("pre-0004.tkbackup");
+        let pre_0004_bytes = fs::read(&pre_0004_database).unwrap();
         write_test_backup(
-            &invalid_snapshot_backup,
+            &pre_0004_backup,
             &[
-                (DATABASE_ARCHIVE_NAME, invalid_snapshot_bytes.as_slice()),
+                (DATABASE_ARCHIVE_NAME, pre_0004_bytes.as_slice()),
                 (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
                 (VAULT_ARCHIVE_NAME, vault_bytes.as_slice()),
                 (SALT_ARCHIVE_NAME, salt_bytes.as_slice()),
             ],
         );
         let error = runtime()
-            .block_on(state.stage_restore(&invalid_snapshot_backup))
+            .block_on(state.stage_restore(&pre_0004_backup))
             .unwrap_err();
-        assert!(error.to_string().contains("账号快照"));
+        assert!(error.to_string().contains("appointment_password_backfill"));
+
+        let orphaned_backfill_database = dir.join("orphaned-backfill.sqlite3");
+        create_database_with_orphaned_password_backfill(&orphaned_backfill_database);
+        let orphaned_backfill_backup = dir.join("orphaned-backfill.tkbackup");
+        let orphaned_backfill_bytes = fs::read(&orphaned_backfill_database).unwrap();
+        write_test_backup(
+            &orphaned_backfill_backup,
+            &[
+                (DATABASE_ARCHIVE_NAME, orphaned_backfill_bytes.as_slice()),
+                (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
+                (VAULT_ARCHIVE_NAME, vault_bytes.as_slice()),
+                (SALT_ARCHIVE_NAME, salt_bytes.as_slice()),
+            ],
+        );
+        let error = runtime()
+            .block_on(state.stage_restore(&orphaned_backfill_backup))
+            .unwrap_err();
+        assert!(error.to_string().contains("无对应预约"));
+
+        let invalid_account_database = dir.join("invalid-account.sqlite3");
+        create_database_with_invalid_appointment(
+            &invalid_account_database,
+            "2099-01-01",
+            None,
+            None,
+            Some("不应脱离账号存在的职业"),
+        );
+        let invalid_account_backup = dir.join("invalid-account.tkbackup");
+        let invalid_account_bytes = fs::read(&invalid_account_database).unwrap();
+        write_test_backup(
+            &invalid_account_backup,
+            &[
+                (DATABASE_ARCHIVE_NAME, invalid_account_bytes.as_slice()),
+                (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
+                (VAULT_ARCHIVE_NAME, vault_bytes.as_slice()),
+                (SALT_ARCHIVE_NAME, salt_bytes.as_slice()),
+            ],
+        );
+        let error = runtime()
+            .block_on(state.stage_restore(&invalid_account_backup))
+            .unwrap_err();
+        assert!(error.to_string().contains("字段值"), "{error}");
 
         let invalid_date_database = dir.join("invalid-date.sqlite3");
         create_database_with_invalid_appointment(
@@ -2416,7 +2623,7 @@ mod tests {
                 .unwrap();
             let database = Database::initialize(&database_path).await.unwrap();
             let mut transaction = database.pool().begin().await.unwrap();
-            let write = insert_imported_appointment(&mut transaction, &imported, None)
+            let write = insert_imported_appointment(&mut transaction, &imported)
                 .await
                 .unwrap();
             transaction.commit().await.unwrap();

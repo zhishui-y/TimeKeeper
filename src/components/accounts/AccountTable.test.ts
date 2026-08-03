@@ -205,6 +205,8 @@ describe("AccountTable", () => {
 
     await wrapper.get('button[aria-label="复制账号 账号一"]').trigger("click");
     expect(wrapper.emitted("copyAccount")).toEqual([[profiles[0]]]);
+    await wrapper.get('button[aria-label="复制角色名 角色一"]').trigger("click");
+    expect(wrapper.emitted("copyCharacterName")).toEqual([[profiles[0]]]);
     await wrapper.get('button[aria-label="复制密码 账号一"]').trigger("click");
     expect(wrapper.emitted("copy")).toEqual([[profiles[0]]]);
 
