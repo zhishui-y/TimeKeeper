@@ -661,6 +661,31 @@ pub(crate) async fn get_appointment_account_name_impl(
         .ok_or_else(|| "该预约未使用账号".to_string())
 }
 
+pub(crate) async fn get_appointment_voice_channel_impl(
+    database: &Database,
+    id: &str,
+) -> Result<String, String> {
+    let row = sqlx::query("SELECT voice_platform, voice_channel FROM appointments WHERE id = ?")
+        .bind(id)
+        .fetch_optional(database.pool())
+        .await
+        .map_err(db_error)?
+        .ok_or_else(|| format!("预约不存在: {id}"))?;
+    let platform: Option<String> = row.try_get("voice_platform").map_err(db_error)?;
+    if platform.as_deref() != Some("yy") {
+        return Err("该预约未选择YY语音".to_string());
+    }
+    let channel: Option<String> = row.try_get("voice_channel").map_err(db_error)?;
+    let channel = channel
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "该预约未填写YY频道号".to_string())?;
+    if !channel.chars().all(|character| character.is_ascii_digit()) {
+        return Err("YY频道号只能包含数字".to_string());
+    }
+    Ok(channel)
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn copy_appointment_account_name(
     database: State<'_, Database>,
@@ -668,6 +693,15 @@ pub async fn copy_appointment_account_name(
 ) -> Result<(), String> {
     let account_name = get_appointment_account_name_impl(&database, &id).await?;
     copy_text_to_clipboard(account_name).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn copy_appointment_voice_channel(
+    database: State<'_, Database>,
+    id: String,
+) -> Result<(), String> {
+    let channel = get_appointment_voice_channel_impl(&database, &id).await?;
+    copy_text_to_clipboard(channel).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -2109,6 +2143,74 @@ mod tests {
                     .await
                     .unwrap_err()
                     .contains("预约不存在")
+            );
+        });
+    }
+
+    #[test]
+    fn resolves_only_valid_yy_voice_channels_without_opening_the_vault() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let mut input = business_input("2026-08-03", "10:00", "11:00");
+            input.voice_platform = Some(VoicePlatform::Yy);
+            input.voice_channel = Some("794676".into());
+            let yy = create_appointment_impl(&database, input)
+                .await
+                .unwrap()
+                .appointment;
+            assert_eq!(
+                get_appointment_voice_channel_impl(&database, &yy.id)
+                    .await
+                    .unwrap(),
+                "794676"
+            );
+
+            let mut qq_input = business_input("2026-08-03", "11:00", "12:00");
+            qq_input.voice_platform = Some(VoicePlatform::Qq);
+            let qq = create_appointment_impl(&database, qq_input)
+                .await
+                .unwrap()
+                .appointment;
+            assert_eq!(
+                get_appointment_voice_channel_impl(&database, &qq.id)
+                    .await
+                    .unwrap_err(),
+                "该预约未选择YY语音"
+            );
+
+            let mut empty_input = business_input("2026-08-03", "12:00", "13:00");
+            empty_input.voice_platform = Some(VoicePlatform::Yy);
+            let empty = create_appointment_impl(&database, empty_input)
+                .await
+                .unwrap()
+                .appointment;
+            assert_eq!(
+                get_appointment_voice_channel_impl(&database, &empty.id)
+                    .await
+                    .unwrap_err(),
+                "该预约未填写YY频道号"
+            );
+            assert!(
+                get_appointment_voice_channel_impl(&database, "missing-appointment")
+                    .await
+                    .unwrap_err()
+                    .contains("预约不存在")
+            );
+
+            sqlx::query("PRAGMA ignore_check_constraints = ON")
+                .execute(database.pool())
+                .await
+                .unwrap();
+            sqlx::query("UPDATE appointments SET voice_channel = '12A34' WHERE id = ?")
+                .bind(&yy.id)
+                .execute(database.pool())
+                .await
+                .unwrap();
+            assert_eq!(
+                get_appointment_voice_channel_impl(&database, &yy.id)
+                    .await
+                    .unwrap_err(),
+                "YY频道号只能包含数字"
             );
         });
     }

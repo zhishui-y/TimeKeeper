@@ -143,6 +143,7 @@ pub fn run() {
             appointments::delete_appointment,
             appointments::delete_appointments,
             appointments::copy_appointment_account_name,
+            appointments::copy_appointment_voice_channel,
             appointments::sync_appointment_service_statuses,
             appointments::set_appointment_service_status,
             appointments::settle_appointment,

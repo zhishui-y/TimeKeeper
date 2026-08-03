@@ -233,11 +233,12 @@ export interface AppointmentTableColumnWidths {
   contactName: number;
   content: number;
   account: number;
+  voice: number;
   mode: number;
   serviceStatus: number;
   settlementStatus: number;
   amount: number;
-  paymentMethod: number;
+  notes: number;
 }
 
 export interface AccountUsageWeekSyncResult {

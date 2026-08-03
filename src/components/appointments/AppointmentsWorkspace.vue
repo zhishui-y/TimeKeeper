@@ -128,6 +128,15 @@ async function copyAccount(appointment: Appointment): Promise<void> {
   }
 }
 
+async function copyVoiceChannel(appointment: Appointment): Promise<void> {
+  try {
+    await api.copyAppointmentVoiceChannel(appointment.id);
+    ui.notify("YY频道号已复制", "success");
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  }
+}
+
 function requestDelete(appointment: Appointment): void {
   if (deleteOperationPending.value) return;
   deleteTarget.value = appointment;
@@ -273,6 +282,7 @@ onMounted(loadColumnWidths);
       @edit="ui.openEditAppointment"
       @duplicate="duplicate"
       @copy-account="copyAccount"
+      @copy-voice-channel="copyVoiceChannel"
       @copy-password="passwordCopy.copy($event.id)"
       @delete="requestDelete"
       @preview-column-width="previewColumnWidth"

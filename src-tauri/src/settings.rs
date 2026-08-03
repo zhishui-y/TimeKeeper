@@ -22,6 +22,10 @@ fn default_account_role_data_server_url() -> String {
     DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL.to_string()
 }
 
+fn default_appointment_voice_column_width() -> u32 {
+    88
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountTableColumnWidths {
@@ -87,11 +91,14 @@ pub struct AppointmentTableColumnWidths {
     pub contact_name: u32,
     pub content: u32,
     pub account: u32,
+    #[serde(default = "default_appointment_voice_column_width")]
+    pub voice: u32,
     pub mode: u32,
     pub service_status: u32,
     pub settlement_status: u32,
     pub amount: u32,
-    pub payment_method: u32,
+    #[serde(alias = "paymentMethod")]
+    pub notes: u32,
 }
 
 impl Default for AppointmentTableColumnWidths {
@@ -102,11 +109,12 @@ impl Default for AppointmentTableColumnWidths {
             contact_name: 72,
             content: 140,
             account: 180,
+            voice: default_appointment_voice_column_width(),
             mode: 56,
             service_status: 74,
             settlement_status: 74,
             amount: 68,
-            payment_method: 58,
+            notes: 120,
         }
     }
 }
@@ -119,11 +127,12 @@ impl AppointmentTableColumnWidths {
             ("联系人", self.contact_name, 72),
             ("内容", self.content, 100),
             ("账号", self.account, 150),
+            ("语音", self.voice, 72),
             ("模式", self.mode, 56),
             ("进度", self.service_status, 74),
             ("结算", self.settlement_status, 74),
             ("金额", self.amount, 64),
-            ("收款", self.payment_method, 58),
+            ("备注", self.notes, 58),
         ];
         for (label, width, minimum) in widths {
             if !(minimum..=480).contains(&width) {
@@ -583,6 +592,32 @@ mod tests {
     }
 
     #[test]
+    fn loads_legacy_payment_method_width_as_notes_width() {
+        let widths: AppointmentTableColumnWidths = serde_json::from_value(serde_json::json!({
+            "serviceDate": 60,
+            "timeRange": 88,
+            "contactName": 72,
+            "content": 140,
+            "account": 180,
+            "mode": 56,
+            "serviceStatus": 74,
+            "settlementStatus": 74,
+            "amount": 68,
+            "paymentMethod": 88
+        }))
+        .unwrap();
+
+        assert_eq!(widths.notes, 88);
+        assert_eq!(widths.voice, default_appointment_voice_column_width());
+        let serialized = serde_json::to_value(widths).unwrap();
+        assert_eq!(
+            serialized.get("notes").and_then(|value| value.as_u64()),
+            Some(88)
+        );
+        assert!(serialized.get("paymentMethod").is_none());
+    }
+
+    #[test]
     fn validates_normalizes_and_persists_role_data_server_url() {
         let dir = test_dir("role-data-server-url");
         let state = SettingsState::load(&dir).unwrap();
@@ -674,6 +709,7 @@ mod tests {
         let widths = AppointmentTableColumnWidths {
             content: 220,
             account: 240,
+            voice: 144,
             ..AppointmentTableColumnWidths::default()
         };
         assert_eq!(
@@ -691,7 +727,7 @@ mod tests {
         );
 
         let invalid = AppointmentTableColumnWidths {
-            account: 149,
+            voice: 71,
             ..AppointmentTableColumnWidths::default()
         };
         assert!(

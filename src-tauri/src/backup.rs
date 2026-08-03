@@ -2428,6 +2428,8 @@ mod tests {
             let custom_appointment_widths = AppointmentTableColumnWidths {
                 content: 216,
                 account: 232,
+                voice: 144,
+                notes: 196,
                 ..AppointmentTableColumnWidths::default()
             };
             settings
@@ -2594,6 +2596,8 @@ mod tests {
                 restored_settings.appointment_table_column_widths.account,
                 232
             );
+            assert_eq!(restored_settings.appointment_table_column_widths.voice, 144);
+            assert_eq!(restored_settings.appointment_table_column_widths.notes, 196);
             assert_eq!(
                 restored_settings.last_account_usage_week_start.as_deref(),
                 Some("2026-07-13")

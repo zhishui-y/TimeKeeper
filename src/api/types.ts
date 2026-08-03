@@ -36,6 +36,7 @@ export interface ApiClient {
   settleAppointment(id: string, amountMinor: number, paymentMethod?: string): Promise<Appointment>;
   listContactPresets(query?: string, limit?: number): Promise<ContactPreset[]>;
   copyAppointmentAccountName(id: string): Promise<void>;
+  copyAppointmentVoiceChannel(id: string): Promise<void>;
   copyAppointmentAccountPassword(id: string): Promise<void>;
 
   listAccountProfiles(query?: string, needsReview?: boolean): Promise<AccountProfile[]>;

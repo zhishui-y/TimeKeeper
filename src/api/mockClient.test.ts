@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { format } from "date-fns";
 import type { AppointmentInput } from "../types/domain";
 import { appointmentToInput } from "../utils/appointment";
+import { DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS } from "../utils/appointmentTableColumns";
 import { mockApi } from "./mockClient";
 
 function businessInput(
@@ -100,6 +101,50 @@ describe("browser mock API", () => {
     expect(writeText).toHaveBeenCalledWith(target!.account!.accountName);
     await mockApi.initializeVault("test-password");
     vi.unstubAllGlobals();
+  });
+
+  it("copies only a valid YY channel without unlocking or scheduling clipboard cleanup", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const setTimeout = vi.spyOn(globalThis, "setTimeout");
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const yy = await mockApi.createAppointment({
+      ...businessInput("2099-08-06", "10:00", "11:00", "YY频道", 1_000),
+      voicePlatform: "yy",
+      voiceChannel: "794676",
+    });
+    const qq = await mockApi.createAppointment({
+      ...businessInput("2099-08-06", "11:00", "12:00", "QQ语音", 1_000),
+      voicePlatform: "qq",
+    });
+    const emptyYy = await mockApi.createAppointment({
+      ...businessInput("2099-08-06", "12:00", "13:00", "空YY频道", 1_000),
+      voicePlatform: "yy",
+    });
+
+    try {
+      await mockApi.lockVault();
+      await expect(mockApi.copyAppointmentVoiceChannel(yy.appointment.id)).resolves.toBeUndefined();
+      expect(writeText).toHaveBeenCalledWith("794676");
+      expect(setTimeout).not.toHaveBeenCalled();
+      await expect(mockApi.copyAppointmentVoiceChannel(qq.appointment.id)).rejects.toThrow(
+        "未选择YY语音",
+      );
+      await expect(mockApi.copyAppointmentVoiceChannel(emptyYy.appointment.id)).rejects.toThrow(
+        "未填写YY频道号",
+      );
+      await expect(mockApi.copyAppointmentVoiceChannel("missing-appointment")).rejects.toThrow(
+        "预约不存在",
+      );
+    } finally {
+      await mockApi.deleteAppointments([
+        yy.appointment.id,
+        qq.appointment.id,
+        emptyYy.appointment.id,
+      ]);
+      await mockApi.initializeVault("test-password");
+      vi.unstubAllGlobals();
+    }
   });
 
   it("removes billing data from entertainment appointments", async () => {
@@ -361,6 +406,37 @@ describe("browser mock API", () => {
     ).rejects.toThrow("列宽超出允许范围");
 
     await mockApi.updateAppointmentTableColumnWidths(previous);
+  });
+
+  it("migrates the legacy payment-method width in browser demo mode", async () => {
+    const current = (await mockApi.getSettings()).appointmentTableColumnWidths;
+    const legacyWidths: Partial<typeof current> & { paymentMethod?: number } = {
+      ...current,
+    };
+    delete legacyWidths.notes;
+    delete legacyWidths.voice;
+    localStorage.setItem(
+      "timekeeper.demo.appointmentTableColumnWidths",
+      JSON.stringify({ ...legacyWidths, paymentMethod: 88 }),
+    );
+    vi.resetModules();
+
+    const { mockApi: migratedMockApi } = await import("./mockClient");
+    await expect(migratedMockApi.getSettings()).resolves.toMatchObject({
+      appointmentTableColumnWidths: {
+        ...legacyWidths,
+        voice: DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS.voice,
+        notes: 88,
+      },
+    });
+    expect(
+      JSON.parse(localStorage.getItem("timekeeper.demo.appointmentTableColumnWidths")!),
+    ).toEqual({
+      ...legacyWidths,
+      voice: DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS.voice,
+      notes: 88,
+    });
+    localStorage.removeItem("timekeeper.demo.appointmentTableColumnWidths");
   });
 
   it("preserves the first weekly usage marker then clears at China Monday", async () => {

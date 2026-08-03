@@ -64,10 +64,13 @@ is cleared atomically at a China-local Monday boundary without accessing Strongh
 Appointment table column widths follow the same settings-owned interaction model through a separate
 dedicated command, so resizing one table cannot overwrite the other table's preferences. The
 appointment workspace owns persistence rollback and row actions. The table presents appointment
-account metadata in two lines and emits account/password copy requests; non-secret account-name copy
-reads SQLite in Rust without opening Stronghold, while password copy retains the normal unlock and
-30-second clipboard-clearing boundary. Row deletion first opens a focused choice dialog so cancelling
-an appointment remains distinct from permanently deleting its record and appointment secret.
+content, account metadata, voice, and notes as separate columns. Account metadata uses two lines and
+emits account/password copy requests. The voice column emits a channel-copy request only for a valid
+YY channel number. Rust reloads non-secret account names and YY channels from SQLite before copying
+them without opening Stronghold or scheduling clipboard cleanup, while password copy retains the
+normal unlock and 30-second clipboard-clearing boundary. Row deletion first opens a focused choice
+dialog so cancelling an appointment remains distinct from permanently deleting its record and
+appointment secret.
 
 The account toolbar remains a single presentation row: `AccountsWorkspace` owns search, filtering,
 vault operations, and API side effects, while `AccountToolbar` owns only the transient unlock-dialog

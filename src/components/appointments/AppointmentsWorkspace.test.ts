@@ -20,6 +20,8 @@ function appointment(serviceStatus: Appointment["serviceStatus"] = "scheduled"):
     endsAt: "2026-08-03T22:00:00",
     contactName: "测试联系人",
     content: "竞技场",
+    voicePlatform: "yy",
+    voiceChannel: "794676",
     mode: "business",
     serviceStatus,
     settlementStatus: "unsettled",
@@ -64,11 +66,13 @@ describe("AppointmentsWorkspace", () => {
     document.body.innerHTML = "";
   });
 
-  it("copies the embedded account and persists appointment table widths", async () => {
+  it("copies account and YY channel without a vault flow, then persists table widths", async () => {
     const target = appointment();
     vi.spyOn(mockApi, "listAppointments").mockResolvedValue([target]);
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
     const copyAccount = vi.spyOn(mockApi, "copyAppointmentAccountName").mockResolvedValue();
+    const copyVoice = vi.spyOn(mockApi, "copyAppointmentVoiceChannel").mockResolvedValue();
+    const unlockVault = vi.spyOn(mockApi, "unlockVault");
     const updateWidths = vi
       .spyOn(mockApi, "updateAppointmentTableColumnWidths")
       .mockImplementation(async (widths) => widths);
@@ -81,6 +85,12 @@ describe("AppointmentsWorkspace", () => {
     expect(copyAccount).toHaveBeenCalledWith(target.id);
     expect(useUiStore(pinia).toast?.message).toBe("账号已复制");
 
+    await wrapper.get('button[aria-label="复制YY频道 794676"]').trigger("click");
+    await flushPromises();
+    expect(copyVoice).toHaveBeenCalledWith(target.id);
+    expect(unlockVault).not.toHaveBeenCalled();
+    expect(useUiStore(pinia).toast?.message).toBe("YY频道号已复制");
+
     const table = wrapper.findComponent(AppointmentTable);
     table.vm.$emit("previewColumnWidth", "content", 208);
     await wrapper.vm.$nextTick();
@@ -91,6 +101,24 @@ describe("AppointmentsWorkspace", () => {
       ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS,
       content: 208,
     });
+    wrapper.unmount();
+  });
+
+  it("shows a YY channel copy error without opening the vault dialog", async () => {
+    const target = appointment();
+    vi.spyOn(mockApi, "listAppointments").mockResolvedValue([target]);
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
+    vi.spyOn(mockApi, "copyAppointmentVoiceChannel").mockRejectedValue(
+      new Error("该预约未填写YY频道号"),
+    );
+    const pinia = createPinia();
+    const wrapper = mount(AppointmentsWorkspace, { global: { plugins: [pinia] } });
+    await flushPromises();
+
+    wrapper.findComponent(AppointmentTable).vm.$emit("copyVoiceChannel", target);
+    await flushPromises();
+    expect(useUiStore(pinia).toast?.message).toBe("该预约未填写YY频道号");
+    expect(document.body.querySelector("[role='dialog']")).toBeNull();
     wrapper.unmount();
   });
 

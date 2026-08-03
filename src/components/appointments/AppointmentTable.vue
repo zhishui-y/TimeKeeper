@@ -27,6 +27,7 @@ const emit = defineEmits<{
   duplicate: [appointment: Appointment];
   delete: [appointment: Appointment];
   copyAccount: [appointment: Appointment];
+  copyVoiceChannel: [appointment: Appointment];
   copyPassword: [appointment: Appointment];
   previewColumnWidth: [columnKey: AppointmentTableColumnKey, width: number];
   commitColumnWidth: [columnKey: AppointmentTableColumnKey, width: number];
@@ -90,11 +91,12 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
           <col :style="{ width: `${columnWidths.contactName}px` }" />
           <col :style="{ width: `${columnWidths.content}px` }" />
           <col :style="{ width: `${columnWidths.account}px` }" />
+          <col :style="{ width: `${columnWidths.voice}px` }" />
           <col :style="{ width: `${columnWidths.mode}px` }" />
           <col :style="{ width: `${columnWidths.serviceStatus}px` }" />
           <col :style="{ width: `${columnWidths.settlementStatus}px` }" />
           <col :style="{ width: `${columnWidths.amount}px` }" />
-          <col :style="{ width: `${columnWidths.paymentMethod}px` }" />
+          <col :style="{ width: `${columnWidths.notes}px` }" />
           <col style="width: 112px" />
         </colgroup>
         <thead>
@@ -171,6 +173,18 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
               />
             </th>
             <th class="resizable-header">
+              语音
+              <AppointmentColumnResizeHandle
+                column-key="voice"
+                label="语音"
+                :width="columnWidths.voice"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
+            <th class="resizable-header">
               模式
               <AppointmentColumnResizeHandle
                 column-key="mode"
@@ -219,11 +233,11 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
               />
             </th>
             <th class="resizable-header">
-              收款
+              备注
               <AppointmentColumnResizeHandle
-                column-key="paymentMethod"
-                label="收款"
-                :width="columnWidths.paymentMethod"
+                column-key="notes"
+                label="备注"
+                :width="columnWidths.notes"
                 :disabled="savingColumnWidths"
                 @preview="previewColumnWidth"
                 @commit="commitColumnWidth"
@@ -265,6 +279,9 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
                   <span class="truncate">{{ appointment.account.specialization || "—" }}</span>
                   <span aria-hidden="true">·</span>
                   <span class="truncate">{{ appointment.account.gearScore || "—" }}</span>
+                </div>
+                <div class="account-cell__line account-cell__line--muted">
+                  <span class="truncate">{{ appointment.account.server || "—" }}</span>
                   <span aria-hidden="true">·</span>
                   <button
                     class="account-cell__copy"
@@ -275,9 +292,6 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
                   >
                     <Copy :size="13" />
                   </button>
-                </div>
-                <div class="account-cell__line account-cell__line--muted">
-                  <span class="truncate">{{ appointment.account.server || "—" }}</span>
                   <span aria-hidden="true">·</span>
                   <button
                     class="account-cell__copy"
@@ -294,6 +308,26 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
               <span v-else class="muted">未使用账号</span>
             </td>
             <td>
+              <div v-if="appointment.voicePlatform === 'yy'" class="voice-cell">
+                <button
+                  v-if="
+                    appointment.voiceChannel?.trim() &&
+                    /^\d+$/.test(appointment.voiceChannel.trim())
+                  "
+                  class="voice-cell__channel"
+                  type="button"
+                  :title="`复制YY频道 ${appointment.voiceChannel.trim()}`"
+                  :aria-label="`复制YY频道 ${appointment.voiceChannel.trim()}`"
+                  @click="emit('copyVoiceChannel', appointment)"
+                >
+                  <span>{{ appointment.voiceChannel.trim() }}</span>
+                </button>
+                <span v-else class="muted">—</span>
+              </div>
+              <span v-else-if="appointment.voicePlatform === 'qq'" class="voice-cell">QQ</span>
+              <span v-else class="muted">—</span>
+            </td>
+            <td>
               <span class="mode-mark" :class="`mode-mark--${appointment.mode}`">
                 {{ modeLabels[appointment.mode] }}
               </span>
@@ -303,7 +337,11 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
             <td class="mono-number amount-cell">
               {{ appointment.mode === "business" ? formatCurrency(appointment.amountMinor) : "—" }}
             </td>
-            <td class="muted">{{ appointment.paymentMethod || "—" }}</td>
+            <td>
+              <span class="notes-cell truncate muted" :title="appointment.notes || undefined">
+                {{ appointment.notes || "—" }}
+              </span>
+            </td>
             <td>
               <div class="row-actions">
                 <button
@@ -353,7 +391,8 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
 }
 
 .cell-title,
-.content-cell {
+.content-cell,
+.notes-cell {
   display: block;
   color: var(--ink-strong);
   font-size: 12px;
@@ -409,6 +448,40 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
 .account-cell__copy:disabled {
   cursor: not-allowed;
   opacity: 0.32;
+}
+
+.voice-cell {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-strong);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.voice-cell__channel {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--brand-strong);
+  background: transparent;
+  font: inherit;
+  cursor: copy;
+}
+
+.voice-cell__channel span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.voice-cell__channel:hover,
+.voice-cell__channel:focus-visible {
+  background: var(--brand-soft);
+  outline: none;
 }
 
 .mode-mark {

@@ -101,10 +101,20 @@ function loadStoredAppointmentTableColumnWidths(): AppointmentTableColumnWidths 
   try {
     const stored = globalThis.localStorage?.getItem(APPOINTMENT_TABLE_WIDTHS_STORAGE_KEY);
     if (!stored) return { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS };
-    const widths = JSON.parse(stored) as AppointmentTableColumnWidths;
-    return appointmentTableColumnWidthsAreValid(widths)
-      ? widths
-      : { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS };
+    const parsed = JSON.parse(stored) as Partial<AppointmentTableColumnWidths> & {
+      paymentMethod?: number;
+    };
+    const widths = {
+      ...parsed,
+      voice: parsed.voice ?? DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS.voice,
+      notes: parsed.notes ?? parsed.paymentMethod,
+    } as AppointmentTableColumnWidths;
+    delete (widths as AppointmentTableColumnWidths & { paymentMethod?: number }).paymentMethod;
+    if (!appointmentTableColumnWidthsAreValid(widths)) {
+      return { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS };
+    }
+    storeAppointmentTableColumnWidths(widths);
+    return widths;
   } catch {
     return { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS };
   }
@@ -600,6 +610,15 @@ export const mockApi: ApiClient = {
     if (!accountName) throw new Error("该预约未使用账号");
     if (!globalThis.navigator?.clipboard) throw new Error("当前环境无法访问剪贴板");
     await globalThis.navigator.clipboard.writeText(accountName);
+  },
+  async copyAppointmentVoiceChannel(id) {
+    const appointment = getAppointmentOrThrow(id);
+    if (appointment.voicePlatform !== "yy") throw new Error("该预约未选择YY语音");
+    const channel = appointment.voiceChannel?.trim();
+    if (!channel) throw new Error("该预约未填写YY频道号");
+    if (!/^\d+$/.test(channel)) throw new Error("YY频道号只能包含数字");
+    if (!globalThis.navigator?.clipboard) throw new Error("当前环境无法访问剪贴板");
+    await globalThis.navigator.clipboard.writeText(channel);
   },
   async deleteAppointments(ids) {
     return deleteAppointmentsByIds(ids);

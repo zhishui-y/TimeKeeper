@@ -8,11 +8,12 @@ export const APPOINTMENT_TABLE_COLUMN_KEYS: readonly AppointmentTableColumnKey[]
   "contactName",
   "content",
   "account",
+  "voice",
   "mode",
   "serviceStatus",
   "settlementStatus",
   "amount",
-  "paymentMethod",
+  "notes",
 ];
 
 export const DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS: AppointmentTableColumnWidths = {
@@ -21,11 +22,12 @@ export const DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS: AppointmentTableColumnWidt
   contactName: 72,
   content: 140,
   account: 180,
+  voice: 88,
   mode: 56,
   serviceStatus: 74,
   settlementStatus: 74,
   amount: 68,
-  paymentMethod: 58,
+  notes: 120,
 };
 
 export const MIN_APPOINTMENT_TABLE_COLUMN_WIDTHS: AppointmentTableColumnWidths = {
@@ -34,11 +36,12 @@ export const MIN_APPOINTMENT_TABLE_COLUMN_WIDTHS: AppointmentTableColumnWidths =
   contactName: 72,
   content: 100,
   account: 150,
+  voice: 72,
   mode: 56,
   serviceStatus: 74,
   settlementStatus: 74,
   amount: 64,
-  paymentMethod: 58,
+  notes: 58,
 };
 
 export const MAX_APPOINTMENT_TABLE_COLUMN_WIDTH = 480;

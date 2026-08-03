@@ -14,6 +14,7 @@ All command payloads and responses use camelCase JSON. Rust DTOs use
 - `delete_appointments(ids) -> number`
 - `list_contact_presets(query?, limit=10) -> ContactPreset[]`
 - `copy_appointment_account_name(id) -> void`
+- `copy_appointment_voice_channel(id) -> void`
 - `copy_appointment_account_password(id) -> void`
 - `sync_appointment_service_statuses() -> number`
 - `set_appointment_service_status(id, status) -> Appointment`
@@ -41,8 +42,11 @@ digit-only string allowed only for YY and is cleared for QQ or no voice.
 
 `copy_appointment_account_name` copies the embedded non-secret account name without requiring an
 unlocked vault or scheduling clipboard cleanup. It rejects missing appointments and appointments
-without an embedded account. `list_contact_presets` excludes cancelled appointments, selects only the newest
-appointment per contact, and returns at most 10 safe templates. Empty `query`
+without an embedded account. `copy_appointment_voice_channel` reloads `voicePlatform` and
+`voiceChannel` from SQLite, accepts only YY appointments with a non-empty digit-only channel, and
+copies the channel without opening Stronghold or scheduling clipboard cleanup. `list_contact_presets`
+excludes cancelled appointments, selects only the newest appointment per contact, and returns at most
+10 safe templates. Empty `query`
 orders all contacts by appointment date/time/creation time; non-empty `query`
 uses contact-name fuzzy matching. A preset may expose `passwordAvailable` and a
 `sourceAppointmentId`, but never a password. `copy_appointment_account_password`
@@ -129,9 +133,13 @@ update command validates each value against its column minimum and the 480px max
 Older settings files that omit either field load default widths and a missing week marker, preserving
 existing weekly content until the first later week transition.
 
-`AppSettings.appointmentTableColumnWidths` stores the ten resizable appointment data widths. Its
+`AppSettings.appointmentTableColumnWidths` stores the eleven resizable appointment data widths. Its
 dedicated update command validates each value against its column minimum and the 480px maximum.
-Older settings files that omit this field load the default appointment widths. Account and
+The `voice` field sits between `account` and `mode`, defaults to 88px, and has a 72px minimum. It uses
+a field-level default so settings that already contain customized appointment widths but predate the
+voice column retain every existing value. The final width field is `notes`; settings written by the
+earlier payment-method column used `paymentMethod` and are accepted as a backward-compatible alias.
+Older settings files that omit the entire field load the default appointment widths. Account and
 appointment table width commands update only their own field and preserve every other setting.
 
 `AppSettings.accountRoleDataServerUrl` is a non-secret absolute HTTP(S) base URL stored in

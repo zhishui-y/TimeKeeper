@@ -40,6 +40,7 @@ const nativeApi: ApiClient = {
   listContactPresets: (query, limit) =>
     invoke<ContactPreset[]>("list_contact_presets", { query, limit }),
   copyAppointmentAccountName: (id) => invoke<void>("copy_appointment_account_name", { id }),
+  copyAppointmentVoiceChannel: (id) => invoke<void>("copy_appointment_voice_channel", { id }),
   copyAppointmentAccountPassword: (id) => invoke<void>("copy_appointment_account_password", { id }),
 
   listAccountProfiles: (query, needsReview) =>
