@@ -62,7 +62,9 @@ describe("AppointmentTable", () => {
     expect(wrapper.text()).not.toContain("支付宝");
     expect(wrapper.text()).toContain("未使用账号");
 
-    const accountLines = wrapper.find(".account-cell").findAll(".account-cell__line");
+    const accountLines = wrapper
+      .find(".appointment-account-summary")
+      .findAll(".appointment-account-summary__line");
     expect(accountLines[0]!.text()).toBe("冰心·19.8万");
     expect(accountLines[0]!.findAll("button")).toHaveLength(0);
     expect(accountLines[1]!.text()).toBe("梦江南··");

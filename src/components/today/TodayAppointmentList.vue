@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { CheckCircle2, CircleDollarSign, ClipboardCopy, Pencil, Play, Trash2 } from "@lucide/vue";
+import { CheckCircle2, CircleDollarSign, Pencil, Trash2 } from "@lucide/vue";
 import type { Appointment, ServiceStatus } from "../../types/domain";
 import { formatCurrency, formatTimeRange } from "../../utils/formatters";
 import { appointmentProgressStatus } from "../../utils/appointmentProgress";
 import StatusBadge from "../common/StatusBadge.vue";
+import AppointmentAccountSummary from "../appointments/AppointmentAccountSummary.vue";
+import AppointmentVoiceSummary from "../appointments/AppointmentVoiceSummary.vue";
 
 defineProps<{
   appointments: readonly Appointment[];
@@ -17,7 +19,9 @@ const emit = defineEmits<{
   settle: [appointment: Appointment];
   changeStatus: [appointment: Appointment, status: ServiceStatus];
   delete: [appointment: Appointment];
+  copyAccount: [appointment: Appointment];
   copyPassword: [appointment: Appointment];
+  copyVoiceChannel: [appointment: Appointment];
 }>();
 </script>
 
@@ -51,6 +55,27 @@ const emit = defineEmits<{
           </div>
           <p>{{ appointment.content || "未填写预约内容" }}</p>
         </div>
+        <div class="appointment-row__metadata">
+          <div class="appointment-row__account">
+            <AppointmentAccountSummary
+              :account="appointment.account"
+              :contact-name="appointment.contactName"
+              @copy-account="emit('copyAccount', appointment)"
+              @copy-password="emit('copyPassword', appointment)"
+            />
+          </div>
+          <div class="appointment-row__voice">
+            <AppointmentVoiceSummary
+              :voice-platform="appointment.voicePlatform"
+              :voice-channel="appointment.voiceChannel"
+              @copy-voice-channel="emit('copyVoiceChannel', appointment)"
+            />
+          </div>
+          <p class="appointment-row__notes" :title="appointment.notes || undefined">
+            <span class="appointment-row__notes-label">备注：</span>
+            <span class="appointment-row__notes-value">{{ appointment.notes || "—" }}</span>
+          </p>
+        </div>
         <div class="appointment-row__amount">
           <strong v-if="appointment.mode === 'business'" class="mono-number">
             {{ formatCurrency(appointment.amountMinor) }}
@@ -58,26 +83,6 @@ const emit = defineEmits<{
           <span v-else>娱乐</span>
         </div>
         <div class="appointment-row__actions">
-          <button
-            class="icon-button"
-            type="button"
-            title="复制账号密码"
-            aria-label="复制账号密码"
-            :disabled="!appointment.account?.passwordAvailable"
-            @click="emit('copyPassword', appointment)"
-          >
-            <ClipboardCopy :size="15" />
-          </button>
-          <button
-            v-if="appointmentProgressStatus(appointment) === 'scheduled'"
-            class="icon-button"
-            type="button"
-            title="开始"
-            aria-label="开始预约"
-            @click="emit('changeStatus', appointment, 'in_progress')"
-          >
-            <Play :size="15" />
-          </button>
           <button
             v-if="appointmentProgressStatus(appointment) === 'in_progress'"
             class="icon-button"
@@ -125,6 +130,7 @@ const emit = defineEmits<{
 
 <style scoped>
 .today-list {
+  container-type: inline-size;
   display: grid;
   min-height: 0;
   grid-template-rows: 54px minmax(0, 1fr);
@@ -170,9 +176,10 @@ const emit = defineEmits<{
 .appointment-row {
   display: grid;
   min-height: 72px;
-  grid-template-columns: 96px 4px minmax(140px, 1fr) 96px 132px;
+  grid-template-areas: "time marker main metadata amount actions";
+  grid-template-columns: 90px 4px minmax(150px, 1fr) minmax(330px, 1.1fr) 72px 100px;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 9px 11px 9px 18px;
   border-bottom: 1px solid var(--line);
   transition: background-color 140ms ease;
@@ -208,6 +215,7 @@ const emit = defineEmits<{
 }
 
 .appointment-row__time {
+  grid-area: time;
   color: var(--ink-strong);
   font-size: 13px;
   font-weight: 700;
@@ -215,6 +223,7 @@ const emit = defineEmits<{
 }
 
 .appointment-row__marker {
+  grid-area: marker;
   width: 3px;
   height: 38px;
   border-radius: 999px;
@@ -228,6 +237,7 @@ const emit = defineEmits<{
 
 .appointment-row__main {
   min-width: 0;
+  grid-area: main;
 }
 
 .appointment-row__title {
@@ -267,8 +277,42 @@ const emit = defineEmits<{
   white-space: nowrap;
 }
 
+.appointment-row__metadata {
+  display: grid;
+  min-width: 0;
+  grid-area: metadata;
+  grid-template-columns: minmax(150px, 1.4fr) 86px minmax(90px, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.appointment-row__account,
+.appointment-row__voice,
+.appointment-row__notes {
+  min-width: 0;
+}
+
+.appointment-row__notes {
+  display: flex;
+  align-items: center;
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.appointment-row__notes-label {
+  flex: 0 0 auto;
+}
+
+.appointment-row__notes-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .appointment-row__amount {
   display: flex;
+  grid-area: amount;
   align-items: flex-end;
   flex-direction: column;
   gap: 4px;
@@ -287,6 +331,7 @@ const emit = defineEmits<{
 
 .appointment-row__actions {
   display: flex;
+  grid-area: actions;
   gap: 2px;
   justify-content: flex-end;
 }
@@ -313,18 +358,27 @@ const emit = defineEmits<{
   .today-list__header {
     padding-inline: 15px;
   }
+}
 
+@container (max-width: 980px) {
   .appointment-row {
-    min-height: 68px;
-    grid-template-columns: 90px 4px minmax(120px, 1fr) 88px 126px;
-    gap: 9px;
+    min-height: 86px;
+    grid-template-areas:
+      "time marker main amount actions"
+      "time marker metadata metadata actions";
+    grid-template-columns: 82px 4px minmax(0, 1fr) 68px 96px;
+    gap: 4px 8px;
     padding-inline: 15px 9px;
+  }
+
+  .appointment-row__metadata {
+    grid-template-columns: minmax(150px, 1.3fr) 72px minmax(100px, 1fr);
+    gap: 8px;
   }
 }
 
 @media (max-height: 760px) {
   .appointment-row {
-    min-height: 66px;
     padding-block: 7px;
   }
 }

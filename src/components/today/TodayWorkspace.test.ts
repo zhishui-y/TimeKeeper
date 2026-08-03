@@ -233,6 +233,88 @@ describe("TodayWorkspace", () => {
     wrapper.unmount();
   });
 
+  it("copies account and YY metadata without opening the vault flow", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 20, 12, 0, 0));
+    const target = appointment({
+      id: "metadata-copy",
+      account: {
+        specialization: "莫问",
+        gearScore: "794676",
+        server: "梦江南",
+        accountName: "demo-account",
+        passwordAvailable: true,
+      },
+      voicePlatform: "yy",
+      voiceChannel: "27364886",
+    });
+    vi.spyOn(mockApi, "listAppointments").mockResolvedValue([target]);
+    vi.spyOn(mockApi, "getDashboardSummary").mockResolvedValue({
+      todaySettledMinor: 0,
+      weekSettledMinor: 0,
+      pendingCount: 0,
+      nextAppointment: null,
+    });
+    const copyAccount = vi.spyOn(mockApi, "copyAppointmentAccountName").mockResolvedValue();
+    const copyVoice = vi.spyOn(mockApi, "copyAppointmentVoiceChannel").mockResolvedValue();
+    const unlockVault = vi.spyOn(mockApi, "unlockVault");
+    const pinia = createPinia();
+    const wrapper = mount(TodayWorkspace, { global: { plugins: [pinia] } });
+    await flushPromises();
+
+    await wrapper.get('button[aria-label="复制账号 demo-account"]').trigger("click");
+    await flushPromises();
+    expect(copyAccount).toHaveBeenCalledWith(target.id);
+    expect(useUiStore(pinia).toast?.message).toBe("账号已复制");
+
+    await wrapper.get('button[aria-label="复制YY频道 27364886"]').trigger("click");
+    await flushPromises();
+    expect(copyVoice).toHaveBeenCalledWith(target.id);
+    expect(useUiStore(pinia).toast?.message).toBe("YY频道号已复制");
+    expect(unlockVault).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("shows metadata copy errors without opening the vault flow", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 20, 12, 0, 0));
+    const target = appointment({
+      id: "metadata-copy-error",
+      account: {
+        specialization: "莫问",
+        gearScore: "794676",
+        server: "梦江南",
+        accountName: "demo-account",
+        passwordAvailable: false,
+      },
+      voicePlatform: "yy",
+      voiceChannel: "27364886",
+    });
+    vi.spyOn(mockApi, "listAppointments").mockResolvedValue([target]);
+    vi.spyOn(mockApi, "getDashboardSummary").mockResolvedValue({
+      todaySettledMinor: 0,
+      weekSettledMinor: 0,
+      pendingCount: 0,
+      nextAppointment: null,
+    });
+    vi.spyOn(mockApi, "copyAppointmentAccountName").mockRejectedValue(new Error("账号复制失败"));
+    vi.spyOn(mockApi, "copyAppointmentVoiceChannel").mockRejectedValue(new Error("YY频道复制失败"));
+    const unlockVault = vi.spyOn(mockApi, "unlockVault");
+    const pinia = createPinia();
+    const wrapper = mount(TodayWorkspace, { global: { plugins: [pinia] } });
+    await flushPromises();
+
+    await wrapper.get('button[aria-label="复制账号 demo-account"]').trigger("click");
+    await flushPromises();
+    expect(useUiStore(pinia).toast?.message).toBe("账号复制失败");
+
+    await wrapper.get('button[aria-label="复制YY频道 27364886"]').trigger("click");
+    await flushPromises();
+    expect(useUiStore(pinia).toast?.message).toBe("YY频道复制失败");
+    expect(unlockVault).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it("confirms and deletes an appointment from the lower schedule", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 6, 20, 12, 0, 0));

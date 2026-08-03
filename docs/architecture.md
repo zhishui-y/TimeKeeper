@@ -19,7 +19,7 @@ itself remains outside both domain DTOs and SQLite.
 | Surface                    | Container responsibility                                     | Child contracts                                                                   |
 | -------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------- |
 | App shell                  | Navigation, lock state, global appointment drawer            | Emits navigation and quick-create actions                                         |
-| Today workspace            | Loads today's appointments and dashboard summary             | Passes appointments to timeline/list; receives edit/status actions                |
+| Today workspace            | Loads today's appointments and dashboard summary             | Passes appointments to timeline/list; receives edit/status/copy actions           |
 | Calendar board             | Maps appointments to FullCalendar events                     | Emits edit and reschedule requests; never mutates input props                     |
 | Appointment drawer         | Composes the drawer shell and form sections                  | Delegates draft, validation, template restore, and serialization to a composable  |
 | Contact fields             | Presents recent/searchable contacts                          | Emits explicit preset selection; typing alone never restores a template           |

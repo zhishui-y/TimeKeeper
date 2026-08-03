@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ClipboardCopy, Copy, CopyPlus, Pencil, Trash2 } from "@lucide/vue";
+import { CopyPlus, Pencil, Trash2 } from "@lucide/vue";
 import { computed, useTemplateRef, watch } from "vue";
 import type { Appointment, AppointmentTableColumnWidths } from "../../types/domain";
 import {
@@ -14,7 +14,9 @@ import {
 } from "../../utils/formatters";
 import { appointmentProgressStatus } from "../../utils/appointmentProgress";
 import StatusBadge from "../common/StatusBadge.vue";
+import AppointmentAccountSummary from "./AppointmentAccountSummary.vue";
 import AppointmentColumnResizeHandle from "./AppointmentColumnResizeHandle.vue";
+import AppointmentVoiceSummary from "./AppointmentVoiceSummary.vue";
 
 const props = defineProps<{
   appointments: readonly Appointment[];
@@ -262,58 +264,19 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
               </strong>
             </td>
             <td>
-              <div v-if="appointment.account" class="account-cell">
-                <div class="account-cell__line">
-                  <span class="truncate">{{ appointment.account.specialization || "—" }}</span>
-                  <span aria-hidden="true">·</span>
-                  <span class="truncate">{{ appointment.account.gearScore || "—" }}</span>
-                </div>
-                <div class="account-cell__line account-cell__line--muted">
-                  <span class="truncate">{{ appointment.account.server || "—" }}</span>
-                  <span aria-hidden="true">·</span>
-                  <button
-                    class="account-cell__copy"
-                    type="button"
-                    :title="`复制账号 ${appointment.account.accountName}`"
-                    :aria-label="`复制账号 ${appointment.account.accountName}`"
-                    @click="emit('copyAccount', appointment)"
-                  >
-                    <Copy :size="13" />
-                  </button>
-                  <span aria-hidden="true">·</span>
-                  <button
-                    class="account-cell__copy"
-                    type="button"
-                    :disabled="!appointment.account.passwordAvailable"
-                    :title="appointment.account.passwordAvailable ? '复制密码' : '该预约未保存密码'"
-                    :aria-label="`复制密码 ${appointment.contactName}`"
-                    @click="emit('copyPassword', appointment)"
-                  >
-                    <ClipboardCopy :size="13" />
-                  </button>
-                </div>
-              </div>
-              <span v-else class="muted">未使用账号</span>
+              <AppointmentAccountSummary
+                :account="appointment.account"
+                :contact-name="appointment.contactName"
+                @copy-account="emit('copyAccount', appointment)"
+                @copy-password="emit('copyPassword', appointment)"
+              />
             </td>
             <td>
-              <div v-if="appointment.voicePlatform === 'yy'" class="voice-cell">
-                <button
-                  v-if="
-                    appointment.voiceChannel?.trim() &&
-                    /^\d+$/.test(appointment.voiceChannel.trim())
-                  "
-                  class="voice-cell__channel"
-                  type="button"
-                  :title="`复制YY频道 ${appointment.voiceChannel.trim()}`"
-                  :aria-label="`复制YY频道 ${appointment.voiceChannel.trim()}`"
-                  @click="emit('copyVoiceChannel', appointment)"
-                >
-                  <span>{{ appointment.voiceChannel.trim() }}</span>
-                </button>
-                <span v-else class="muted">—</span>
-              </div>
-              <span v-else-if="appointment.voicePlatform === 'qq'" class="voice-cell">QQ</span>
-              <span v-else class="muted">—</span>
+              <AppointmentVoiceSummary
+                :voice-platform="appointment.voicePlatform"
+                :voice-channel="appointment.voiceChannel"
+                @copy-voice-channel="emit('copyVoiceChannel', appointment)"
+              />
             </td>
             <td>
               <span class="mode-mark" :class="`mode-mark--${appointment.mode}`">
@@ -384,91 +347,6 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
   color: var(--ink-strong);
   font-size: 12px;
   font-weight: 700;
-}
-
-.account-cell {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.account-cell__line {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-  color: var(--ink-strong);
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.account-cell__line .truncate {
-  min-width: 0;
-}
-
-.account-cell__line--muted {
-  color: var(--ink-muted);
-  font-size: 10px;
-  font-weight: 500;
-}
-
-.account-cell__copy {
-  display: grid;
-  width: 22px;
-  height: 22px;
-  flex: 0 0 22px;
-  padding: 0;
-  place-items: center;
-  border: 0;
-  border-radius: 5px;
-  color: var(--brand-strong);
-  background: transparent;
-  cursor: copy;
-}
-
-.account-cell__copy:hover:not(:disabled),
-.account-cell__copy:focus-visible {
-  background: var(--brand-soft);
-  outline: none;
-}
-
-.account-cell__copy:disabled {
-  cursor: not-allowed;
-  opacity: 0.32;
-}
-
-.voice-cell {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: 4px;
-  color: var(--ink-strong);
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.voice-cell__channel {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  padding: 2px 4px;
-  border: 0;
-  border-radius: 5px;
-  color: var(--brand-strong);
-  background: transparent;
-  font: inherit;
-  cursor: copy;
-}
-
-.voice-cell__channel span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.voice-cell__channel:hover,
-.voice-cell__channel:focus-visible {
-  background: var(--brand-soft);
-  outline: none;
 }
 
 .mode-mark {

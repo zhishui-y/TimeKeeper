@@ -129,6 +129,24 @@ async function changeStatus(appointment: Appointment, status: ServiceStatus): Pr
   }
 }
 
+async function copyAccount(appointment: Appointment): Promise<void> {
+  try {
+    await api.copyAppointmentAccountName(appointment.id);
+    ui.notify("账号已复制", "success");
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  }
+}
+
+async function copyVoiceChannel(appointment: Appointment): Promise<void> {
+  try {
+    await api.copyAppointmentVoiceChannel(appointment.id);
+    ui.notify("YY频道号已复制", "success");
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  }
+}
+
 async function removeAppointment(appointment: Appointment): Promise<void> {
   if (!globalThis.confirm(`确定永久删除 ${appointment.contactName} 的这条预约吗？`)) return;
   const action = async () => {
@@ -267,7 +285,9 @@ onUnmounted(() => {
       @edit="ui.openEditAppointment"
       @settle="ui.openSettleAppointment"
       @change-status="changeStatus"
+      @copy-account="copyAccount"
       @copy-password="passwordCopy.copy($event.id)"
+      @copy-voice-channel="copyVoiceChannel"
       @delete="removeAppointment"
     />
     <AccountVaultUnlockDialog
