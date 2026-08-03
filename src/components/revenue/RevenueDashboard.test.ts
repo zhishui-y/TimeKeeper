@@ -76,6 +76,11 @@ describe("RevenueDashboard", () => {
         .find((button) => button.text() === "按日")
         ?.classes(),
     ).toContain("is-active");
+    const pendingMetric = wrapper.get(".revenue-metric--pending");
+    expect(pendingMetric.get("span").text()).toBe("待结场次");
+    expect(pendingMetric.get("small").text()).toBe("已完成但未结算");
+    expect(pendingMetric.text()).not.toContain("¥");
+    expect(wrapper.text()).not.toContain("待结金额");
 
     wrapper.unmount();
   });

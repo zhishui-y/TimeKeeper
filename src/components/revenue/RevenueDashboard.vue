@@ -212,9 +212,9 @@ watch(() => [range.from, range.to, range.granularity] as const, closePeriodDetai
       </div>
       <div class="revenue-metric revenue-metric--pending">
         <Clock3 :size="18" />
-        <span>待结金额</span>
-        <strong class="mono-number">{{ formatCurrency(summary?.unsettledMinor) }}</strong>
-        <small>未计入已结收益</small>
+        <span>待结场次</span>
+        <strong class="mono-number">{{ summary?.pendingCount ?? 0 }}</strong>
+        <small>已完成但未结算</small>
       </div>
       <div class="revenue-metric">
         <Gauge :size="18" />

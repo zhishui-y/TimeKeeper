@@ -389,6 +389,7 @@ function createPoint(period: string): RevenuePoint {
     period,
     settledMinor: 0,
     unsettledMinor: 0,
+    pendingCount: 0,
     businessHours: 0,
     appointmentCount: 0,
   };
@@ -942,18 +943,21 @@ export const mockApi: ApiClient = {
         paymentMap.set(method, (paymentMap.get(method) ?? 0) + (item.amountMinor ?? 0));
       } else if (item.settlementStatus === "unsettled") {
         point.unsettledMinor += item.amountMinor ?? 0;
+        if (item.serviceStatus === "completed") point.pendingCount += 1;
       }
       pointsMap.set(key, point);
     }
     const points = [...pointsMap.values()].sort((a, b) => a.period.localeCompare(b.period));
     const settledMinor = points.reduce((sum, point) => sum + point.settledMinor, 0);
     const unsettledMinor = points.reduce((sum, point) => sum + point.unsettledMinor, 0);
+    const pendingCount = points.reduce((sum, point) => sum + point.pendingCount, 0);
     const businessHours = points.reduce((sum, point) => sum + point.businessHours, 0);
     return {
       from: resolvedFrom,
       to: resolvedTo,
       settledMinor,
       unsettledMinor,
+      pendingCount,
       businessHours,
       averageHourlyMinor: businessHours > 0 ? Math.round(settledMinor / businessHours) : 0,
       appointmentCount: scoped.length,

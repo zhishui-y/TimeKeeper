@@ -128,8 +128,10 @@ describe("AccountsWorkspace batch delete feedback", () => {
     });
     await flushPromises();
 
-    await wrapper.get('button[aria-label="显示账号一 的密码"]').trigger("click");
-    expect(wrapper.text()).toContain("secret-1");
+    expect(wrapper.text()).not.toContain("secret-1");
+    expect(wrapper.text()).not.toContain("••••••");
+    expect(wrapper.find('button[aria-label^="显示账号一 的密码"]').exists()).toBe(false);
+    expect(wrapper.find('button[aria-label="复制账号一 的密码"]').exists()).toBe(true);
 
     await wrapper.get('select[aria-label="按服务器筛选账号"]').setValue("唯我独尊");
     expect(wrapper.findAll(".data-table tbody tr")).toHaveLength(1);
@@ -138,7 +140,7 @@ describe("AccountsWorkspace batch delete feedback", () => {
 
     await wrapper.get('select[aria-label="按服务器筛选账号"]').setValue("");
     expect(wrapper.text()).not.toContain("secret-1");
-    expect(wrapper.text()).toContain("••••••");
+    expect(wrapper.text()).not.toContain("••••••");
     const currentScoreSort = wrapper.get('[data-sort-key="currentScore"]');
     await currentScoreSort.trigger("click");
     expect(

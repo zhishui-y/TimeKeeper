@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  ClipboardCopy,
   Copy,
   GripVertical,
   LoaderCircle,
@@ -23,7 +24,6 @@ import type {
   SortDirection,
 } from "../../utils/accounts";
 import { formatShortDate } from "../../utils/formatters";
-import PasswordValue from "../common/PasswordValue.vue";
 import AccountColumnResizeHandle from "./AccountColumnResizeHandle.vue";
 
 interface AccountDragEvent {
@@ -49,12 +49,10 @@ const props = withDefaults(
     columnWidths: AccountTableColumnWidths;
     savingColumnWidths: boolean;
     clearingWeekly: boolean;
-    passwordResetKey?: string | number;
     roleRefreshBusy?: boolean;
     refreshingIds?: ReadonlySet<string>;
   }>(),
   {
-    passwordResetKey: 0,
     roleRefreshBusy: false,
     refreshingIds: () => new Set<string>(),
   },
@@ -510,13 +508,16 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
               </button>
             </td>
             <td class="copy-cell">
-              <PasswordValue
-                :password="profile.password"
-                :label="`${profile.accountName} 的密码`"
-                :reset-key="`${passwordResetKey}:${profile.updatedAt}`"
-                compact
-                @copy="emit('copy', profile)"
-              />
+              <button
+                class="icon-button copy-button"
+                type="button"
+                :disabled="!profile.password"
+                :title="profile.password ? `复制${profile.accountName} 的密码` : '未保存账号密码'"
+                :aria-label="`复制${profile.accountName} 的密码`"
+                @click="emit('copy', profile)"
+              >
+                <ClipboardCopy :size="15" />
+              </button>
             </td>
             <td class="mono-number score-cell">{{ profile.currentScore ?? "—" }}</td>
             <td class="mono-number score-cell">{{ profile.highestScore ?? "—" }}</td>

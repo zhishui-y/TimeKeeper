@@ -66,7 +66,11 @@ describe("TodayAppointmentList", () => {
       .find(".appointment-account-summary")
       .findAll(".appointment-account-summary__line");
     expect(accountLines[0]!.text()).toBe("莫问·794676");
-    expect(accountLines[1]!.text()).toContain("梦江南··••••••");
+    expect(accountLines[1]!.text()).toBe("梦江南");
+    expect(accountLines[1]!.findAll("button")).toHaveLength(2);
+    expect(accountLines[1]!.text()).not.toContain("demo-account");
+    expect(accountLines[1]!.text()).not.toContain("••••••");
+    expect(accountLines[1]!.find('button[aria-label^="显示"]').exists()).toBe(false);
     expect(rows[0]!.get(".appointment-row__voice").text()).toBe("27364886");
     expect(rows[0]!.get(".appointment-row__notes").text()).toBe("备注：优先安排晚间时段");
     expect(rows[0]!.get(".appointment-row__notes").attributes("title")).toBe("优先安排晚间时段");

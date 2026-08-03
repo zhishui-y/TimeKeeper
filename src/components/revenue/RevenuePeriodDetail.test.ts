@@ -10,6 +10,7 @@ const summary: RevenueSummary = {
   to: "2026-08-02",
   settledMinor: 12_000,
   unsettledMinor: 5_000,
+  pendingCount: 1,
   businessHours: 3.5,
   averageHourlyMinor: 3_429,
   appointmentCount: 2,
@@ -20,6 +21,7 @@ const summary: RevenueSummary = {
       period: "2026-07-29",
       settledMinor: 12_000,
       unsettledMinor: 0,
+      pendingCount: 0,
       businessHours: 2,
       appointmentCount: 1,
     },
@@ -27,6 +29,7 @@ const summary: RevenueSummary = {
       period: "2026-08-01",
       settledMinor: 0,
       unsettledMinor: 5_000,
+      pendingCount: 1,
       businessHours: 1.5,
       appointmentCount: 1,
     },
@@ -57,6 +60,10 @@ describe("RevenuePeriodDetail", () => {
     expect(wrapper.get('[role="dialog"]').attributes("aria-modal")).toBe("true");
     expect(wrapper.get("#period-detail-title").text()).toBe("周收入明细");
     expect(wrapper.text()).toContain("2026年7月27日 — 2026年8月2日");
+    expect(wrapper.text()).not.toContain("待结金额");
+    expect(wrapper.get(".detail-summary").text()).toContain("待结场次1场");
+    expect(wrapper.get(".daily-table thead").text()).toContain("待结场次");
+    expect(wrapper.findAll("tbody tr")[1]!.text()).toContain("1场");
     expect(wrapper.findAll("tbody tr").map((row) => row.text())).toEqual([
       expect.stringContaining("7月29日"),
       expect.stringContaining("8月1日"),

@@ -35,7 +35,6 @@ const savingColumnWidths = shallowRef(false);
 const deleteTarget = shallowRef<Appointment | null>(null);
 const deleteOperationPending = shallowRef(false);
 const batchDeletePending = shallowRef(false);
-const passwordResetKey = shallowRef(0);
 
 const currentPageSelectedIds = computed(() =>
   history.items.value.filter((item) => selection.isSelected(item.id)).map((item) => item.id),
@@ -102,7 +101,6 @@ function commitColumnWidth(columnKey: AppointmentTableColumnKey, width: number):
 
 async function applyFilters(next: AppointmentFilters): Promise<void> {
   selection.clear();
-  passwordResetKey.value += 1;
   await history.applyFilters(next);
 }
 
@@ -111,7 +109,6 @@ async function resetFilters(): Promise<void> {
 }
 
 async function changePage(page: number): Promise<void> {
-  passwordResetKey.value += 1;
   await history.goToPage(page);
 }
 
@@ -234,7 +231,6 @@ watch(
   () => ui.dataRevision,
   () => {
     selection.clear();
-    passwordResetKey.value += 1;
     void history.reloadAfterDeletion();
   },
 );
@@ -283,7 +279,6 @@ onMounted(loadColumnWidths);
       :all-selected="allSelected"
       :selection-indeterminate="selectionIndeterminate"
       :selecting-all="selection.selectingAll.value"
-      :password-reset-key="passwordResetKey"
       @toggle-all="toggleAll"
       @toggle-one="selection.toggleOne"
       @edit="ui.openEditAppointment"

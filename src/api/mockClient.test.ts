@@ -207,6 +207,8 @@ describe("browser mock API", () => {
     const beforeSettlement = await mockApi.getRevenueSummary(date, date, "day");
     expect(beforeSettlement.settledMinor).toBe(0);
     expect(beforeSettlement.unsettledMinor).toBe(30_000);
+    expect(beforeSettlement.pendingCount).toBe(1);
+    expect(beforeSettlement.points[0]?.pendingCount).toBe(1);
     expect(beforeSettlement.businessHours).toBe(2);
 
     await mockApi.settleAppointment(second.appointment.id, 25_000, "微信");
@@ -216,6 +218,7 @@ describe("browser mock API", () => {
     const afterSettlement = await mockApi.getRevenueSummary(date, date, "day");
     expect(afterSettlement.settledMinor).toBe(25_000);
     expect(afterSettlement.unsettledMinor).toBe(10_000);
+    expect(afterSettlement.pendingCount).toBe(0);
     expect(afterSettlement.businessHours).toBe(2);
   });
 

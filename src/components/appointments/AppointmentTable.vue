@@ -26,7 +26,6 @@ const props = defineProps<{
   allSelected: boolean;
   selectionIndeterminate: boolean;
   selectingAll: boolean;
-  passwordResetKey?: string | number;
 }>();
 
 const emit = defineEmits<{
@@ -265,7 +264,6 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
               <AppointmentAccountSummary
                 :account="appointment.account"
                 :contact-name="appointment.contactName"
-                :reset-key="passwordResetKey"
                 @copy-account="emit('copyAccount', appointment)"
                 @copy-password="emit('copyPassword', appointment)"
               />

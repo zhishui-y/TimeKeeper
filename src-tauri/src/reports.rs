@@ -64,6 +64,7 @@ fn empty_points(
                 period: key,
                 settled_minor: 0,
                 unsettled_minor: 0,
+                pending_count: 0,
                 business_hours: 0.0,
                 appointment_count: 0,
             },
@@ -270,6 +271,7 @@ pub(crate) async fn get_revenue_summary_impl(
     let mut payment_methods = BTreeMap::<String, i64>::new();
     let mut settled_minor = 0_i64;
     let mut unsettled_minor = 0_i64;
+    let mut pending_count = 0_i64;
     let mut business_hours = 0.0_f64;
     let mut completed_count = 0_i64;
 
@@ -306,6 +308,10 @@ pub(crate) async fn get_revenue_summary_impl(
             SettlementStatus::Unsettled => {
                 unsettled_minor += amount_minor;
                 point.unsettled_minor += amount_minor;
+                if service_status == ServiceStatus::Completed {
+                    pending_count += 1;
+                    point.pending_count += 1;
+                }
             }
             SettlementStatus::NotApplicable => {
                 return Err("业务预约包含不适用的结算状态".into());
@@ -352,6 +358,7 @@ pub(crate) async fn get_revenue_summary_impl(
         to: normalized_to,
         settled_minor,
         unsettled_minor,
+        pending_count,
         business_hours,
         average_hourly_minor,
         appointment_count: rows.len() as i64,
@@ -443,6 +450,8 @@ mod tests {
             .unwrap();
             assert_eq!(daily.settled_minor, 10_000);
             assert_eq!(daily.unsettled_minor, 5_000);
+            assert_eq!(daily.pending_count, 1);
+            assert_eq!(daily.points[1].pending_count, 1);
             assert_eq!(daily.business_hours, 3.0);
             assert_eq!(daily.average_hourly_minor, 3_333);
             assert_eq!(daily.points.len(), 3);

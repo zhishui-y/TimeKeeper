@@ -377,6 +377,7 @@ pub struct RevenuePoint {
     pub period: String,
     pub settled_minor: i64,
     pub unsettled_minor: i64,
+    pub pending_count: i64,
     pub business_hours: f64,
     pub appointment_count: i64,
 }
@@ -395,6 +396,7 @@ pub struct RevenueSummary {
     pub to: String,
     pub settled_minor: i64,
     pub unsettled_minor: i64,
+    pub pending_count: i64,
     pub business_hours: f64,
     pub average_hourly_minor: i64,
     pub appointment_count: i64,

@@ -125,12 +125,17 @@ describe("AccountTable", () => {
 
     expect(wrapper.find(".account-name").exists()).toBe(false);
     expect(wrapper.find(".password-cell").exists()).toBe(false);
-    expect(wrapper.text()).toContain("••••••");
-    expect(wrapper.find('button[aria-label^="显示账号一 的密码"]').exists()).toBe(true);
+    expect(wrapper.text()).not.toContain("••••••");
+    expect(wrapper.find('button[aria-label^="显示账号一 的密码"]').exists()).toBe(false);
+    expect(wrapper.find('button[aria-label^="隐藏账号一 的密码"]').exists()).toBe(false);
     expect(wrapper.get('button[aria-label="复制账号 账号一"]').text()).toBe("");
     expect(wrapper.find('button[aria-label="复制账号 账号一"] svg').exists()).toBe(true);
     expect(wrapper.get('button[aria-label="复制账号一 的密码"]').text()).toBe("");
     expect(wrapper.find('button[aria-label="复制账号一 的密码"] svg').exists()).toBe(true);
+    expect(wrapper.get('button[aria-label="复制账号二 的密码"]').attributes("disabled")).toBe("");
+    expect(wrapper.get('button[aria-label="复制账号二 的密码"]').attributes("title")).toBe(
+      "未保存账号密码",
+    );
     expect(firstNotes.classes()).toContain("truncate");
     expect(firstNotes.attributes("title")).toBe(profiles[0]!.notes);
     expect(firstNotes.text()).toBe(profiles[0]!.notes);

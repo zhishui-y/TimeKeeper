@@ -1,12 +1,10 @@
 <script setup lang="ts">
-import { Copy } from "@lucide/vue";
+import { ClipboardCopy, Copy } from "@lucide/vue";
 import type { AppointmentAccount } from "../../types/domain";
-import PasswordValue from "../common/PasswordValue.vue";
 
 defineProps<{
   account?: AppointmentAccount | null;
   contactName: string;
-  resetKey?: string | number;
 }>();
 
 const emit = defineEmits<{
@@ -26,7 +24,6 @@ const emit = defineEmits<{
     </div>
     <div class="appointment-account-summary__line appointment-account-summary__line--secondary">
       <span class="appointment-account-summary__value">{{ account.server || "—" }}</span>
-      <span aria-hidden="true">·</span>
       <button
         class="appointment-account-summary__copy"
         type="button"
@@ -36,14 +33,16 @@ const emit = defineEmits<{
       >
         <Copy :size="13" />
       </button>
-      <span aria-hidden="true">·</span>
-      <PasswordValue
-        :password="account.password"
-        :label="`${contactName} 的预约密码`"
-        :reset-key="resetKey"
-        compact
-        @copy="emit('copyPassword')"
-      />
+      <button
+        class="appointment-account-summary__copy"
+        type="button"
+        :disabled="!account.password"
+        :title="account.password ? `复制${contactName} 的预约密码` : '未保存预约密码'"
+        :aria-label="`复制${contactName} 的预约密码`"
+        @click="emit('copyPassword')"
+      >
+        <ClipboardCopy :size="13" />
+      </button>
     </div>
   </div>
   <span v-else class="appointment-account-summary__empty">未使用账号</span>

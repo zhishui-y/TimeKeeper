@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CalendarDays, Clock3, Coins, ReceiptText, X } from "@lucide/vue";
+import { CalendarDays, Clock3, Coins, X } from "@lucide/vue";
 import { format, parseISO } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import { computed, useTemplateRef, type DeepReadonly } from "vue";
@@ -91,9 +91,9 @@ useModalFocus({
               <strong class="mono-number">{{ formatCurrency(summary?.settledMinor) }}</strong>
             </div>
             <div>
-              <ReceiptText :size="17" />
-              <span>待结金额</span>
-              <strong class="mono-number">{{ formatCurrency(summary?.unsettledMinor) }}</strong>
+              <Clock3 :size="17" />
+              <span>待结场次</span>
+              <strong class="mono-number">{{ summary?.pendingCount ?? 0 }}场</strong>
             </div>
             <div>
               <Clock3 :size="17" />
@@ -129,7 +129,7 @@ useModalFocus({
                   <tr>
                     <th>日期</th>
                     <th>已结收益</th>
-                    <th>待结金额</th>
+                    <th>待结场次</th>
                     <th>业务工时</th>
                     <th>预约</th>
                   </tr>
@@ -140,7 +140,7 @@ useModalFocus({
                     <td class="mono-number daily-table__settled">
                       {{ formatCurrency(point.settledMinor) }}
                     </td>
-                    <td class="mono-number">{{ formatCurrency(point.unsettledMinor) }}</td>
+                    <td class="mono-number">{{ point.pendingCount }}场</td>
                     <td class="mono-number">{{ point.businessHours.toFixed(1) }}h</td>
                     <td class="mono-number">{{ point.appointmentCount }}场</td>
                   </tr>

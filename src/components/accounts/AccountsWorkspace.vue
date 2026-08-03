@@ -61,7 +61,6 @@ const savingColumnWidths = shallowRef(false);
 const clearingWeekly = shallowRef(false);
 const syncingWeekly = shallowRef(false);
 const selectedIds = ref<string[]>([]);
-const passwordResetKey = shallowRef(0);
 const selectedCount = computed(() => selectedIds.value.length);
 const roleDataRefreshReturnFocus = shallowRef<{ focus(): void } | null>(null);
 const deletingAccounts = shallowRef(false);
@@ -140,7 +139,6 @@ function openEdit(profile: AccountProfile): void {
 
 async function search(): Promise<void> {
   selectedIds.value = [];
-  passwordResetKey.value += 1;
   await load(query.value, needsReviewOnly.value ? true : undefined);
 }
 
@@ -247,7 +245,6 @@ async function clearWeeklyUsage(): Promise<void> {
 }
 
 function changeSort(nextSortKey: AccountProfileSortKey): void {
-  passwordResetKey.value += 1;
   if (sortKey.value === nextSortKey) {
     sortDirection.value = sortDirection.value === "asc" ? "desc" : "asc";
     return;
@@ -261,7 +258,6 @@ function changeSort(nextSortKey: AccountProfileSortKey): void {
 }
 
 function resetListView(): void {
-  passwordResetKey.value += 1;
   Object.assign(accountFilters, {
     contactName: "",
     server: "",
@@ -489,7 +485,6 @@ watch(
   () => [accountFilters.contactName, accountFilters.server, accountFilters.specialization],
   () => {
     selectedIds.value = [];
-    passwordResetKey.value += 1;
   },
 );
 
@@ -594,7 +589,6 @@ watch(
       :column-widths="columnWidths"
       :saving-column-widths="savingColumnWidths"
       :clearing-weekly="clearingWeekly"
-      :password-reset-key="passwordResetKey"
       :role-refresh-busy="roleDataRefresh.busy.value"
       :refreshing-ids="roleDataRefresh.targetIds.value"
       v-model:selected-ids="selectedIds"

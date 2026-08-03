@@ -155,6 +155,7 @@ export interface RevenuePoint {
   period: string;
   settledMinor: number;
   unsettledMinor: number;
+  pendingCount: number;
   businessHours: number;
   appointmentCount: number;
 }
@@ -164,6 +165,7 @@ export interface RevenueSummary {
   to: string;
   settledMinor: number;
   unsettledMinor: number;
+  pendingCount: number;
   businessHours: number;
   averageHourlyMinor: number;
   appointmentCount: number;

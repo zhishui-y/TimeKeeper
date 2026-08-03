@@ -69,8 +69,11 @@ describe("AppointmentTable", () => {
       .findAll(".appointment-account-summary__line");
     expect(accountLines[0]!.text()).toBe("冰心·19.8万");
     expect(accountLines[0]!.findAll("button")).toHaveLength(0);
-    expect(accountLines[1]!.text()).toContain("梦江南··••••••");
-    expect(accountLines[1]!.findAll("button")).toHaveLength(3);
+    expect(accountLines[1]!.text()).toBe("梦江南");
+    expect(accountLines[1]!.findAll("button")).toHaveLength(2);
+    expect(accountLines[1]!.text()).not.toContain("demo-account");
+    expect(accountLines[1]!.text()).not.toContain("••••••");
+    expect(accountLines[1]!.find('button[aria-label^="显示"]').exists()).toBe(false);
 
     await wrapper.get('button[aria-label="复制账号 demo-account"]').trigger("click");
     await wrapper.get('button[aria-label="复制测试联系人 的预约密码"]').trigger("click");

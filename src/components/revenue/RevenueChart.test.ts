@@ -25,6 +25,7 @@ const points: RevenuePoint[] = [
     period: "2026-07-27",
     settledMinor: 10_000,
     unsettledMinor: 0,
+    pendingCount: 0,
     businessHours: 2,
     appointmentCount: 1,
   },
@@ -32,21 +33,22 @@ const points: RevenuePoint[] = [
     period: "2026-08-03",
     settledMinor: 20_000,
     unsettledMinor: 5_000,
+    pendingCount: 1,
     businessHours: 4,
     appointmentCount: 2,
   },
 ];
 
 describe("RevenueChart", () => {
-  it("centers both revenue bars in one stack under the hours line", () => {
+  it("shows settled revenue and hours without a pending amount series", () => {
     const wrapper = mount(RevenueChart, { props: { points, drillable: true } });
     const chartOption = wrapper.findComponent({ name: "VChart" }).props("option") as {
-      series: Array<{ stack?: string }>;
+      series: Array<{ name: string; stack?: string }>;
     };
 
     expect(chartOption.series[0].stack).toBe("revenue");
-    expect(chartOption.series[1].stack).toBe("revenue");
-    expect(chartOption.series[2].stack).toBeUndefined();
+    expect(chartOption.series[1].stack).toBeUndefined();
+    expect(chartOption.series.map((series) => series.name)).toEqual(["已结收益", "业务工时"]);
   });
 
   it("emits the clicked point for a drillable bar", async () => {
