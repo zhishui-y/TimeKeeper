@@ -87,7 +87,7 @@ describe("AppointmentDrawer", () => {
       "yy",
     );
     expect(wrapper.get(".profile-picker option[value='account-label']").text()).toBe(
-      "清心 · 梦江南 · 当前分 2100 · 最高分 2300",
+      "梦江南 · 清心 · 2100 · 2300",
     );
   });
 

@@ -9,6 +9,7 @@ interface UseModalFocusOptions {
   container: Readonly<Ref<HTMLElement | null>>;
   close: () => void;
   initialFocus?: () => FocusTarget | null;
+  restoreFocus?: () => FocusTarget | null;
 }
 
 const focusableSelector = [
@@ -25,8 +26,9 @@ export function useModalFocus({
   container,
   close,
   initialFocus,
+  restoreFocus,
 }: UseModalFocusOptions): void {
-  let previousFocus: HTMLElement | null = null;
+  let previousFocus: FocusTarget | null = null;
   let background: HTMLElement | null = null;
 
   function focusableElements(): HTMLElement[] {
@@ -83,7 +85,9 @@ export function useModalFocus({
         return;
       }
 
-      previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      previousFocus =
+        restoreFocus?.() ??
+        (document.activeElement instanceof HTMLElement ? document.activeElement : null);
       background = document.querySelector<HTMLElement>("#app");
       document.addEventListener("keydown", handleKeydown, true);
       await nextTick();

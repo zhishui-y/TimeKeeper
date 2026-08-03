@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Eraser, LoaderCircle, X } from "@lucide/vue";
+import { Eraser, LoaderCircle } from "@lucide/vue";
 import { computed, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAccounts } from "../../composables/useAccounts";
@@ -30,7 +30,7 @@ import {
 } from "../../utils/accounts";
 import { vaultUnlockFeedback } from "../../utils/vault";
 import AccountDrawer from "./AccountDrawer.vue";
-import AccountRoleDataRefreshFeedback from "./AccountRoleDataRefreshFeedback.vue";
+import AccountRoleDataRefreshDialog from "./AccountRoleDataRefreshDialog.vue";
 import AccountTable from "./AccountTable.vue";
 import AccountToolbar from "./AccountToolbar.vue";
 
@@ -73,6 +73,7 @@ const clearingWeekly = shallowRef(false);
 const syncingWeekly = shallowRef(false);
 const selectedIds = ref<string[]>([]);
 const selectedCount = computed(() => selectedIds.value.length);
+const roleDataRefreshReturnFocus = shallowRef<{ focus(): void } | null>(null);
 const deletingAccounts = shallowRef(false);
 const batchDeleteFeedback = shallowRef<{
   message: string;
@@ -115,6 +116,13 @@ const reorderDisabledReason = computed(() => {
   return "清除搜索和筛选并恢复默认排序后可拖动";
 });
 async function refreshRoleData(ids: readonly string[]): Promise<void> {
+  const activeElement = globalThis.document.activeElement;
+  if (activeElement && "focus" in activeElement && typeof activeElement.focus === "function") {
+    const restoreFocus = activeElement.focus.bind(activeElement);
+    roleDataRefreshReturnFocus.value = { focus: restoreFocus };
+  } else {
+    roleDataRefreshReturnFocus.value = null;
+  }
   await roleDataRefresh.refresh(ids);
 }
 
@@ -596,21 +604,10 @@ watch(
     </div>
     <div v-if="loading" class="loading-line" />
     <div v-if="error" class="error-banner">{{ error }}</div>
-    <div v-if="roleDataRefresh.error.value" class="error-banner role-refresh-error" role="alert">
-      <span>{{ roleDataRefresh.error.value }}</span>
-      <button
-        class="icon-button"
-        type="button"
-        aria-label="关闭角色数据更新错误"
-        @click="roleDataRefresh.clearResult"
-      >
-        <X :size="15" />
-      </button>
-    </div>
-    <AccountRoleDataRefreshFeedback
-      v-if="roleDataRefresh.result.value"
+    <AccountRoleDataRefreshDialog
       :result="roleDataRefresh.result.value"
-      :profiles="items"
+      :error="roleDataRefresh.error.value"
+      :return-focus="roleDataRefreshReturnFocus"
       @close="roleDataRefresh.clearResult"
     />
     <AccountTable
@@ -661,17 +658,6 @@ watch(
 
 .account-actions__spinner {
   animation: account-action-spin 900ms linear infinite;
-}
-
-.role-refresh-error {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.role-refresh-error .icon-button {
-  flex: 0 0 auto;
 }
 
 .account-summary {

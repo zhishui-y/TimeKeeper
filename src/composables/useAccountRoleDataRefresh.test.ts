@@ -24,7 +24,7 @@ describe("useAccountRoleDataRefresh", () => {
   });
 
   it.each(["updated", "noRecord", "skipped"] as const)(
-    "dismisses a %s result after 3000ms",
+    "dismisses a %s result after 5000ms",
     async (status) => {
       vi.useFakeTimers();
       vi.spyOn(mockApi, "refreshAccountProfileRoleData").mockResolvedValue(resultFor(status));
@@ -32,7 +32,7 @@ describe("useAccountRoleDataRefresh", () => {
       const refreshState = scope.run(() => useAccountRoleDataRefresh())!;
 
       await refreshState.refresh(["account-1"]);
-      vi.advanceTimersByTime(2_999);
+      vi.advanceTimersByTime(4_999);
       expect(refreshState.result.value).not.toBeNull();
       vi.advanceTimersByTime(1);
       expect(refreshState.result.value).toBeNull();
@@ -68,17 +68,17 @@ describe("useAccountRoleDataRefresh", () => {
 
     await refreshState.refresh(["account-1"]);
     refreshState.clearResult();
-    vi.advanceTimersByTime(3_000);
+    vi.advanceTimersByTime(5_000);
     expect(refreshState.result.value).toBeNull();
 
     await refreshState.refresh(["account-1"]);
     vi.advanceTimersByTime(1_000);
     await refreshState.refresh(["account-2"]);
-    vi.advanceTimersByTime(2_000);
+    vi.advanceTimersByTime(4_999);
     expect(refreshState.result.value).not.toBeNull();
 
     scope.stop();
-    vi.advanceTimersByTime(3_000);
+    vi.advanceTimersByTime(1);
     expect(refreshState.result.value).not.toBeNull();
     expect(refresh).toHaveBeenCalledTimes(3);
   });

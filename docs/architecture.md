@@ -68,10 +68,11 @@ after success or cancellation. An unlocked vault locks immediately from the same
 an initialized locked vault prompts for the master password without exposing it to account DTOs.
 
 Role-data refresh state, side effects, and feedback-dismissal timers live in
-`useAccountRoleDataRefresh`; the account table only emits typed targets and the feedback component
-only renders the returned result. Results without failed items close after three seconds; failed
-results and command-level errors remain until manually closed. Role refresh does not duplicate this
-feedback through the global toast. Real HTTP requests remain in Rust. Rust percent-encodes server
+`useAccountRoleDataRefresh`; the account table only emits typed targets and the result dialog renders
+the returned summary in a blocking, centered overlay without changing the table layout. Results
+without failed items close after five seconds; failed results and command-level errors remain until
+manually closed. Role refresh does not duplicate this feedback through the global toast. Real HTTP
+requests remain in Rust. Rust percent-encodes server
 and character path segments, limits each response to 64 KiB, uses at most three concurrent requests,
 and commits all successful updates in one SQLite transaction after networking finishes. The
 operation never opens Stronghold and never rewrites appointment-embedded account data. Browser mode

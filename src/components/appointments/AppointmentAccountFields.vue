@@ -25,10 +25,10 @@ const canCopyExistingPassword = computed(() => Boolean(model.value.passwordAvail
 
 function profileOptionLabel(account: AccountProfile): string {
   return [
-    account.characterName?.trim() || "角色名待补",
     account.server?.trim() || "服务器待补",
-    `当前分 ${account.currentScore ?? "—"}`,
-    `最高分 ${account.highestScore ?? "—"}`,
+    account.characterName?.trim() || "角色名待补",
+    account.currentScore ?? "—",
+    account.highestScore ?? "—",
   ].join(" · ");
 }
 

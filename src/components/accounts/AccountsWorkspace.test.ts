@@ -78,6 +78,7 @@ const settingsFixture: AppSettings = {
 describe("AccountsWorkspace batch delete feedback", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    document.body.innerHTML = "";
   });
 
   it("shows progress immediately and an inline success result after deletion", async () => {
@@ -431,7 +432,7 @@ describe("AccountsWorkspace batch delete feedback", () => {
     wrapper.unmount();
   });
 
-  it("refreshes the current filtered list, disables every entry while busy, and renders details", async () => {
+  it("refreshes the current filtered list, disables every entry while busy, and opens a summary dialog", async () => {
     const pendingRefresh =
       deferred<Awaited<ReturnType<typeof mockApi.refreshAccountProfileRoleData>>>();
     const listProfiles = vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
@@ -478,17 +479,22 @@ describe("AccountsWorkspace batch delete feedback", () => {
     await flushPromises();
 
     expect(listProfiles).toHaveBeenCalledTimes(2);
-    expect(wrapper.text()).toContain("角色数据更新完成");
-    expect(wrapper.text()).toContain("无战绩 1");
-    expect(wrapper.text()).toContain("无角色战绩");
+    expect(wrapper.find(".role-refresh-dialog").exists()).toBe(false);
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]');
+    expect(dialog?.textContent).toContain("角色数据更新完成");
+    expect(dialog?.textContent).toContain("无战绩1");
+    expect(dialog?.textContent).not.toContain("无角色战绩");
     expect(ui.accountRevision).toBe(1);
     expect(ui.toast).toBeNull();
-    await wrapper.get('button[aria-label="关闭角色数据更新信息"]').trigger("click");
-    expect(wrapper.text()).not.toContain("角色数据更新完成");
+    document
+      .querySelector<HTMLButtonElement>("[data-role-refresh-close]")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushPromises();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
     wrapper.unmount();
   });
 
-  it("keeps request errors inline without a duplicate toast and allows closing them", async () => {
+  it("keeps request errors in the summary dialog without a duplicate toast", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
     vi.spyOn(mockApi, "vaultStatus").mockResolvedValue({
       initialized: true,
@@ -511,10 +517,16 @@ describe("AccountsWorkspace batch delete feedback", () => {
     await buttonWithText(wrapper, "更新当前列表").trigger("click");
     await flushPromises();
 
-    expect(wrapper.get('[role="alert"]').text()).toContain("角色服务器暂不可用");
-    expect(ui.toast).toBeNull();
-    await wrapper.get('button[aria-label="关闭角色数据更新错误"]').trigger("click");
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]');
+    expect(dialog?.textContent).toContain("角色数据更新失败");
+    expect(dialog?.querySelector('[role="alert"]')?.textContent).toContain("角色服务器暂不可用");
+    expect(ui.toast).toBeNull();
+    document
+      .querySelector<HTMLButtonElement>("[data-role-refresh-close]")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushPromises();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
     wrapper.unmount();
   });
 

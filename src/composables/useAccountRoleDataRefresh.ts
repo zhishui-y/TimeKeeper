@@ -6,7 +6,7 @@ export interface UseAccountRoleDataRefreshOptions {
   afterRefresh?: (result: AccountRoleDataRefreshResult) => Promise<void> | void;
 }
 
-const SUCCESS_DISMISS_DELAY_MS = 3_000;
+const SUCCESS_DISMISS_DELAY_MS = 5_000;
 
 export function useAccountRoleDataRefresh({ afterRefresh }: UseAccountRoleDataRefreshOptions = {}) {
   const busy = shallowRef(false);
