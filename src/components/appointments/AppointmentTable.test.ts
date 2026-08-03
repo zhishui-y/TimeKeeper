@@ -52,6 +52,7 @@ describe("AppointmentTable", () => {
     expect(headers).toContain("账号");
     expect(headers).toContain("语音");
     expect(headers).toContain("备注");
+    expect(headers).not.toContain("结算");
     expect(headers).not.toContain("收款");
     expect(headers).not.toContain("内容 / 账号");
     expect(wrapper.text()).toContain("冰心");
@@ -125,7 +126,7 @@ describe("AppointmentTable", () => {
     });
   });
 
-  it("exposes all eleven resizable data columns and emits typed width actions", async () => {
+  it("exposes all ten resizable data columns and emits typed width actions", async () => {
     const wrapper = mount(AppointmentTable, {
       props: {
         appointments: [appointment()],
@@ -136,7 +137,7 @@ describe("AppointmentTable", () => {
       },
     });
 
-    expect(wrapper.findAll(".column-resizer")).toHaveLength(11);
+    expect(wrapper.findAll(".column-resizer")).toHaveLength(10);
     await wrapper.get('button[aria-label="调整语音列宽"]').trigger("keydown", {
       key: "ArrowRight",
     });

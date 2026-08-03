@@ -230,7 +230,41 @@ describe("browser mock API", () => {
         settlementStatus: "settled",
         amountMinor: null,
       }),
-    ).rejects.toThrow("已结算预约必须填写金额");
+    ).rejects.toThrow("已完成预约必须填写金额");
+  });
+
+  it("filters appointments by unified progress across both modes", async () => {
+    const createdIds: string[] = [];
+    try {
+      const pending = await mockApi.createAppointment({
+        ...businessInput("2099-08-20", "10:00", "11:00", "筛选待结算", 10_000),
+        serviceStatus: "completed",
+      });
+      const settled = await mockApi.createAppointment({
+        ...businessInput("2099-08-21", "10:00", "11:00", "筛选业务完成", 20_000),
+        settlementStatus: "settled",
+      });
+      const entertainment = await mockApi.createAppointment({
+        ...businessInput("2099-08-22", "10:00", "11:00", "筛选娱乐完成", 30_000),
+        mode: "entertainment",
+        serviceStatus: "completed",
+      });
+      createdIds.push(pending.appointment.id, settled.appointment.id, entertainment.appointment.id);
+
+      expect(
+        await mockApi.listAppointments({ progressStatus: "pending_settlement" }),
+      ).toContainEqual(expect.objectContaining({ id: pending.appointment.id }));
+      const completed = await mockApi.listAppointments({ progressStatus: "completed" });
+      expect(completed).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: settled.appointment.id }),
+          expect.objectContaining({ id: entertainment.appointment.id }),
+        ]),
+      );
+      expect(completed.some((item) => item.id === pending.appointment.id)).toBe(false);
+    } finally {
+      await mockApi.deleteAppointments(createdIds);
+    }
   });
 
   it("automatically starts timed appointments and completes only those with an end time", async () => {

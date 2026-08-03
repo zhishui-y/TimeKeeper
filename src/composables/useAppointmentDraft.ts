@@ -6,11 +6,16 @@ import type {
   AppointmentAccountDetails,
   AppointmentInput,
   AppointmentMode,
+  AppointmentProgressStatus,
   ContactPreset,
   ServiceStatus,
   SettlementStatus,
   VoicePlatform,
 } from "../types/domain";
+import {
+  appointmentProgressStatus,
+  appointmentStatusesFromProgress,
+} from "../utils/appointmentProgress";
 
 export type AppointmentAccountDraftKind = "none" | "profile" | "embedded";
 export type AppointmentCredentialDraftKind = "keep" | "replace" | "copyFromAppointment";
@@ -129,6 +134,15 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
   const initialTimeIsFixed = computed(() =>
     Boolean(toValue(options.appointment) || toValue(options.requestedStartTime)),
   );
+  const progressStatus = computed<AppointmentProgressStatus>({
+    get: () => appointmentProgressStatus(draft),
+    set: (value) => {
+      Object.assign(
+        draft,
+        appointmentStatusesFromProgress(draft.mode, value, draft.settlementStatus),
+      );
+    },
+  });
 
   function clearSecrets(): void {
     draft.account.password = "";
@@ -172,14 +186,32 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
   }
 
   function selectMode(mode: AppointmentMode): void {
+    const previousMode = draft.mode;
+    const previousProgressStatus = progressStatus.value;
     draft.mode = mode;
     if (mode === "entertainment") {
-      draft.settlementStatus = "not_applicable";
+      Object.assign(
+        draft,
+        appointmentStatusesFromProgress(
+          mode,
+          previousProgressStatus === "pending_settlement" ? "completed" : previousProgressStatus,
+          draft.settlementStatus,
+        ),
+      );
       draft.rateNote = "";
       draft.paymentMethod = "";
       draft.amountYuan = "";
-    } else if (draft.settlementStatus === "not_applicable") {
-      draft.settlementStatus = "unsettled";
+    } else {
+      Object.assign(
+        draft,
+        appointmentStatusesFromProgress(
+          mode,
+          previousMode === "entertainment" && previousProgressStatus === "completed"
+            ? "pending_settlement"
+            : previousProgressStatus,
+          draft.settlementStatus,
+        ),
+      );
     }
   }
 
@@ -246,7 +278,7 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
       nextErrors.push("账单金额格式不正确");
     }
     if (draft.mode === "business" && draft.settlementStatus === "settled" && amount === null) {
-      nextErrors.push("已结算预约必须填写金额");
+      nextErrors.push("已完成预约必须填写金额");
     }
     if (
       draft.reminderEnabled &&
@@ -294,6 +326,11 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
                       }
                     : { kind: "replace", password: draft.account.password },
             };
+    const statuses = appointmentStatusesFromProgress(
+      draft.mode,
+      progressStatus.value,
+      draft.settlementStatus,
+    );
 
     options.onSave({
       serviceDate: draft.serviceDate,
@@ -302,8 +339,8 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
       contactName: draft.contactName.trim(),
       content: draft.content.trim() || null,
       mode: draft.mode,
-      serviceStatus: draft.serviceStatus,
-      settlementStatus: draft.mode === "entertainment" ? "not_applicable" : draft.settlementStatus,
+      serviceStatus: statuses.serviceStatus,
+      settlementStatus: statuses.settlementStatus,
       account,
       rateNote: draft.mode === "business" ? draft.rateNote.trim() || null : null,
       paymentMethod: draft.mode === "business" ? draft.paymentMethod.trim() || null : null,
@@ -339,6 +376,7 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
 
   return {
     draft,
+    progressStatus,
     errors: readonly(errors),
     applyContactPreset,
     clearEndTime,

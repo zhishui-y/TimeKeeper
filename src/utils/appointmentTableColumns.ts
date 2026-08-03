@@ -11,7 +11,6 @@ export const APPOINTMENT_TABLE_COLUMN_KEYS: readonly AppointmentTableColumnKey[]
   "voice",
   "mode",
   "serviceStatus",
-  "settlementStatus",
   "amount",
   "notes",
 ];
@@ -25,7 +24,6 @@ export const DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS: AppointmentTableColumnWidt
   voice: 88,
   mode: 56,
   serviceStatus: 74,
-  settlementStatus: 74,
   amount: 68,
   notes: 120,
 };
@@ -39,7 +37,6 @@ export const MIN_APPOINTMENT_TABLE_COLUMN_WIDTHS: AppointmentTableColumnWidths =
   voice: 72,
   mode: 56,
   serviceStatus: 74,
-  settlementStatus: 74,
   amount: 64,
   notes: 58,
 };

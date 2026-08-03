@@ -4,7 +4,7 @@ import type { Appointment } from "../../types/domain";
 import {
   calendarEventTimeLabel,
   calendarEventTooltip,
-  calendarSettlementLabel,
+  calendarProgressLabel,
   isShortCalendarAppointment,
 } from "../../utils/calendar";
 
@@ -17,7 +17,7 @@ const props = defineProps<{
 }>();
 
 const contentLabel = computed(() => props.appointment.content?.trim() || "未填写内容");
-const settlementLabel = computed(() => calendarSettlementLabel(props.appointment));
+const progressLabel = computed(() => calendarProgressLabel(props.appointment));
 const timeLabel = computed(
   () =>
     props.timeText?.trim().replace(/\s*-\s*/g, "–") || calendarEventTimeLabel(props.appointment),
@@ -48,11 +48,8 @@ const showSecondary = computed(() => !props.compact || (!props.allDay && !shortE
     <strong class="calendar-event-card__contact">{{ appointment.contactName }}</strong>
     <time v-if="compact" class="calendar-event-card__time">{{ timeLabel }}</time>
     <small v-if="showSecondary" class="calendar-event-card__content">{{ contentLabel }}</small>
-    <span
-      v-if="showSecondary && settlementLabel"
-      class="fc-event-settlement calendar-event-card__settlement"
-    >
-      {{ settlementLabel }}
+    <span v-if="showSecondary" class="fc-event-progress calendar-event-card__progress">
+      {{ progressLabel }}
     </span>
   </div>
 </template>
@@ -100,7 +97,7 @@ const showSecondary = computed(() => !props.compact || (!props.allDay && !shortE
 .calendar-event-card__contact,
 .calendar-event-card__time,
 .calendar-event-card__content,
-.calendar-event-card__settlement {
+.calendar-event-card__progress {
   min-width: 0;
   overflow: hidden;
   line-height: 1.15;
@@ -126,7 +123,7 @@ const showSecondary = computed(() => !props.compact || (!props.allDay && !shortE
   opacity: 0.9;
 }
 
-.calendar-event-card__settlement {
+.calendar-event-card__progress {
   max-width: 76px;
   justify-self: end;
   padding: 0 3px;
@@ -138,7 +135,7 @@ const showSecondary = computed(() => !props.compact || (!props.allDay && !shortE
   background: color-mix(in srgb, var(--surface) 72%, transparent);
 }
 
-.calendar-event-card--legacy .calendar-event-card__settlement {
+.calendar-event-card--legacy .calendar-event-card__progress {
   max-width: 100%;
   align-self: flex-start;
   margin-top: auto;

@@ -1,6 +1,8 @@
 export type AppointmentMode = "entertainment" | "business";
 export type ServiceStatus = "scheduled" | "in_progress" | "completed" | "cancelled";
 export type SettlementStatus = "not_applicable" | "unsettled" | "settled";
+export type AppointmentProgressStatus =
+  "scheduled" | "in_progress" | "pending_settlement" | "completed" | "cancelled";
 export type ReportGranularity = "day" | "week" | "month";
 export type VoicePlatform = "yy" | "qq";
 
@@ -75,6 +77,7 @@ export interface AppointmentFilters {
   to?: string;
   query?: string;
   mode?: AppointmentMode;
+  progressStatus?: AppointmentProgressStatus;
   serviceStatus?: ServiceStatus;
   settlementStatus?: SettlementStatus;
 }
@@ -236,7 +239,6 @@ export interface AppointmentTableColumnWidths {
   voice: number;
   mode: number;
   serviceStatus: number;
-  settlementStatus: number;
   amount: number;
   notes: number;
 }

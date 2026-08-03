@@ -12,6 +12,7 @@ import {
   formatTimeRange,
   modeLabels,
 } from "../../utils/formatters";
+import { appointmentProgressStatus } from "../../utils/appointmentProgress";
 import StatusBadge from "../common/StatusBadge.vue";
 import AppointmentColumnResizeHandle from "./AppointmentColumnResizeHandle.vue";
 
@@ -94,7 +95,6 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
           <col :style="{ width: `${columnWidths.voice}px` }" />
           <col :style="{ width: `${columnWidths.mode}px` }" />
           <col :style="{ width: `${columnWidths.serviceStatus}px` }" />
-          <col :style="{ width: `${columnWidths.settlementStatus}px` }" />
           <col :style="{ width: `${columnWidths.amount}px` }" />
           <col :style="{ width: `${columnWidths.notes}px` }" />
           <col style="width: 112px" />
@@ -202,18 +202,6 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
                 column-key="serviceStatus"
                 label="进度"
                 :width="columnWidths.serviceStatus"
-                :disabled="savingColumnWidths"
-                @preview="previewColumnWidth"
-                @commit="commitColumnWidth"
-                @cancel="cancelColumnResize"
-              />
-            </th>
-            <th class="resizable-header">
-              结算
-              <AppointmentColumnResizeHandle
-                column-key="settlementStatus"
-                label="结算"
-                :width="columnWidths.settlementStatus"
                 :disabled="savingColumnWidths"
                 @preview="previewColumnWidth"
                 @commit="commitColumnWidth"
@@ -332,8 +320,7 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
                 {{ modeLabels[appointment.mode] }}
               </span>
             </td>
-            <td><StatusBadge :service-status="appointment.serviceStatus" /></td>
-            <td><StatusBadge :settlement-status="appointment.settlementStatus" /></td>
+            <td><StatusBadge :progress-status="appointmentProgressStatus(appointment)" /></td>
             <td class="mono-number amount-cell">
               {{ appointment.mode === "business" ? formatCurrency(appointment.amountMinor) : "—" }}
             </td>

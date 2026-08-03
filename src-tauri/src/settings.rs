@@ -95,7 +95,6 @@ pub struct AppointmentTableColumnWidths {
     pub voice: u32,
     pub mode: u32,
     pub service_status: u32,
-    pub settlement_status: u32,
     pub amount: u32,
     #[serde(alias = "paymentMethod")]
     pub notes: u32,
@@ -112,7 +111,6 @@ impl Default for AppointmentTableColumnWidths {
             voice: default_appointment_voice_column_width(),
             mode: 56,
             service_status: 74,
-            settlement_status: 74,
             amount: 68,
             notes: 120,
         }
@@ -130,7 +128,6 @@ impl AppointmentTableColumnWidths {
             ("语音", self.voice, 72),
             ("模式", self.mode, 56),
             ("进度", self.service_status, 74),
-            ("结算", self.settlement_status, 74),
             ("金额", self.amount, 64),
             ("备注", self.notes, 58),
         ];
@@ -615,6 +612,7 @@ mod tests {
             Some(88)
         );
         assert!(serialized.get("paymentMethod").is_none());
+        assert!(serialized.get("settlementStatus").is_none());
     }
 
     #[test]

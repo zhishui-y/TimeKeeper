@@ -35,6 +35,7 @@ import {
 } from "../utils/accountRoleData";
 import { MIN_MASTER_PASSWORD_CHARACTERS, isMasterPasswordLongEnough } from "../utils/security";
 import { combineDateTime } from "../utils/appointment";
+import { appointmentProgressStatus } from "../utils/appointmentProgress";
 import {
   demoAccounts,
   demoAppointmentPasswords,
@@ -245,7 +246,7 @@ function toAppointment(input: AppointmentInput, existing?: Appointment): Appoint
     input.settlementStatus === "settled" &&
     (input.amountMinor === null || input.amountMinor === undefined)
   ) {
-    throw new Error("已结算预约必须填写金额");
+    throw new Error("已完成预约必须填写金额");
   }
   const { startsAt, endsAt } = combineDateTime(input.serviceDate, input.startTime, input.endTime);
   const entertainment = input.mode === "entertainment";
@@ -262,7 +263,10 @@ function toAppointment(input: AppointmentInput, existing?: Appointment): Appoint
     contactName: input.contactName.trim(),
     content: input.content?.trim() || null,
     mode: input.mode,
-    serviceStatus: input.serviceStatus,
+    serviceStatus:
+      !entertainment && input.settlementStatus === "settled" && input.serviceStatus !== "cancelled"
+        ? "completed"
+        : input.serviceStatus,
     settlementStatus: entertainment ? "not_applicable" : input.settlementStatus,
     account,
     rateNote: entertainment ? null : input.rateNote?.trim() || null,
@@ -364,6 +368,10 @@ function filteredAppointments(filters: AppointmentFilters = {}): Appointment[] {
     .filter((item) => !filters.from || item.serviceDate >= filters.from)
     .filter((item) => !filters.to || item.serviceDate <= filters.to)
     .filter((item) => !filters.mode || item.mode === filters.mode)
+    .filter(
+      (item) =>
+        !filters.progressStatus || appointmentProgressStatus(item) === filters.progressStatus,
+    )
     .filter((item) => !filters.serviceStatus || item.serviceStatus === filters.serviceStatus)
     .filter(
       (item) => !filters.settlementStatus || item.settlementStatus === filters.settlementStatus,
@@ -642,6 +650,7 @@ export const mockApi: ApiClient = {
     item.amountMinor = amountMinor;
     item.paymentMethod = paymentMethod ?? item.paymentMethod;
     item.settlementStatus = "settled";
+    item.serviceStatus = "completed";
     item.updatedAt = new Date().toISOString();
     return structuredClone(item);
   },

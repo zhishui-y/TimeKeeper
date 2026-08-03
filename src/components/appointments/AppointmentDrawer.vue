@@ -9,6 +9,10 @@ import {
 } from "../../composables/useAppointmentDraft";
 import { useModalFocus } from "../../composables/useModalFocus";
 import type { AccountProfile, Appointment, AppointmentInput } from "../../types/domain";
+import {
+  appointmentProgressStatusLabels,
+  appointmentProgressStatusesForMode,
+} from "../../utils/appointmentProgress";
 
 interface FocusTarget {
   focus(): void;
@@ -49,6 +53,7 @@ const formFieldSelector = "input:not([disabled]), select:not([disabled]), textar
 
 const {
   draft,
+  progressStatus,
   errors,
   applyContactPreset,
   clearEndTime,
@@ -66,6 +71,13 @@ const {
   saving: () => props.saving,
   onSave: (input) => emit("save", input),
 });
+
+const progressStatusOptions = computed(() =>
+  appointmentProgressStatusesForMode(draft.mode).map((value) => ({
+    value,
+    label: appointmentProgressStatusLabels[value],
+  })),
+);
 
 const accountModel = computed<AppointmentAccountDraft>({
   get: () => draft.account,
@@ -233,11 +245,14 @@ useModalFocus({
               <div class="form-grid form-grid--status">
                 <label class="field">
                   <span class="field__label">预约进度</span>
-                  <select v-model="draft.serviceStatus" class="select">
-                    <option value="scheduled">已预约</option>
-                    <option value="in_progress">进行中</option>
-                    <option value="completed">已完成</option>
-                    <option value="cancelled">已取消</option>
+                  <select v-model="progressStatus" class="select" aria-label="预约进度">
+                    <option
+                      v-for="option in progressStatusOptions"
+                      :key="option.value"
+                      :value="option.value"
+                    >
+                      {{ option.label }}
+                    </option>
                   </select>
                 </label>
               </div>
@@ -252,14 +267,7 @@ useModalFocus({
 
             <section v-if="draft.mode === 'business'" class="form-section form-section--billing">
               <h3>账单信息</h3>
-              <div class="form-grid form-grid--3">
-                <label class="field">
-                  <span class="field__label">结算状态</span>
-                  <select v-model="draft.settlementStatus" class="select">
-                    <option value="unsettled">待结算</option>
-                    <option value="settled">已结算</option>
-                  </select>
-                </label>
+              <div class="form-grid">
                 <label class="field">
                   <span class="field__label">金额（元）</span>
                   <input

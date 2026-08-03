@@ -2,6 +2,7 @@
 import { CheckCircle2, CircleDollarSign, ClipboardCopy, Pencil, Play, Trash2 } from "@lucide/vue";
 import type { Appointment, ServiceStatus } from "../../types/domain";
 import { formatCurrency, formatTimeRange } from "../../utils/formatters";
+import { appointmentProgressStatus } from "../../utils/appointmentProgress";
 import StatusBadge from "../common/StatusBadge.vue";
 
 defineProps<{
@@ -46,7 +47,7 @@ const emit = defineEmits<{
             <span v-if="appointment.id === nextAppointmentId" class="appointment-row__next">
               下一时段
             </span>
-            <StatusBadge :service-status="appointment.serviceStatus" />
+            <StatusBadge :progress-status="appointmentProgressStatus(appointment)" />
           </div>
           <p>{{ appointment.content || "未填写预约内容" }}</p>
         </div>
@@ -55,10 +56,6 @@ const emit = defineEmits<{
             {{ formatCurrency(appointment.amountMinor) }}
           </strong>
           <span v-else>娱乐</span>
-          <StatusBadge
-            v-if="appointment.mode === 'business'"
-            :settlement-status="appointment.settlementStatus"
-          />
         </div>
         <div class="appointment-row__actions">
           <button
@@ -72,7 +69,7 @@ const emit = defineEmits<{
             <ClipboardCopy :size="15" />
           </button>
           <button
-            v-if="appointment.serviceStatus === 'scheduled'"
+            v-if="appointmentProgressStatus(appointment) === 'scheduled'"
             class="icon-button"
             type="button"
             title="开始"
@@ -82,7 +79,7 @@ const emit = defineEmits<{
             <Play :size="15" />
           </button>
           <button
-            v-if="appointment.serviceStatus === 'in_progress'"
+            v-if="appointmentProgressStatus(appointment) === 'in_progress'"
             class="icon-button"
             type="button"
             title="完成"
@@ -92,10 +89,7 @@ const emit = defineEmits<{
             <CheckCircle2 :size="15" />
           </button>
           <button
-            v-if="
-              appointment.serviceStatus === 'completed' &&
-              appointment.settlementStatus === 'unsettled'
-            "
+            v-if="appointmentProgressStatus(appointment) === 'pending_settlement'"
             class="icon-button"
             type="button"
             title="去结算"

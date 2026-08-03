@@ -50,6 +50,10 @@ onBeforeUnmount(() => {
           <i class="legend-dot" />
           进行中
         </span>
+        <span class="legend-item--pending-settlement">
+          <i class="legend-dot" />
+          待结算
+        </span>
         <span class="legend-item--next">
           <i class="legend-dot" />
           下一时段
@@ -61,14 +65,6 @@ onBeforeUnmount(() => {
         <span class="legend-item--cancelled">
           <i class="legend-dot" />
           已取消
-        </span>
-        <span class="legend-item--unsettled">
-          <i class="legend-settlement-symbol">¥</i>
-          待结算
-        </span>
-        <span class="legend-item--settled">
-          <i class="legend-settlement-symbol">¥</i>
-          已结算
         </span>
         <span
           class="legend-item--mode"
@@ -163,18 +159,10 @@ onBeforeUnmount(() => {
   background: var(--neutral-soft);
 }
 
-.calendar-legend .legend-item--unsettled {
+.calendar-legend .legend-item--pending-settlement {
   border-color: var(--amber-border);
-  border-style: dashed;
   color: #815414;
-  background: var(--surface);
-}
-
-.calendar-legend .legend-item--settled {
-  border-color: var(--brand-border);
-  border-style: dashed;
-  color: var(--brand-strong);
-  background: var(--surface);
+  background: var(--amber-soft);
 }
 
 .calendar-legend .legend-item--mode,
@@ -205,13 +193,6 @@ onBeforeUnmount(() => {
 .legend-bar--entertainment {
   margin-left: -3px;
   background: var(--blue);
-}
-
-.legend-settlement-symbol {
-  font-family: "Bahnschrift", var(--font-sans);
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 750;
 }
 
 .calendar-workspace__board {

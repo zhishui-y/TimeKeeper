@@ -64,13 +64,22 @@ is cleared atomically at a China-local Monday boundary without accessing Strongh
 Appointment table column widths follow the same settings-owned interaction model through a separate
 dedicated command, so resizing one table cannot overwrite the other table's preferences. The
 appointment workspace owns persistence rollback and row actions. The table presents appointment
-content, account metadata, voice, and notes as separate columns. Account metadata uses two lines and
+content, account metadata, voice, progress, amount, and notes as separate columns. Settlement is not
+shown as a second column. Account metadata uses two lines and
 emits account/password copy requests. The voice column emits a channel-copy request only for a valid
 YY channel number. Rust reloads non-secret account names and YY channels from SQLite before copying
 them without opening Stronghold or scheduling clipboard cleanup, while password copy retains the
 normal unlock and 30-second clipboard-clearing boundary. Row deletion first opens a focused choice
 dialog so cancelling an appointment remains distinct from permanently deleting its record and
 appointment secret.
+
+Appointment progress is a UI projection over the two persisted fields rather than a third domain
+model. Entertainment uses the four service states. Business maps completed plus unsettled to
+`pending_settlement`, and any non-cancelled settled record to `completed`; cancellation takes
+precedence without erasing billing history. The shared projection utility is used by the drawer,
+record table, filters, today workspace, week schedule, calendar, and revenue detail. Writes continue
+to send the existing service and settlement fields so reports, imports, backups, and the SQLite
+schema remain compatible.
 
 The account toolbar remains a single presentation row: `AccountsWorkspace` owns search, filtering,
 vault operations, and API side effects, while `AccountToolbar` owns only the transient unlock-dialog

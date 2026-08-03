@@ -115,7 +115,11 @@ async function changeStatus(appointment: Appointment, status: ServiceStatus): Pr
   try {
     await api.setAppointmentServiceStatus(appointment.id, status);
     ui.notify(
-      status === "completed" ? "已标记完成，待结算金额仍单独保留" : "预约已开始",
+      status === "completed"
+        ? appointment.mode === "business"
+          ? "服务已完成，预约进入待结算"
+          : "预约已完成"
+        : "预约已开始",
       "success",
     );
     ui.markDataChanged();
@@ -212,7 +216,7 @@ onUnmounted(() => {
             <strong class="mono-number">{{
               formatCurrency(dashboard.summary.value?.todaySettledMinor)
             }}</strong>
-            <small>只计已结算订单</small>
+            <small>只计已完成业务预约</small>
           </div>
         </div>
         <div class="metric">

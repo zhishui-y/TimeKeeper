@@ -1,23 +1,10 @@
 import { format, isToday, parseISO } from "date-fns";
 import { zhCN } from "date-fns/locale";
-import type { AppointmentMode, ServiceStatus, SettlementStatus } from "../types/domain";
+import type { AppointmentMode } from "../types/domain";
 
 export const modeLabels: Record<AppointmentMode, string> = {
   business: "业务",
   entertainment: "娱乐",
-};
-
-export const serviceStatusLabels: Record<ServiceStatus, string> = {
-  scheduled: "已预约",
-  in_progress: "进行中",
-  completed: "已完成",
-  cancelled: "已取消",
-};
-
-export const settlementStatusLabels: Record<SettlementStatus, string> = {
-  not_applicable: "无需结算",
-  unsettled: "待结算",
-  settled: "已结算",
 };
 
 export function formatCurrency(amountMinor?: number | null): string {

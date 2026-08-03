@@ -1,24 +1,17 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { ServiceStatus, SettlementStatus } from "../../types/domain";
-import { serviceStatusLabels, settlementStatusLabels } from "../../utils/formatters";
+import type { AppointmentProgressStatus } from "../../types/domain";
+import { appointmentProgressStatusLabels } from "../../utils/appointmentProgress";
 
 const props = defineProps<{
-  serviceStatus?: ServiceStatus;
-  settlementStatus?: SettlementStatus;
+  progressStatus: AppointmentProgressStatus;
 }>();
 
-const label = computed(() => {
-  if (props.serviceStatus) return serviceStatusLabels[props.serviceStatus];
-  if (props.settlementStatus) return settlementStatusLabels[props.settlementStatus];
-  return "—";
-});
-
-const tone = computed(() => props.serviceStatus ?? props.settlementStatus ?? "neutral");
+const label = computed(() => appointmentProgressStatusLabels[props.progressStatus]);
 </script>
 
 <template>
-  <span class="badge" :class="`badge--${tone}`">{{ label }}</span>
+  <span class="badge" :class="`badge--${progressStatus}`">{{ label }}</span>
 </template>
 
 <style scoped>
@@ -55,27 +48,24 @@ const tone = computed(() => props.serviceStatus ?? props.settlementStatus ?? "ne
 }
 
 .badge--in_progress,
-.badge--unsettled {
+.badge--pending_settlement {
   border-color: var(--amber-border);
   color: var(--amber);
   background: var(--amber-soft);
 }
 
-.badge--completed,
-.badge--settled {
+.badge--completed {
   border-color: var(--brand-border);
   color: var(--brand-strong);
   background: var(--brand-soft);
 }
 
-.badge--cancelled,
-.badge--not_applicable {
+.badge--cancelled {
   color: #747f79;
   background: var(--neutral-soft);
 }
 
-.badge--cancelled::before,
-.badge--not_applicable::before {
+.badge--cancelled::before {
   opacity: 0.42;
 }
 </style>

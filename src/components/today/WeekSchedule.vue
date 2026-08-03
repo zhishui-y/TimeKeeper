@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { Appointment } from "../../types/domain";
-import { visibleSettlementStatus } from "../../utils/calendar";
+import { formatTime, formatTimeRange } from "../../utils/formatters";
 import {
-  formatTime,
-  formatTimeRange,
-  serviceStatusLabels,
-  settlementStatusLabels,
-} from "../../utils/formatters";
+  appointmentProgressStatus,
+  appointmentProgressStatusLabels,
+} from "../../utils/appointmentProgress";
 
 interface DaySchedule {
   date: string;
@@ -36,11 +34,8 @@ function appointmentTitle(appointment: Appointment): string {
     formatTimeRange(appointment.startsAt, appointment.endsAt),
     appointment.contactName,
     appointment.content || "未填写内容",
-    serviceStatusLabels[appointment.serviceStatus],
+    appointmentProgressStatusLabels[appointmentProgressStatus(appointment)],
   ];
-  if (visibleSettlementStatus(appointment)) {
-    details.push(settlementStatusLabels[appointment.settlementStatus]);
-  }
   if (appointment.id === props.nextAppointmentId) {
     details.unshift("下一时段");
   }
@@ -86,8 +81,7 @@ function appointmentTitle(appointment: Appointment): string {
             class="schedule-chip"
             :class="[
               `schedule-chip--${appointment.mode}`,
-              `schedule-chip--${appointment.serviceStatus}`,
-              `schedule-chip--${appointment.settlementStatus}`,
+              `schedule-chip--${appointmentProgressStatus(appointment)}`,
               { 'schedule-chip--next': appointment.id === nextAppointmentId },
             ]"
             type="button"
@@ -98,13 +92,11 @@ function appointmentTitle(appointment: Appointment): string {
             <span class="schedule-chip__time">{{ formatTime(appointment.startsAt) }}</span>
             <strong>{{ appointment.contactName }}</strong>
             <span
-              v-if="visibleSettlementStatus(appointment)"
-              class="schedule-chip__settlement"
-              :class="`is-${appointment.settlementStatus}`"
-              :title="settlementStatusLabels[appointment.settlementStatus]"
-              :aria-label="settlementStatusLabels[appointment.settlementStatus]"
+              class="schedule-chip__progress"
+              :title="appointmentProgressStatusLabels[appointmentProgressStatus(appointment)]"
+              :aria-label="appointmentProgressStatusLabels[appointmentProgressStatus(appointment)]"
             >
-              {{ appointment.settlementStatus === "settled" ? "已" : "待" }}
+              {{ appointmentProgressStatusLabels[appointmentProgressStatus(appointment)] }}
             </span>
           </button>
           <span v-if="day.appointments.length > 3" class="week-day__more week-day__more--regular">
@@ -290,7 +282,8 @@ function appointmentTitle(appointment: Appointment): string {
   --event-ink: #365d70;
 }
 
-.schedule-chip--in_progress {
+.schedule-chip--in_progress,
+.schedule-chip--pending_settlement {
   --event-accent: var(--amber);
   --event-background: var(--amber-soft);
   --event-border: var(--amber-border);
@@ -355,12 +348,12 @@ function appointmentTitle(appointment: Appointment): string {
   white-space: nowrap;
 }
 
-.schedule-chip__settlement {
+.schedule-chip__progress {
   display: grid;
-  width: 18px;
   height: 18px;
-  flex: 0 0 18px;
+  flex: 0 0 auto;
   margin-left: auto;
+  padding: 0 3px;
   place-items: center;
   border: 1px dashed currentColor;
   border-radius: 5px;
@@ -370,16 +363,6 @@ function appointmentTitle(appointment: Appointment): string {
   line-height: 1;
   background: color-mix(in srgb, var(--surface) 76%, transparent);
   text-decoration: none;
-}
-
-.schedule-chip__settlement.is-unsettled {
-  color: #815414;
-  background: color-mix(in srgb, var(--amber-soft) 82%, var(--surface));
-}
-
-.schedule-chip__settlement.is-settled {
-  color: var(--brand-strong);
-  background: color-mix(in srgb, var(--brand-soft) 84%, var(--surface));
 }
 
 .week-day__more,

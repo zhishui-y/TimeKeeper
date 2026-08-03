@@ -20,6 +20,15 @@ watch(
   { deep: true },
 );
 
+watch(
+  () => draft.mode,
+  (mode) => {
+    if (mode === "entertainment" && draft.progressStatus === "pending_settlement") {
+      delete draft.progressStatus;
+    }
+  },
+);
+
 function reset(): void {
   Object.keys(draft).forEach((key) => delete draft[key as keyof AppointmentFilters]);
   emit("reset");
@@ -51,13 +60,14 @@ function reset(): void {
       <option value="entertainment">娱乐</option>
     </select>
     <select
-      v-model="draft.serviceStatus"
+      v-model="draft.progressStatus"
       class="select filters__select filters__status"
       aria-label="预约进度"
     >
       <option :value="undefined">全部进度</option>
       <option value="scheduled">已预约</option>
       <option value="in_progress">进行中</option>
+      <option v-if="draft.mode !== 'entertainment'" value="pending_settlement">待结算</option>
       <option value="completed">已完成</option>
       <option value="cancelled">已取消</option>
     </select>

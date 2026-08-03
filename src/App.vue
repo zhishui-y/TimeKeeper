@@ -63,12 +63,12 @@ async function persistAppointment(input: AppointmentInput): Promise<void> {
     if (result.conflicts.length > 0) {
       ui.notify(
         isSettling
-          ? `已结算；该预约仍与 ${result.conflicts.length} 条预约存在时间重叠`
+          ? `已完成；该预约仍与 ${result.conflicts.length} 条预约存在时间重叠`
           : `已保存；与 ${result.conflicts.length} 条预约存在时间重叠`,
         "warning",
       );
     } else {
-      ui.notify(isSettling ? "预约已结算" : isEditing ? "预约已更新" : "预约已创建", "success");
+      ui.notify(isSettling ? "预约已完成" : isEditing ? "预约已更新" : "预约已创建", "success");
     }
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");

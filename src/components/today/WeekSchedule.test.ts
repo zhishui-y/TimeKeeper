@@ -75,7 +75,7 @@ describe("WeekSchedule", () => {
     expect(headings[1]?.attributes("aria-pressed")).toBe("false");
   });
 
-  it("applies service colors and compact settlement markers to schedule chips", () => {
+  it("applies unified progress colors and labels to schedule chips", () => {
     const wrapper = mount(WeekSchedule, {
       props: {
         nextAppointmentId: "scheduled",
@@ -112,19 +112,13 @@ describe("WeekSchedule", () => {
 
     const chips = wrapper.findAll(".schedule-chip");
     expect(chips[0]?.classes()).toEqual(
-      expect.arrayContaining([
-        "schedule-chip--scheduled",
-        "schedule-chip--unsettled",
-        "schedule-chip--next",
-      ]),
+      expect.arrayContaining(["schedule-chip--scheduled", "schedule-chip--next"]),
     );
-    expect(chips[0]?.get(".schedule-chip__settlement").text()).toBe("待");
-    expect(chips[1]?.classes()).toEqual(
-      expect.arrayContaining(["schedule-chip--completed", "schedule-chip--settled"]),
-    );
-    expect(chips[1]?.get(".schedule-chip__settlement").text()).toBe("已");
+    expect(chips[0]?.get(".schedule-chip__progress").text()).toBe("已预约");
+    expect(chips[1]?.classes()).toContain("schedule-chip--completed");
+    expect(chips[1]?.get(".schedule-chip__progress").text()).toBe("已完成");
     expect(chips[2]?.classes()).toContain("schedule-chip--cancelled");
-    expect(chips[2]?.find(".schedule-chip__settlement").exists()).toBe(false);
+    expect(chips[2]?.get(".schedule-chip__progress").text()).toBe("已取消");
     expect(chips[0]?.attributes("title")).toContain("20:00–22:00");
     expect(chips[0]?.attributes("title")).toContain("下一时段");
     expect(chips[0]?.attributes("aria-label")).toContain("20:00–22:00");

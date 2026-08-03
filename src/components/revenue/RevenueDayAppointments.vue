@@ -2,6 +2,7 @@
 import type { DeepReadonly } from "vue";
 import type { Appointment } from "../../types/domain";
 import { formatCurrency, formatTimeRange, modeLabels } from "../../utils/formatters";
+import { appointmentProgressStatus } from "../../utils/appointmentProgress";
 import StatusBadge from "../common/StatusBadge.vue";
 
 defineProps<{
@@ -37,17 +38,13 @@ defineProps<{
           <span class="day-appointment__mode" :class="`is-${appointment.mode}`">
             {{ modeLabels[appointment.mode] }}
           </span>
-          <StatusBadge :service-status="appointment.serviceStatus" />
+          <StatusBadge :progress-status="appointmentProgressStatus(appointment)" />
         </div>
         <div class="day-appointment__billing">
           <strong v-if="appointment.mode === 'business'" class="mono-number">
             {{ formatCurrency(appointment.amountMinor) }}
           </strong>
           <span v-else>无需结算</span>
-          <StatusBadge
-            v-if="appointment.mode === 'business'"
-            :settlement-status="appointment.settlementStatus"
-          />
         </div>
       </article>
     </div>

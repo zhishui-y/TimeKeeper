@@ -35,7 +35,7 @@ describe("CalendarEventCard", () => {
     expect(wrapper.get(".calendar-event-card__contact").text()).toBe("小北");
     expect(wrapper.get(".calendar-event-card__time").text()).toBe("14:00–15:00");
     expect(wrapper.get(".calendar-event-card__content").text()).toBe("手法陪练");
-    expect(wrapper.get(".calendar-event-card__settlement").text()).toBe("已结 · ¥180");
+    expect(wrapper.get(".calendar-event-card__progress").text()).toBe("已完成 · ¥180");
     expect(wrapper.attributes("title")).toContain("时间：14:00–15:00");
   });
 
@@ -52,7 +52,7 @@ describe("CalendarEventCard", () => {
     expect(wrapper.classes()).toContain("calendar-event-card--short");
     expect(wrapper.get(".calendar-event-card__time").text()).toBe("14:00–14:30");
     expect(wrapper.find(".calendar-event-card__content").exists()).toBe(false);
-    expect(wrapper.find(".calendar-event-card__settlement").exists()).toBe(false);
+    expect(wrapper.find(".calendar-event-card__progress").exists()).toBe(false);
     expect(wrapper.attributes("title")).toContain("内容：手法陪练");
   });
 

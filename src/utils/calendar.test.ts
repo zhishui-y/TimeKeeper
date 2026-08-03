@@ -5,7 +5,7 @@ import {
   calendarEventClassNames,
   calendarEventTimeLabel,
   calendarEventTooltip,
-  calendarSettlementLabel,
+  calendarProgressLabel,
   isShortCalendarAppointment,
 } from "./calendar";
 
@@ -28,28 +28,31 @@ function appointment(overrides: Partial<Appointment> = {}): Appointment {
 }
 
 describe("calendar appointment presentation", () => {
-  it("adds settlement state classes and labels to business appointments", () => {
+  it("adds unified progress classes and labels to business appointments", () => {
     const unsettled = appointment();
     const settled = appointment({ settlementStatus: "settled", amountMinor: 36_000 });
 
-    expect(calendarEventClassNames(unsettled)).toContain("appointment-event--unsettled");
-    expect(calendarSettlementLabel(unsettled)).toBe("待结 · ¥180");
-    expect(calendarEventClassNames(settled)).toContain("appointment-event--settled");
-    expect(calendarSettlementLabel(settled)).toBe("已结 · ¥360");
+    expect(calendarEventClassNames(unsettled)).toContain("appointment-event--pending_settlement");
+    expect(calendarProgressLabel(unsettled)).toBe("待结算 · ¥180");
+    expect(calendarEventClassNames(settled)).toContain("appointment-event--completed");
+    expect(calendarProgressLabel(settled)).toBe("已完成 · ¥360");
   });
 
-  it("keeps amount-free pending appointments visible and hides irrelevant settlement labels", () => {
-    expect(calendarSettlementLabel(appointment({ amountMinor: null }))).toBe("待结");
+  it("keeps every mode and cancellation visible through one progress label", () => {
+    expect(calendarProgressLabel(appointment({ amountMinor: null }))).toBe("待结算");
     expect(
-      calendarSettlementLabel(
+      calendarProgressLabel(
         appointment({
           mode: "entertainment",
+          serviceStatus: "completed",
           settlementStatus: "not_applicable",
           amountMinor: null,
         }),
       ),
-    ).toBeNull();
-    expect(calendarSettlementLabel(appointment({ serviceStatus: "cancelled" }))).toBeNull();
+    ).toBe("已完成");
+    expect(calendarProgressLabel(appointment({ serviceStatus: "cancelled" }))).toBe(
+      "已取消 · ¥180",
+    );
   });
 
   it("counts active appointments by service date and excludes cancelled records", () => {
@@ -89,13 +92,7 @@ describe("calendar appointment presentation", () => {
     expect(calendarEventTimeLabel(crossDay)).toBe("23:30–01:30 +1");
     expect(calendarEventTimeLabel(appointment({ startsAt: null, endsAt: null }))).toBe("待定");
     expect(calendarEventTooltip(crossDay)).toBe(
-      [
-        "小北",
-        "时间：23:30–01:30 +1",
-        "内容：手法陪练",
-        "状态：进行中",
-        "结算：已结算 · ¥180",
-      ].join("\n"),
+      ["小北", "时间：23:30–01:30 +1", "内容：手法陪练", "状态：已完成", "金额：¥180"].join("\n"),
     );
   });
 });

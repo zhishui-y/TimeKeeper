@@ -15,7 +15,7 @@ use crate::{
         Appointment, AppointmentAccount, AppointmentAccountCredentialInput,
         AppointmentAccountDetails, AppointmentAccountInput, AppointmentConflict,
         AppointmentFilters, AppointmentInput, AppointmentMode, AppointmentMutationResult,
-        ContactPreset, ServiceStatus, SettlementStatus, VoicePlatform,
+        AppointmentProgressStatus, ContactPreset, ServiceStatus, SettlementStatus, VoicePlatform,
     },
     notifications::{
         NotificationState, cancel_appointment_notification, schedule_appointment_notification,
@@ -274,17 +274,32 @@ fn normalize_input(input: AppointmentInput) -> Result<NormalizedAppointment, Str
         input.end_time.as_deref(),
     )?;
 
-    let (settlement_status, rate_note, payment_method, amount_minor) = match input.mode {
-        AppointmentMode::Entertainment => (SettlementStatus::NotApplicable, None, None, None),
+    let (service_status, settlement_status, rate_note, payment_method, amount_minor) = match input
+        .mode
+    {
+        AppointmentMode::Entertainment => (
+            input.service_status,
+            SettlementStatus::NotApplicable,
+            None,
+            None,
+            None,
+        ),
         AppointmentMode::Business => {
             if input.settlement_status == SettlementStatus::NotApplicable {
                 return Err("业务预约的结算状态必须是未结算或已结算".into());
             }
             if input.settlement_status == SettlementStatus::Settled && input.amount_minor.is_none()
             {
-                return Err("已结算预约必须填写金额".into());
+                return Err("已完成预约必须填写金额".into());
             }
             (
+                if input.settlement_status == SettlementStatus::Settled
+                    && input.service_status != ServiceStatus::Cancelled
+                {
+                    ServiceStatus::Completed
+                } else {
+                    input.service_status
+                },
                 input.settlement_status,
                 optional_text(input.rate_note),
                 optional_text(input.payment_method),
@@ -315,7 +330,7 @@ fn normalize_input(input: AppointmentInput) -> Result<NormalizedAppointment, Str
         contact_name,
         content: optional_text(input.content),
         mode: input.mode,
-        service_status: input.service_status,
+        service_status,
         settlement_status,
         account: normalize_account_input(input.account)?,
         voice_platform,
@@ -505,6 +520,38 @@ pub(crate) async fn list_appointments_impl(
     }
     if let Some(mode) = filters.mode {
         builder.push(" AND mode = ").push_bind(mode.as_str());
+    }
+    if let Some(status) = filters.progress_status {
+        match status {
+            AppointmentProgressStatus::Scheduled => {
+                builder.push(
+                    " AND service_status = 'scheduled'
+                      AND (mode = 'entertainment' OR settlement_status = 'unsettled')",
+                );
+            }
+            AppointmentProgressStatus::InProgress => {
+                builder.push(
+                    " AND service_status = 'in_progress'
+                      AND (mode = 'entertainment' OR settlement_status = 'unsettled')",
+                );
+            }
+            AppointmentProgressStatus::PendingSettlement => {
+                builder.push(
+                    " AND mode = 'business' AND service_status = 'completed'
+                      AND settlement_status = 'unsettled'",
+                );
+            }
+            AppointmentProgressStatus::Completed => {
+                builder.push(
+                    " AND ((mode = 'entertainment' AND service_status = 'completed')
+                      OR (mode = 'business' AND service_status != 'cancelled'
+                          AND settlement_status = 'settled'))",
+                );
+            }
+            AppointmentProgressStatus::Cancelled => {
+                builder.push(" AND service_status = 'cancelled'");
+            }
+        }
     }
     if let Some(status) = filters.service_status {
         builder
@@ -1937,7 +1984,8 @@ pub(crate) async fn settle_appointment_impl(
 
     sqlx::query(
         "UPDATE appointments
-         SET settlement_status = 'settled', amount_minor = ?, payment_method = ?, updated_at = ?
+         SET service_status = 'completed', settlement_status = 'settled',
+             amount_minor = ?, payment_method = ?, updated_at = ?
          WHERE id = ?",
     )
     .bind(amount_minor)
@@ -3017,6 +3065,7 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(settled.settlement_status, SettlementStatus::Settled);
+            assert_eq!(settled.service_status, ServiceStatus::Completed);
 
             let duplicate = duplicate_appointment_impl(
                 &database,
@@ -3075,6 +3124,61 @@ mod tests {
                 .await
                 .unwrap(),
                 0
+            );
+        });
+    }
+
+    #[test]
+    fn filters_appointments_by_unified_progress_status() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+
+            let mut pending = business_input("2026-08-10", "10:00", "11:00");
+            pending.service_status = ServiceStatus::Completed;
+            create_appointment_impl(&database, pending).await.unwrap();
+
+            let mut settled = business_input("2026-08-11", "10:00", "11:00");
+            settled.settlement_status = SettlementStatus::Settled;
+            let settled = create_appointment_impl(&database, settled).await.unwrap();
+            assert_eq!(settled.appointment.service_status, ServiceStatus::Completed);
+
+            let mut entertainment = business_input("2026-08-12", "10:00", "11:00");
+            entertainment.mode = AppointmentMode::Entertainment;
+            entertainment.service_status = ServiceStatus::Completed;
+            create_appointment_impl(&database, entertainment)
+                .await
+                .unwrap();
+
+            let pending_items = list_appointments_impl(
+                &database,
+                AppointmentFilters {
+                    progress_status: Some(AppointmentProgressStatus::PendingSettlement),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(pending_items.len(), 1);
+
+            let completed_items = list_appointments_impl(
+                &database,
+                AppointmentFilters {
+                    progress_status: Some(AppointmentProgressStatus::Completed),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(completed_items.len(), 2);
+            assert!(
+                completed_items
+                    .iter()
+                    .any(|appointment| appointment.mode == AppointmentMode::Business)
+            );
+            assert!(
+                completed_items
+                    .iter()
+                    .any(|appointment| appointment.mode == AppointmentMode::Entertainment)
             );
         });
     }

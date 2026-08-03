@@ -135,6 +135,8 @@ describe("AppointmentDrawer", () => {
     expect(entertainmentButton).toBeDefined();
     await entertainmentButton?.trigger("click");
     expect(wrapper.text()).not.toContain("账单信息");
+    expect(wrapper.get('select[aria-label="预约进度"]').findAll("option")).toHaveLength(4);
+    expect(wrapper.get('select[aria-label="预约进度"]').text()).not.toContain("待结算");
   });
 
   it("rejects equal start and end times", async () => {
@@ -175,17 +177,16 @@ describe("AppointmentDrawer", () => {
     });
   });
 
-  it("requires an amount before a business appointment can be settled", async () => {
+  it("requires an amount before a business appointment can be completed", async () => {
     const wrapper = mountDrawer();
-    const settlementSelect = wrapper
-      .findAll("select")
-      .find((select) => select.text().includes("待结算"));
-    expect(settlementSelect).toBeDefined();
-    await settlementSelect?.setValue("settled");
+    const progressSelect = wrapper.get('select[aria-label="预约进度"]');
+    expect(progressSelect.findAll("option")).toHaveLength(5);
+    expect(wrapper.text()).not.toContain("结算状态");
+    await progressSelect.setValue("completed");
 
     await wrapper.get('button.button--primary[type="submit"]').trigger("click");
 
-    expect(wrapper.text()).toContain("已结算预约必须填写金额");
+    expect(wrapper.text()).toContain("已完成预约必须填写金额");
     expect(wrapper.emitted("save")).toBeUndefined();
   });
 

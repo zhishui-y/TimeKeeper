@@ -23,6 +23,7 @@ export function useAppointments(
       value.to ?? null,
       value.query ?? null,
       value.mode ?? null,
+      value.progressStatus ?? null,
       value.serviceStatus ?? null,
       value.settlementStatus ?? null,
     ]);

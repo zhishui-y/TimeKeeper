@@ -55,6 +55,14 @@ string_enum!(SettlementStatus {
     Settled => "settled",
 });
 
+string_enum!(AppointmentProgressStatus {
+    Scheduled => "scheduled",
+    InProgress => "in_progress",
+    PendingSettlement => "pending_settlement",
+    Completed => "completed",
+    Cancelled => "cancelled",
+});
+
 string_enum!(VoicePlatform {
     Yy => "yy",
     Qq => "qq",
@@ -177,6 +185,7 @@ pub struct AppointmentFilters {
     pub to: Option<String>,
     pub query: Option<String>,
     pub mode: Option<AppointmentMode>,
+    pub progress_status: Option<AppointmentProgressStatus>,
     pub service_status: Option<ServiceStatus>,
     pub settlement_status: Option<SettlementStatus>,
 }

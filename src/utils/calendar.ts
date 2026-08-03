@@ -1,38 +1,18 @@
 import { differenceInMinutes, parseISO } from "date-fns";
 import type { Appointment } from "../types/domain";
-import {
-  formatCurrency,
-  formatTimeRange,
-  serviceStatusLabels,
-  settlementStatusLabels,
-} from "./formatters";
+import { formatCurrency, formatTimeRange } from "./formatters";
+import { appointmentProgressStatus, appointmentProgressStatusLabels } from "./appointmentProgress";
 
 export function calendarEventClassNames(appointment: Appointment): string[] {
   return [
     `appointment-event--${appointment.mode}`,
-    `appointment-event--${appointment.serviceStatus}`,
-    `appointment-event--${appointment.settlementStatus}`,
+    `appointment-event--${appointmentProgressStatus(appointment)}`,
   ];
 }
 
-export function visibleSettlementStatus(appointment: Appointment): "unsettled" | "settled" | null {
-  if (
-    appointment.mode !== "business" ||
-    appointment.serviceStatus === "cancelled" ||
-    appointment.settlementStatus === "not_applicable"
-  ) {
-    return null;
-  }
-
-  return appointment.settlementStatus;
-}
-
-export function calendarSettlementLabel(appointment: Appointment): string | null {
-  const settlementStatus = visibleSettlementStatus(appointment);
-  if (!settlementStatus) return null;
-
-  const statusLabel = settlementStatus === "settled" ? "已结" : "待结";
-  return appointment.amountMinor === null || appointment.amountMinor === undefined
+export function calendarProgressLabel(appointment: Appointment): string {
+  const statusLabel = appointmentProgressStatusLabels[appointmentProgressStatus(appointment)];
+  return appointment.mode !== "business" || appointment.amountMinor == null
     ? statusLabel
     : `${statusLabel} · ${formatCurrency(appointment.amountMinor)}`;
 }
@@ -62,20 +42,15 @@ export function calendarEventTimeLabel(appointment: Appointment): string {
 }
 
 export function calendarEventTooltip(appointment: Appointment): string {
-  const settlement =
-    appointment.mode === "entertainment" || appointment.settlementStatus === "not_applicable"
-      ? settlementStatusLabels.not_applicable
-      : `${settlementStatusLabels[appointment.settlementStatus]}${
-          appointment.amountMinor === null || appointment.amountMinor === undefined
-            ? ""
-            : ` · ${formatCurrency(appointment.amountMinor)}`
-        }`;
+  const progressStatus = appointmentProgressStatus(appointment);
+  const amount =
+    appointment.mode === "business" ? formatCurrency(appointment.amountMinor) : "无需结算";
 
   return [
     appointment.contactName,
     `时间：${formatTimeRange(appointment.startsAt, appointment.endsAt)}`,
     `内容：${appointment.content?.trim() || "未填写内容"}`,
-    `状态：${serviceStatusLabels[appointment.serviceStatus]}`,
-    `结算：${settlement}`,
+    `状态：${appointmentProgressStatusLabels[progressStatus]}`,
+    `金额：${amount}`,
   ].join("\n");
 }

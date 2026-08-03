@@ -55,7 +55,16 @@ requires an unlocked vault and clears the clipboard after 30 seconds.
 `sync_appointment_service_statuses` uses the current China-local time and is idempotent. Scheduled
 appointments become in progress when their start time is reached. Scheduled or in-progress
 appointments become completed when their end time is reached. Appointments without an end time
-can start automatically but are never completed automatically.
+can start automatically but are never completed automatically. For business appointments, an
+automatically completed service is exposed as the unified `pending_settlement` progress until it is
+settled. `settle_appointment` atomically sets both `serviceStatus=completed` and
+`settlementStatus=settled`, which is exposed as unified `completed` progress.
+
+`AppointmentFilters.progressStatus` accepts `scheduled`, `in_progress`, `pending_settlement`,
+`completed`, or `cancelled`. Pending settlement selects completed, unsettled business appointments;
+completed selects completed entertainment appointments or non-cancelled settled business
+appointments. The legacy `serviceStatus` and `settlementStatus` filter fields remain accepted and
+are combined with this projection when supplied.
 
 ## Accounts and vault
 
@@ -133,11 +142,12 @@ update command validates each value against its column minimum and the 480px max
 Older settings files that omit either field load default widths and a missing week marker, preserving
 existing weekly content until the first later week transition.
 
-`AppSettings.appointmentTableColumnWidths` stores the eleven resizable appointment data widths. Its
+`AppSettings.appointmentTableColumnWidths` stores the ten resizable appointment data widths. Its
 dedicated update command validates each value against its column minimum and the 480px maximum.
 The `voice` field sits between `account` and `mode`, defaults to 88px, and has a 72px minimum. It uses
 a field-level default so settings that already contain customized appointment widths but predate the
-voice column retain every existing value. The final width field is `notes`; settings written by the
+voice column retain every existing value. The former `settlementStatus` width is ignored because the
+table now uses one progress column. The final width field is `notes`; settings written by the
 earlier payment-method column used `paymentMethod` and are accepted as a backward-compatible alias.
 Older settings files that omit the entire field load the default appointment widths. Account and
 appointment table width commands update only their own field and preserve every other setting.
