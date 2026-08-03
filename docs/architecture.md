@@ -24,7 +24,7 @@ itself remains outside both domain DTOs and SQLite.
 | Appointment drawer         | Composes the drawer shell and form sections                  | Delegates draft, validation, template restore, and serialization to a composable  |
 | Contact fields             | Presents recent/searchable contacts                          | Emits explicit preset selection; typing alone never restores a template           |
 | Appointment account fields | Presents no-account/profile/embedded modes                   | Emits typed account drafts and never reveals an existing password                 |
-| Appointment table          | Filters and presents historical records                      | Emits edit/duplicate/cancel/delete actions                                        |
+| Appointment table          | Filters and presents historical records                      | Emits edit/duplicate/copy/delete and column-width actions                         |
 | Account toolbar            | Presents compact search, filters, bulk actions, and vault UI | Uses typed models/events; owns only the unlock-dialog draft                       |
 | Account table              | Presents account metadata without secrets                    | Emits edit/copy/role-refresh/weekly-usage/delete/reorder and column-width actions |
 | Revenue dashboard          | Loads range summary and chart series                         | Receives range/granularity; emits filter changes                                  |
@@ -60,6 +60,14 @@ command after a pointer drag or keyboard adjustment completes. The account works
 side effect and weekly-usage synchronization; the table and resize handle only emit typed UI events.
 Weekly usage continues to use `AccountProfile.usageInfo` and SQLite `usage_info`. It is non-secret and
 is cleared atomically at a China-local Monday boundary without accessing Stronghold.
+
+Appointment table column widths follow the same settings-owned interaction model through a separate
+dedicated command, so resizing one table cannot overwrite the other table's preferences. The
+appointment workspace owns persistence rollback and row actions. The table presents appointment
+account metadata in two lines and emits account/password copy requests; non-secret account-name copy
+reads SQLite in Rust without opening Stronghold, while password copy retains the normal unlock and
+30-second clipboard-clearing boundary. Row deletion first opens a focused choice dialog so cancelling
+an appointment remains distinct from permanently deleting its record and appointment secret.
 
 The account toolbar remains a single presentation row: `AccountsWorkspace` owns search, filtering,
 vault operations, and API side effects, while `AccountToolbar` owns only the transient unlock-dialog

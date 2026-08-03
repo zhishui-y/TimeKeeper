@@ -1,12 +1,24 @@
 <script setup lang="ts">
 import { Plus, Trash2 } from "@lucide/vue";
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, ref, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAppointments } from "../../composables/useAppointments";
 import { useAppointmentPasswordCopy } from "../../composables/useAppointmentPasswordCopy";
 import { useUiStore } from "../../stores/ui";
-import type { Appointment, AppointmentFilters } from "../../types/domain";
+import type {
+  Appointment,
+  AppointmentFilters,
+  AppointmentTableColumnWidths,
+} from "../../types/domain";
+import {
+  appointmentTableColumnWidthsEqual,
+  clampAppointmentTableColumnWidth,
+  cloneAppointmentTableColumnWidths,
+  DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS,
+  type AppointmentTableColumnKey,
+} from "../../utils/appointmentTableColumns";
 import AppointmentFiltersBar from "./AppointmentFiltersBar.vue";
+import AppointmentDeleteDialog from "./AppointmentDeleteDialog.vue";
 import AppointmentTable from "./AppointmentTable.vue";
 import AccountVaultUnlockDialog from "../accounts/AccountVaultUnlockDialog.vue";
 
@@ -15,6 +27,65 @@ const { filters, items, loading, error, load } = useAppointments();
 const passwordCopy = useAppointmentPasswordCopy();
 const selectedIds = ref<string[]>([]);
 const selectedCount = computed(() => selectedIds.value.length);
+const columnWidths = shallowRef<AppointmentTableColumnWidths>(
+  cloneAppointmentTableColumnWidths(DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS),
+);
+const persistedColumnWidths = shallowRef<AppointmentTableColumnWidths>(
+  cloneAppointmentTableColumnWidths(DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS),
+);
+const savingColumnWidths = shallowRef(false);
+const deleteTarget = shallowRef<Appointment | null>(null);
+const deleteOperationPending = shallowRef(false);
+
+async function loadColumnWidths(): Promise<void> {
+  try {
+    const settings = await api.getSettings();
+    const widths = cloneAppointmentTableColumnWidths(settings.appointmentTableColumnWidths);
+    columnWidths.value = widths;
+    persistedColumnWidths.value = cloneAppointmentTableColumnWidths(widths);
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  }
+}
+
+function previewColumnWidth(columnKey: AppointmentTableColumnKey, width: number): void {
+  columnWidths.value = {
+    ...columnWidths.value,
+    [columnKey]: clampAppointmentTableColumnWidth(columnKey, width),
+  };
+}
+
+function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number): void {
+  previewColumnWidth(columnKey, width);
+}
+
+async function persistColumnWidths(nextWidths: AppointmentTableColumnWidths): Promise<void> {
+  if (savingColumnWidths.value) return;
+  const normalized = cloneAppointmentTableColumnWidths(nextWidths);
+  if (appointmentTableColumnWidthsEqual(normalized, persistedColumnWidths.value)) return;
+
+  const previous = cloneAppointmentTableColumnWidths(persistedColumnWidths.value);
+  savingColumnWidths.value = true;
+  try {
+    const saved = await api.updateAppointmentTableColumnWidths(normalized);
+    columnWidths.value = cloneAppointmentTableColumnWidths(saved);
+    persistedColumnWidths.value = cloneAppointmentTableColumnWidths(saved);
+  } catch (cause) {
+    columnWidths.value = previous;
+    ui.notify(errorMessage(cause), "danger");
+  } finally {
+    savingColumnWidths.value = false;
+  }
+}
+
+function commitColumnWidth(columnKey: AppointmentTableColumnKey, width: number): void {
+  const next = {
+    ...columnWidths.value,
+    [columnKey]: clampAppointmentTableColumnWidth(columnKey, width),
+  };
+  columnWidths.value = next;
+  void persistColumnWidths(next);
+}
 
 async function applyFilters(next: AppointmentFilters): Promise<void> {
   selectedIds.value = [];
@@ -48,7 +119,30 @@ async function duplicate(appointment: Appointment): Promise<void> {
   }
 }
 
-async function cancel(appointment: Appointment): Promise<void> {
+async function copyAccount(appointment: Appointment): Promise<void> {
+  try {
+    await api.copyAppointmentAccountName(appointment.id);
+    ui.notify("账号已复制", "success");
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  }
+}
+
+function requestDelete(appointment: Appointment): void {
+  if (deleteOperationPending.value) return;
+  deleteTarget.value = appointment;
+}
+
+function closeDeleteDialog(): void {
+  if (!deleteOperationPending.value) deleteTarget.value = null;
+}
+
+async function cancelFromDialog(): Promise<void> {
+  const appointment = deleteTarget.value;
+  if (!appointment || appointment.serviceStatus === "cancelled" || deleteOperationPending.value) {
+    return;
+  }
+  deleteOperationPending.value = true;
   try {
     await api.setAppointmentServiceStatus(appointment.id, "cancelled");
     ui.markDataChanged();
@@ -56,11 +150,17 @@ async function cancel(appointment: Appointment): Promise<void> {
     ui.notify("预约已取消，历史记录仍会保留", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
+  } finally {
+    deleteOperationPending.value = false;
+    deleteTarget.value = null;
   }
 }
 
-async function remove(appointment: Appointment): Promise<void> {
-  if (!globalThis.confirm(`确定永久删除 ${appointment.contactName} 的这条预约吗？`)) return;
+async function removeFromDialog(): Promise<void> {
+  const appointment = deleteTarget.value;
+  if (!appointment || deleteOperationPending.value) return;
+  deleteTarget.value = null;
+  deleteOperationPending.value = true;
   const action = async () => {
     try {
       await api.deleteAppointment(appointment.id);
@@ -72,14 +172,16 @@ async function remove(appointment: Appointment): Promise<void> {
       ui.notify(errorMessage(cause), "danger");
     }
   };
-  if (appointment.account?.passwordAvailable) {
-    try {
+  try {
+    if (appointment.account?.passwordAvailable) {
       await passwordCopy.runWhenUnlocked(action);
-    } catch (cause) {
-      ui.notify(errorMessage(cause), "danger");
+    } else {
+      await action();
     }
-  } else {
-    await action();
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  } finally {
+    deleteOperationPending.value = false;
   }
 }
 
@@ -134,6 +236,8 @@ watch(
     void load();
   },
 );
+
+onMounted(loadColumnWidths);
 </script>
 
 <template>
@@ -163,12 +267,25 @@ watch(
     <div v-if="error" class="error-banner">{{ error }}</div>
     <AppointmentTable
       :appointments="items"
+      :column-widths="columnWidths"
+      :saving-column-widths="savingColumnWidths"
       v-model:selected-ids="selectedIds"
       @edit="ui.openEditAppointment"
       @duplicate="duplicate"
-      @cancel="cancel"
+      @copy-account="copyAccount"
       @copy-password="passwordCopy.copy($event.id)"
-      @delete="remove"
+      @delete="requestDelete"
+      @preview-column-width="previewColumnWidth"
+      @commit-column-width="commitColumnWidth"
+      @cancel-column-resize="cancelColumnResize"
+    />
+    <AppointmentDeleteDialog
+      :open="deleteTarget !== null"
+      :appointment="deleteTarget"
+      :busy="deleteOperationPending"
+      @close="closeDeleteDialog"
+      @cancel-appointment="cancelFromDialog"
+      @permanent-delete="removeFromDialog"
     />
     <AccountVaultUnlockDialog
       v-if="passwordCopy.ownsUnlockDialog"

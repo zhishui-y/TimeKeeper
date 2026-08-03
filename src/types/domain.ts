@@ -227,6 +227,19 @@ export interface AccountTableColumnWidths {
   notes: number;
 }
 
+export interface AppointmentTableColumnWidths {
+  serviceDate: number;
+  timeRange: number;
+  contactName: number;
+  content: number;
+  account: number;
+  mode: number;
+  serviceStatus: number;
+  settlementStatus: number;
+  amount: number;
+  paymentMethod: number;
+}
+
 export interface AccountUsageWeekSyncResult {
   weekStart: string;
   clearedCount: number;
@@ -255,6 +268,7 @@ export interface AppSettings {
   backupRetention: number;
   lastAutomaticBackupDate?: string | null;
   accountTableColumnWidths: AccountTableColumnWidths;
+  appointmentTableColumnWidths: AppointmentTableColumnWidths;
   lastAccountUsageWeekStart?: string | null;
   accountRoleDataServerUrl: string;
 }

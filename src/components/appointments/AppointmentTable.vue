@@ -1,33 +1,40 @@
 <script setup lang="ts">
-import { Ban, ClipboardCopy, CopyPlus, Pencil, Trash2 } from "@lucide/vue";
-import type { Appointment } from "../../types/domain";
+import { ClipboardCopy, Copy, CopyPlus, Pencil, Trash2 } from "@lucide/vue";
+import { computed, useTemplateRef, watch } from "vue";
+import type { Appointment, AppointmentTableColumnWidths } from "../../types/domain";
+import {
+  appointmentTableTotalWidth,
+  type AppointmentTableColumnKey,
+} from "../../utils/appointmentTableColumns";
 import {
   formatCompactDate,
   formatCurrency,
   formatTimeRange,
   modeLabels,
 } from "../../utils/formatters";
-import { useTemplateRef } from "vue";
-import { computed, watch } from "vue";
 import StatusBadge from "../common/StatusBadge.vue";
+import AppointmentColumnResizeHandle from "./AppointmentColumnResizeHandle.vue";
 
 const props = defineProps<{
   appointments: readonly Appointment[];
+  columnWidths: AppointmentTableColumnWidths;
+  savingColumnWidths: boolean;
 }>();
 const selectedIds = defineModel<string[]>("selectedIds", { required: true });
 
 const emit = defineEmits<{
   edit: [appointment: Appointment];
   duplicate: [appointment: Appointment];
-  cancel: [appointment: Appointment];
   delete: [appointment: Appointment];
+  copyAccount: [appointment: Appointment];
   copyPassword: [appointment: Appointment];
+  previewColumnWidth: [columnKey: AppointmentTableColumnKey, width: number];
+  commitColumnWidth: [columnKey: AppointmentTableColumnKey, width: number];
+  cancelColumnResize: [columnKey: AppointmentTableColumnKey, width: number];
 }>();
 
 const allSelectRef = useTemplateRef("all-select");
-
 const selectedIdSet = computed(() => new Set(selectedIds.value));
-
 const selectedCount = computed(() => selectedIds.value.length);
 const allChecked = computed(
   () =>
@@ -35,11 +42,10 @@ const allChecked = computed(
     props.appointments.every((appointment) => selectedIdSet.value.has(appointment.id)),
 );
 const indeterminate = computed(() => selectedCount.value > 0 && !allChecked.value);
+const tableMinimumWidth = computed(() => appointmentTableTotalWidth(props.columnWidths));
 
 watch(indeterminate, (value) => {
-  if (allSelectRef.value) {
-    allSelectRef.value.indeterminate = value;
-  }
+  if (allSelectRef.value) allSelectRef.value.indeterminate = value;
 });
 
 function isChecked(event: unknown): boolean {
@@ -55,30 +61,40 @@ function toggleAll(event: unknown): void {
 
 function toggleOne(appointmentId: string, event: unknown): void {
   const next = new Set(selectedIds.value);
-  if (isChecked(event)) {
-    next.add(appointmentId);
-  } else {
-    next.delete(appointmentId);
-  }
+  if (isChecked(event)) next.add(appointmentId);
+  else next.delete(appointmentId);
   selectedIds.value = [...next];
+}
+
+function previewColumnWidth(columnKey: AppointmentTableColumnKey, width: number): void {
+  emit("previewColumnWidth", columnKey, width);
+}
+
+function commitColumnWidth(columnKey: AppointmentTableColumnKey, width: number): void {
+  emit("commitColumnWidth", columnKey, width);
+}
+
+function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number): void {
+  emit("cancelColumnResize", columnKey, width);
 }
 </script>
 
 <template>
   <div class="data-surface appointment-table">
     <div v-if="appointments.length" class="table-scroll">
-      <table class="data-table">
+      <table class="data-table" :style="{ minWidth: `${tableMinimumWidth}px` }">
         <colgroup>
           <col style="width: 44px" />
-          <col style="width: 60px" />
-          <col style="width: 88px" />
-          <col style="width: 72px" />
-          <col style="width: 122px" />
-          <col style="width: 56px" />
-          <col style="width: 74px" />
-          <col style="width: 74px" />
-          <col style="width: 68px" />
-          <col style="width: 58px" />
+          <col :style="{ width: `${columnWidths.serviceDate}px` }" />
+          <col :style="{ width: `${columnWidths.timeRange}px` }" />
+          <col :style="{ width: `${columnWidths.contactName}px` }" />
+          <col :style="{ width: `${columnWidths.content}px` }" />
+          <col :style="{ width: `${columnWidths.account}px` }" />
+          <col :style="{ width: `${columnWidths.mode}px` }" />
+          <col :style="{ width: `${columnWidths.serviceStatus}px` }" />
+          <col :style="{ width: `${columnWidths.settlementStatus}px` }" />
+          <col :style="{ width: `${columnWidths.amount}px` }" />
+          <col :style="{ width: `${columnWidths.paymentMethod}px` }" />
           <col style="width: 112px" />
         </colgroup>
         <thead>
@@ -94,15 +110,126 @@ function toggleOne(appointmentId: string, event: unknown): void {
                 @click.stop
               />
             </th>
-            <th>日期</th>
-            <th>时间</th>
-            <th>联系人</th>
-            <th>内容 / 账号</th>
-            <th>模式</th>
-            <th>进度</th>
-            <th>结算</th>
-            <th>金额</th>
-            <th>收款</th>
+            <th class="resizable-header">
+              日期
+              <AppointmentColumnResizeHandle
+                column-key="serviceDate"
+                label="日期"
+                :width="columnWidths.serviceDate"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
+            <th class="resizable-header">
+              时间
+              <AppointmentColumnResizeHandle
+                column-key="timeRange"
+                label="时间"
+                :width="columnWidths.timeRange"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
+            <th class="resizable-header">
+              联系人
+              <AppointmentColumnResizeHandle
+                column-key="contactName"
+                label="联系人"
+                :width="columnWidths.contactName"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
+            <th class="resizable-header">
+              内容
+              <AppointmentColumnResizeHandle
+                column-key="content"
+                label="内容"
+                :width="columnWidths.content"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
+            <th class="resizable-header">
+              账号
+              <AppointmentColumnResizeHandle
+                column-key="account"
+                label="账号"
+                :width="columnWidths.account"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
+            <th class="resizable-header">
+              模式
+              <AppointmentColumnResizeHandle
+                column-key="mode"
+                label="模式"
+                :width="columnWidths.mode"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
+            <th class="resizable-header">
+              进度
+              <AppointmentColumnResizeHandle
+                column-key="serviceStatus"
+                label="进度"
+                :width="columnWidths.serviceStatus"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
+            <th class="resizable-header">
+              结算
+              <AppointmentColumnResizeHandle
+                column-key="settlementStatus"
+                label="结算"
+                :width="columnWidths.settlementStatus"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
+            <th class="resizable-header">
+              金额
+              <AppointmentColumnResizeHandle
+                column-key="amount"
+                label="金额"
+                :width="columnWidths.amount"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
+            <th class="resizable-header">
+              收款
+              <AppointmentColumnResizeHandle
+                column-key="paymentMethod"
+                label="收款"
+                :width="columnWidths.paymentMethod"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
             <th aria-label="操作" />
           </tr>
         </thead>
@@ -124,10 +251,47 @@ function toggleOne(appointmentId: string, event: unknown): void {
               <strong class="cell-title truncate">{{ appointment.contactName }}</strong>
             </td>
             <td>
-              <div class="cell-stack">
-                <strong class="truncate">{{ appointment.content || "未填写内容" }}</strong>
-                <span class="truncate">{{ appointment.account?.accountName || "未使用账号" }}</span>
+              <strong
+                class="content-cell truncate"
+                :class="{ muted: !appointment.content }"
+                :title="appointment.content || undefined"
+              >
+                {{ appointment.content || "未填写内容" }}
+              </strong>
+            </td>
+            <td>
+              <div v-if="appointment.account" class="account-cell">
+                <div class="account-cell__line">
+                  <span class="truncate">{{ appointment.account.specialization || "—" }}</span>
+                  <span aria-hidden="true">·</span>
+                  <span class="truncate">{{ appointment.account.gearScore || "—" }}</span>
+                  <span aria-hidden="true">·</span>
+                  <button
+                    class="account-cell__copy"
+                    type="button"
+                    :title="`复制账号 ${appointment.account.accountName}`"
+                    :aria-label="`复制账号 ${appointment.account.accountName}`"
+                    @click="emit('copyAccount', appointment)"
+                  >
+                    <Copy :size="13" />
+                  </button>
+                </div>
+                <div class="account-cell__line account-cell__line--muted">
+                  <span class="truncate">{{ appointment.account.server || "—" }}</span>
+                  <span aria-hidden="true">·</span>
+                  <button
+                    class="account-cell__copy"
+                    type="button"
+                    :disabled="!appointment.account.passwordAvailable"
+                    :title="appointment.account.passwordAvailable ? '复制密码' : '该预约未保存密码'"
+                    :aria-label="`复制密码 ${appointment.contactName}`"
+                    @click="emit('copyPassword', appointment)"
+                  >
+                    <ClipboardCopy :size="13" />
+                  </button>
+                </div>
               </div>
+              <span v-else class="muted">未使用账号</span>
             </td>
             <td>
               <span class="mode-mark" :class="`mode-mark--${appointment.mode}`">
@@ -142,16 +306,6 @@ function toggleOne(appointmentId: string, event: unknown): void {
             <td class="muted">{{ appointment.paymentMethod || "—" }}</td>
             <td>
               <div class="row-actions">
-                <button
-                  class="icon-button"
-                  type="button"
-                  title="复制账号密码"
-                  aria-label="复制账号密码"
-                  :disabled="!appointment.account?.passwordAvailable"
-                  @click="emit('copyPassword', appointment)"
-                >
-                  <ClipboardCopy :size="14" />
-                </button>
                 <button
                   class="icon-button"
                   type="button"
@@ -171,20 +325,10 @@ function toggleOne(appointmentId: string, event: unknown): void {
                   <CopyPlus :size="14" />
                 </button>
                 <button
-                  v-if="appointment.serviceStatus !== 'cancelled'"
-                  class="icon-button"
-                  type="button"
-                  title="取消预约"
-                  aria-label="取消预约"
-                  @click="emit('cancel', appointment)"
-                >
-                  <Ban :size="14" />
-                </button>
-                <button
                   class="icon-button action-danger"
                   type="button"
-                  title="永久删除"
-                  aria-label="永久删除"
+                  title="删除"
+                  aria-label="删除"
                   @click="emit('delete', appointment)"
                 >
                   <Trash2 :size="14" />
@@ -204,24 +348,67 @@ function toggleOne(appointmentId: string, event: unknown): void {
   flex: 1;
 }
 
+.resizable-header {
+  position: sticky;
+}
+
 .cell-title,
-.cell-stack strong {
+.content-cell {
   display: block;
   color: var(--ink-strong);
   font-size: 12px;
   font-weight: 700;
 }
 
-.cell-stack {
-  display: flex;
+.account-cell {
+  display: grid;
   min-width: 0;
-  flex-direction: column;
   gap: 3px;
 }
 
-.cell-stack span {
+.account-cell__line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-strong);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.account-cell__line .truncate {
+  min-width: 0;
+}
+
+.account-cell__line--muted {
   color: var(--ink-muted);
   font-size: 10px;
+  font-weight: 500;
+}
+
+.account-cell__copy {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  color: var(--brand-strong);
+  background: transparent;
+  cursor: copy;
+}
+
+.account-cell__copy:hover:not(:disabled),
+.account-cell__copy:focus-visible {
+  background: var(--brand-soft);
+  outline: none;
+}
+
+.account-cell__copy:disabled {
+  cursor: not-allowed;
+  opacity: 0.32;
 }
 
 .mode-mark {
@@ -268,6 +455,24 @@ function toggleOne(appointmentId: string, event: unknown): void {
 .row-actions .action-danger:hover {
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+.appointment-table th:last-child,
+.appointment-table td:last-child {
+  position: sticky;
+  z-index: 2;
+  right: 0;
+  background: var(--surface);
+  box-shadow: -10px 0 18px rgba(28, 45, 38, 0.05);
+}
+
+.appointment-table th:last-child {
+  z-index: 3;
+  background: var(--surface-soft);
+}
+
+.appointment-table tbody tr:hover td:last-child {
+  background: var(--surface-soft);
 }
 
 .appointment-table tbody tr {

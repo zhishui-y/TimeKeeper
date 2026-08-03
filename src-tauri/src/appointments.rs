@@ -20,7 +20,7 @@ use crate::{
     notifications::{
         NotificationState, cancel_appointment_notification, schedule_appointment_notification,
     },
-    vault::{VaultState, run_blocking_vault_operation},
+    vault::{VaultState, copy_text_to_clipboard, run_blocking_vault_operation},
 };
 
 const DATE_FORMAT: &str = "%Y-%m-%d";
@@ -640,6 +640,34 @@ pub(crate) async fn get_appointment_impl(
         .map_err(db_error)?
         .ok_or_else(|| format!("预约不存在: {id}"))?;
     appointment_from_row(&row)
+}
+
+pub(crate) async fn get_appointment_account_name_impl(
+    database: &Database,
+    id: &str,
+) -> Result<String, String> {
+    let account_name = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT account_name FROM appointments WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(database.pool())
+    .await
+    .map_err(db_error)?
+    .ok_or_else(|| format!("预约不存在: {id}"))?;
+
+    account_name
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "该预约未使用账号".to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn copy_appointment_account_name(
+    database: State<'_, Database>,
+    id: String,
+) -> Result<(), String> {
+    let account_name = get_appointment_account_name_impl(&database, &id).await?;
+    copy_text_to_clipboard(account_name).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -2045,6 +2073,44 @@ mod tests {
             },
             credential,
         }
+    }
+
+    #[test]
+    fn resolves_appointment_account_name_without_opening_the_vault() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let created =
+                create_appointment_impl(&database, business_input("2026-08-03", "10:00", "11:00"))
+                    .await
+                    .unwrap()
+                    .appointment;
+
+            assert_eq!(
+                get_appointment_account_name_impl(&database, &created.id)
+                    .await
+                    .unwrap_err(),
+                "该预约未使用账号"
+            );
+
+            sqlx::query("UPDATE appointments SET account_name = ? WHERE id = ?")
+                .bind("  test-account  ")
+                .bind(&created.id)
+                .execute(database.pool())
+                .await
+                .unwrap();
+            assert_eq!(
+                get_appointment_account_name_impl(&database, &created.id)
+                    .await
+                    .unwrap(),
+                "test-account"
+            );
+            assert!(
+                get_appointment_account_name_impl(&database, "missing-appointment")
+                    .await
+                    .unwrap_err()
+                    .contains("预约不存在")
+            );
+        });
     }
 
     #[test]

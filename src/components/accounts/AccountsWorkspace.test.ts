@@ -8,6 +8,7 @@ import { useVault } from "../../composables/useVault";
 import { useUiStore } from "../../stores/ui";
 import type { AccountProfile, AppSettings } from "../../types/domain";
 import { DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS } from "../../utils/accountTableColumns";
+import { DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS } from "../../utils/appointmentTableColumns";
 import { DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL } from "../../utils/accountRoleData";
 import AccountTable from "./AccountTable.vue";
 import AccountsWorkspace from "./AccountsWorkspace.vue";
@@ -71,6 +72,7 @@ const settingsFixture: AppSettings = {
   backupRetention: 30,
   lastAutomaticBackupDate: null,
   accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
+  appointmentTableColumnWidths: { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS },
   lastAccountUsageWeekStart: "2026-07-27",
   accountRoleDataServerUrl: DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
 };

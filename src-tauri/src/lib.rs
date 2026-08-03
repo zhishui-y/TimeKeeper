@@ -142,6 +142,7 @@ pub fn run() {
             appointments::duplicate_appointment,
             appointments::delete_appointment,
             appointments::delete_appointments,
+            appointments::copy_appointment_account_name,
             appointments::sync_appointment_service_statuses,
             appointments::set_appointment_service_status,
             appointments::settle_appointment,
@@ -173,6 +174,7 @@ pub fn run() {
             settings::get_settings,
             settings::update_settings,
             settings::update_account_table_column_widths,
+            settings::update_appointment_table_column_widths,
             backup::create_backup,
             backup::restore_backup,
         ])

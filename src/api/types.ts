@@ -9,6 +9,7 @@ import type {
   AppointmentFilters,
   AppointmentInput,
   AppointmentMutationResult,
+  AppointmentTableColumnWidths,
   BackupResult,
   ContactPreset,
   DashboardSummary,
@@ -34,6 +35,7 @@ export interface ApiClient {
   setAppointmentServiceStatus(id: string, status: ServiceStatus): Promise<Appointment>;
   settleAppointment(id: string, amountMinor: number, paymentMethod?: string): Promise<Appointment>;
   listContactPresets(query?: string, limit?: number): Promise<ContactPreset[]>;
+  copyAppointmentAccountName(id: string): Promise<void>;
   copyAppointmentAccountPassword(id: string): Promise<void>;
 
   listAccountProfiles(query?: string, needsReview?: boolean): Promise<AccountProfile[]>;
@@ -76,6 +78,9 @@ export interface ApiClient {
   updateAccountTableColumnWidths(
     widths: AccountTableColumnWidths,
   ): Promise<AccountTableColumnWidths>;
+  updateAppointmentTableColumnWidths(
+    widths: AppointmentTableColumnWidths,
+  ): Promise<AppointmentTableColumnWidths>;
 
   selectExcelFile(): Promise<string | null>;
   selectBackupDestination(): Promise<string | null>;

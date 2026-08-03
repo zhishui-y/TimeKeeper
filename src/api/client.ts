@@ -7,6 +7,7 @@ import type {
   AppSettings,
   Appointment,
   AppointmentMutationResult,
+  AppointmentTableColumnWidths,
   BackupResult,
   ContactPreset,
   DashboardSummary,
@@ -38,6 +39,7 @@ const nativeApi: ApiClient = {
     invoke<Appointment>("settle_appointment", { id, amountMinor, paymentMethod }),
   listContactPresets: (query, limit) =>
     invoke<ContactPreset[]>("list_contact_presets", { query, limit }),
+  copyAppointmentAccountName: (id) => invoke<void>("copy_appointment_account_name", { id }),
   copyAppointmentAccountPassword: (id) => invoke<void>("copy_appointment_account_password", { id }),
 
   listAccountProfiles: (query, needsReview) =>
@@ -81,6 +83,8 @@ const nativeApi: ApiClient = {
   updateSettings: (settings) => invoke<AppSettings>("update_settings", { settings }),
   updateAccountTableColumnWidths: (widths) =>
     invoke<AccountTableColumnWidths>("update_account_table_column_widths", { widths }),
+  updateAppointmentTableColumnWidths: (widths) =>
+    invoke<AppointmentTableColumnWidths>("update_appointment_table_column_widths", { widths }),
 
   async selectExcelFile() {
     const { open } = await import("@tauri-apps/plugin-dialog");

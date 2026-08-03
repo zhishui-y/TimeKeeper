@@ -88,6 +88,20 @@ describe("browser mock API", () => {
     vi.unstubAllGlobals();
   });
 
+  it("copies an appointment account name without unlocking the vault", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const target = (await mockApi.listAppointments()).find((item) => item.account?.accountName);
+    expect(target?.account?.accountName).toBeTruthy();
+
+    await mockApi.lockVault();
+    await mockApi.copyAppointmentAccountName(target!.id);
+
+    expect(writeText).toHaveBeenCalledWith(target!.account!.accountName);
+    await mockApi.initializeVault("test-password");
+    vi.unstubAllGlobals();
+  });
+
   it("removes billing data from entertainment appointments", async () => {
     const result = await mockApi.createAppointment({
       serviceDate: "2026-07-20",
@@ -329,6 +343,24 @@ describe("browser mock API", () => {
     );
 
     await mockApi.updateAccountTableColumnWidths(previous);
+  });
+
+  it("persists validated appointment table widths in browser demo mode", async () => {
+    const previous = (await mockApi.getSettings()).appointmentTableColumnWidths;
+    const widths = { ...previous, content: 216, account: 232 };
+
+    await expect(mockApi.updateAppointmentTableColumnWidths(widths)).resolves.toEqual(widths);
+    await expect(mockApi.getSettings()).resolves.toMatchObject({
+      appointmentTableColumnWidths: widths,
+    });
+    expect(localStorage.getItem("timekeeper.demo.appointmentTableColumnWidths")).toBe(
+      JSON.stringify(widths),
+    );
+    await expect(
+      mockApi.updateAppointmentTableColumnWidths({ ...widths, account: 149 }),
+    ).rejects.toThrow("列宽超出允许范围");
+
+    await mockApi.updateAppointmentTableColumnWidths(previous);
   });
 
   it("preserves the first weekly usage marker then clears at China Monday", async () => {

@@ -1717,7 +1717,7 @@ mod tests {
             ServiceStatus, SettlementStatus,
         },
         reports::get_revenue_summary_impl,
-        settings::AccountTableColumnWidths,
+        settings::{AccountTableColumnWidths, AppointmentTableColumnWidths},
         vault::VaultState,
     };
 
@@ -2425,6 +2425,14 @@ mod tests {
             settings
                 .update_account_table_column_widths(custom_widths)
                 .unwrap();
+            let custom_appointment_widths = AppointmentTableColumnWidths {
+                content: 216,
+                account: 232,
+                ..AppointmentTableColumnWidths::default()
+            };
+            settings
+                .update_appointment_table_column_widths(custom_appointment_widths)
+                .unwrap();
             settings
                 .record_account_usage_week_start(NaiveDate::from_ymd_opt(2026, 7, 13).unwrap())
                 .unwrap();
@@ -2578,6 +2586,14 @@ mod tests {
             let restored_settings = SettingsState::load(&dir).unwrap().snapshot().unwrap();
             assert_eq!(restored_settings.account_table_column_widths.weekly, 224);
             assert_eq!(restored_settings.account_table_column_widths.notes, 208);
+            assert_eq!(
+                restored_settings.appointment_table_column_widths.content,
+                216
+            );
+            assert_eq!(
+                restored_settings.appointment_table_column_widths.account,
+                232
+            );
             assert_eq!(
                 restored_settings.last_account_usage_week_start.as_deref(),
                 Some("2026-07-13")

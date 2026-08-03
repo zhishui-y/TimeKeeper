@@ -24,6 +24,7 @@ import type {
 import type { AppNotificationPermission } from "../../api/types";
 import { formatFileSize } from "../../utils/formatters";
 import { DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS } from "../../utils/accountTableColumns";
+import { DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS } from "../../utils/appointmentTableColumns";
 import {
   DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
   validateAccountRoleDataServerUrl,
@@ -43,6 +44,7 @@ const settings = reactive<AppSettings>({
   backupRetention: 30,
   lastAutomaticBackupDate: null,
   accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
+  appointmentTableColumnWidths: { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS },
   lastAccountUsageWeekStart: null,
   accountRoleDataServerUrl: DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
 });

@@ -81,6 +81,63 @@ impl AccountTableColumnWidths {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct AppointmentTableColumnWidths {
+    pub service_date: u32,
+    pub time_range: u32,
+    pub contact_name: u32,
+    pub content: u32,
+    pub account: u32,
+    pub mode: u32,
+    pub service_status: u32,
+    pub settlement_status: u32,
+    pub amount: u32,
+    pub payment_method: u32,
+}
+
+impl Default for AppointmentTableColumnWidths {
+    fn default() -> Self {
+        Self {
+            service_date: 60,
+            time_range: 88,
+            contact_name: 72,
+            content: 140,
+            account: 180,
+            mode: 56,
+            service_status: 74,
+            settlement_status: 74,
+            amount: 68,
+            payment_method: 58,
+        }
+    }
+}
+
+impl AppointmentTableColumnWidths {
+    fn validate(&self) -> Result<(), SettingsError> {
+        let widths = [
+            ("日期", self.service_date, 60),
+            ("时间", self.time_range, 88),
+            ("联系人", self.contact_name, 72),
+            ("内容", self.content, 100),
+            ("账号", self.account, 150),
+            ("模式", self.mode, 56),
+            ("进度", self.service_status, 74),
+            ("结算", self.settlement_status, 74),
+            ("金额", self.amount, 64),
+            ("收款", self.payment_method, 58),
+        ];
+        for (label, width, minimum) in widths {
+            if !(minimum..=480).contains(&width) {
+                return Err(SettingsError::Validation(format!(
+                    "预约表格{label}列宽必须在{minimum}到480像素之间"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub default_reminder_minutes: u32,
     pub auto_lock_minutes: u32,
@@ -88,6 +145,8 @@ pub struct AppSettings {
     pub last_automatic_backup_date: Option<String>,
     #[serde(default)]
     pub account_table_column_widths: AccountTableColumnWidths,
+    #[serde(default)]
+    pub appointment_table_column_widths: AppointmentTableColumnWidths,
     #[serde(default)]
     pub last_account_usage_week_start: Option<String>,
     #[serde(default = "default_account_role_data_server_url")]
@@ -102,6 +161,7 @@ impl Default for AppSettings {
             backup_retention: 30,
             last_automatic_backup_date: None,
             account_table_column_widths: AccountTableColumnWidths::default(),
+            appointment_table_column_widths: AppointmentTableColumnWidths::default(),
             last_account_usage_week_start: None,
             account_role_data_server_url: default_account_role_data_server_url(),
         }
@@ -133,6 +193,7 @@ impl AppSettings {
             })?;
         }
         self.account_table_column_widths.validate()?;
+        self.appointment_table_column_widths.validate()?;
         if let Some(date) = &self.last_account_usage_week_start {
             let date = NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| {
                 SettingsError::Validation("账号本周起始日期必须使用 YYYY-MM-DD 格式".into())
@@ -240,6 +301,19 @@ impl SettingsState {
         Ok(widths)
     }
 
+    pub(crate) fn update_appointment_table_column_widths(
+        &self,
+        widths: AppointmentTableColumnWidths,
+    ) -> Result<AppointmentTableColumnWidths, SettingsError> {
+        widths.validate()?;
+        let mut current = self.lock()?;
+        let mut updated = current.clone();
+        updated.appointment_table_column_widths = widths.clone();
+        write_settings_atomic(&self.path, &self.recovery_path, &updated)?;
+        *current = updated;
+        Ok(widths)
+    }
+
     pub(crate) fn record_account_usage_week_start(
         &self,
         date: NaiveDate,
@@ -304,6 +378,18 @@ pub async fn update_account_table_column_widths(
     let _operation_guard = backup.lock_data_operation().await;
     state
         .update_account_table_column_widths(widths)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn update_appointment_table_column_widths(
+    widths: AppointmentTableColumnWidths,
+    state: State<'_, SettingsState>,
+    backup: State<'_, BackupState>,
+) -> Result<AppointmentTableColumnWidths, String> {
+    let _operation_guard = backup.lock_data_operation().await;
+    state
+        .update_appointment_table_column_widths(widths)
         .map_err(|error| error.to_string())
 }
 
@@ -484,6 +570,10 @@ mod tests {
             loaded.account_table_column_widths,
             AccountTableColumnWidths::default()
         );
+        assert_eq!(
+            loaded.appointment_table_column_widths,
+            AppointmentTableColumnWidths::default()
+        );
         assert_eq!(loaded.last_account_usage_week_start, None);
         assert_eq!(
             loaded.account_role_data_server_url,
@@ -563,6 +653,52 @@ mod tests {
             ..AccountTableColumnWidths::default()
         };
         assert!(state.update_account_table_column_widths(invalid).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn validates_and_persists_appointment_table_column_widths_independently() {
+        let dir = test_dir("appointment-table-widths");
+        let state = SettingsState::load(&dir).unwrap();
+        let account_widths = AccountTableColumnWidths {
+            notes: 224,
+            ..AccountTableColumnWidths::default()
+        };
+        state
+            .update_account_table_column_widths(account_widths.clone())
+            .unwrap();
+        state
+            .record_account_usage_week_start(NaiveDate::from_ymd_opt(2026, 7, 27).unwrap())
+            .unwrap();
+
+        let widths = AppointmentTableColumnWidths {
+            content: 220,
+            account: 240,
+            ..AppointmentTableColumnWidths::default()
+        };
+        assert_eq!(
+            state
+                .update_appointment_table_column_widths(widths.clone())
+                .unwrap(),
+            widths
+        );
+        let reloaded = SettingsState::load(&dir).unwrap().snapshot().unwrap();
+        assert_eq!(reloaded.appointment_table_column_widths, widths);
+        assert_eq!(reloaded.account_table_column_widths, account_widths);
+        assert_eq!(
+            reloaded.last_account_usage_week_start.as_deref(),
+            Some("2026-07-27")
+        );
+
+        let invalid = AppointmentTableColumnWidths {
+            account: 149,
+            ..AppointmentTableColumnWidths::default()
+        };
+        assert!(
+            state
+                .update_appointment_table_column_widths(invalid)
+                .is_err()
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 }

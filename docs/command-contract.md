@@ -13,6 +13,7 @@ All command payloads and responses use camelCase JSON. Rust DTOs use
 - `delete_appointment(id) -> void`
 - `delete_appointments(ids) -> number`
 - `list_contact_presets(query?, limit=10) -> ContactPreset[]`
+- `copy_appointment_account_name(id) -> void`
 - `copy_appointment_account_password(id) -> void`
 - `sync_appointment_service_statuses() -> number`
 - `set_appointment_service_status(id, status) -> Appointment`
@@ -38,7 +39,9 @@ password. Existing passwords never appear in appointment/detail/preset
 responses. `voicePlatform` accepts `yy`, `qq`, or `null`; `voiceChannel` is a
 digit-only string allowed only for YY and is cleared for QQ or no voice.
 
-`list_contact_presets` excludes cancelled appointments, selects only the newest
+`copy_appointment_account_name` copies the embedded non-secret account name without requiring an
+unlocked vault or scheduling clipboard cleanup. It rejects missing appointments and appointments
+without an embedded account. `list_contact_presets` excludes cancelled appointments, selects only the newest
 appointment per contact, and returns at most 10 safe templates. Empty `query`
 orders all contacts by appointment date/time/creation time; non-empty `query`
 uses contact-name fuzzy matching. A preset may expose `passwordAvailable` and a
@@ -118,12 +121,18 @@ must contain at least 4 Unicode characters; 8 or more are recommended.
 - `get_settings() -> AppSettings`
 - `update_settings(settings) -> AppSettings`
 - `update_account_table_column_widths(widths) -> AccountTableColumnWidths`
+- `update_appointment_table_column_widths(widths) -> AppointmentTableColumnWidths`
 
 `AppSettings.accountTableColumnWidths` stores the ten resizable account metadata widths. The dedicated
 update command validates each value against its column minimum and the 480px maximum. Rust owns
 `lastAccountUsageWeekStart`; generic settings updates cannot overwrite this weekly cleanup marker.
 Older settings files that omit either field load default widths and a missing week marker, preserving
 existing weekly content until the first later week transition.
+
+`AppSettings.appointmentTableColumnWidths` stores the ten resizable appointment data widths. Its
+dedicated update command validates each value against its column minimum and the 480px maximum.
+Older settings files that omit this field load the default appointment widths. Account and
+appointment table width commands update only their own field and preserve every other setting.
 
 `AppSettings.accountRoleDataServerUrl` is a non-secret absolute HTTP(S) base URL stored in
 `settings.json` and included in full backups. It cannot contain credentials, query parameters, or a

@@ -10,6 +10,7 @@ import type {
   AppointmentFilters,
   AppointmentInput,
   AppointmentMutationResult,
+  AppointmentTableColumnWidths,
   ContactPreset,
   ReportGranularity,
   RevenuePoint,
@@ -22,6 +23,12 @@ import {
   MAX_ACCOUNT_TABLE_COLUMN_WIDTH,
   MIN_ACCOUNT_TABLE_COLUMN_WIDTHS,
 } from "../utils/accountTableColumns";
+import {
+  APPOINTMENT_TABLE_COLUMN_KEYS,
+  DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS,
+  MAX_APPOINTMENT_TABLE_COLUMN_WIDTH,
+  MIN_APPOINTMENT_TABLE_COLUMN_WIDTHS,
+} from "../utils/appointmentTableColumns";
 import {
   DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
   validateAccountRoleDataServerUrl,
@@ -49,6 +56,7 @@ const appointmentPasswords = new Map(demoAppointmentPasswords);
 let vault: VaultStatus = { initialized: true, unlocked: true, autoLockMinutes: 15 };
 let vaultPassword: string | null = null;
 const ACCOUNT_TABLE_WIDTHS_STORAGE_KEY = "timekeeper.demo.accountTableColumnWidths";
+const APPOINTMENT_TABLE_WIDTHS_STORAGE_KEY = "timekeeper.demo.appointmentTableColumnWidths";
 
 function accountTableColumnWidthsAreValid(widths: AccountTableColumnWidths): boolean {
   return ACCOUNT_TABLE_COLUMN_KEYS.every((key) => {
@@ -78,12 +86,41 @@ function storeAccountTableColumnWidths(widths: AccountTableColumnWidths): void {
   globalThis.localStorage?.setItem(ACCOUNT_TABLE_WIDTHS_STORAGE_KEY, JSON.stringify(widths));
 }
 
+function appointmentTableColumnWidthsAreValid(widths: AppointmentTableColumnWidths): boolean {
+  return APPOINTMENT_TABLE_COLUMN_KEYS.every((key) => {
+    const width = widths[key];
+    return (
+      Number.isInteger(width) &&
+      width >= MIN_APPOINTMENT_TABLE_COLUMN_WIDTHS[key] &&
+      width <= MAX_APPOINTMENT_TABLE_COLUMN_WIDTH
+    );
+  });
+}
+
+function loadStoredAppointmentTableColumnWidths(): AppointmentTableColumnWidths {
+  try {
+    const stored = globalThis.localStorage?.getItem(APPOINTMENT_TABLE_WIDTHS_STORAGE_KEY);
+    if (!stored) return { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS };
+    const widths = JSON.parse(stored) as AppointmentTableColumnWidths;
+    return appointmentTableColumnWidthsAreValid(widths)
+      ? widths
+      : { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS };
+  } catch {
+    return { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS };
+  }
+}
+
+function storeAppointmentTableColumnWidths(widths: AppointmentTableColumnWidths): void {
+  globalThis.localStorage?.setItem(APPOINTMENT_TABLE_WIDTHS_STORAGE_KEY, JSON.stringify(widths));
+}
+
 let settings: AppSettings = {
   defaultReminderMinutes: 30,
   autoLockMinutes: 15,
   backupRetention: 30,
   lastAutomaticBackupDate: format(new Date(), "yyyy-MM-dd"),
   accountTableColumnWidths: loadStoredAccountTableColumnWidths(),
+  appointmentTableColumnWidths: loadStoredAppointmentTableColumnWidths(),
   lastAccountUsageWeekStart: null,
   accountRoleDataServerUrl: DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
 };
@@ -558,6 +595,12 @@ export const mockApi: ApiClient = {
     await globalThis.navigator.clipboard.writeText(password);
     scheduleClipboardClear(password);
   },
+  async copyAppointmentAccountName(id) {
+    const accountName = getAppointmentOrThrow(id).account?.accountName.trim();
+    if (!accountName) throw new Error("该预约未使用账号");
+    if (!globalThis.navigator?.clipboard) throw new Error("当前环境无法访问剪贴板");
+    await globalThis.navigator.clipboard.writeText(accountName);
+  },
   async deleteAppointments(ids) {
     return deleteAppointmentsByIds(ids);
   },
@@ -921,6 +964,7 @@ export const mockApi: ApiClient = {
       throw new Error("未找到可恢复的演示备份，请先创建备份");
     }
     storeAccountTableColumnWidths(backupSnapshot.settings.accountTableColumnWidths);
+    storeAppointmentTableColumnWidths(backupSnapshot.settings.appointmentTableColumnWidths);
     appointments = structuredClone(backupSnapshot.appointments);
     accounts = structuredClone(backupSnapshot.accounts);
     passwords.clear();
@@ -940,12 +984,17 @@ export const mockApi: ApiClient = {
     if (!accountTableColumnWidthsAreValid(nextSettings.accountTableColumnWidths)) {
       throw new Error("账号表格列宽超出允许范围");
     }
+    if (!appointmentTableColumnWidthsAreValid(nextSettings.appointmentTableColumnWidths)) {
+      throw new Error("预约表格列宽超出允许范围");
+    }
     const serverUrlError = validateAccountRoleDataServerUrl(nextSettings.accountRoleDataServerUrl);
     if (serverUrlError) throw new Error(serverUrlError);
     storeAccountTableColumnWidths(nextSettings.accountTableColumnWidths);
+    storeAppointmentTableColumnWidths(nextSettings.appointmentTableColumnWidths);
     settings = {
       ...nextSettings,
       accountTableColumnWidths: { ...nextSettings.accountTableColumnWidths },
+      appointmentTableColumnWidths: { ...nextSettings.appointmentTableColumnWidths },
       accountRoleDataServerUrl: nextSettings.accountRoleDataServerUrl.trim(),
       lastAccountUsageWeekStart: settings.lastAccountUsageWeekStart,
     };
@@ -959,6 +1008,14 @@ export const mockApi: ApiClient = {
     settings.accountTableColumnWidths = structuredClone(widths);
     storeAccountTableColumnWidths(widths);
     return structuredClone(settings.accountTableColumnWidths);
+  },
+  async updateAppointmentTableColumnWidths(widths) {
+    if (!appointmentTableColumnWidthsAreValid(widths)) {
+      throw new Error("预约表格列宽超出允许范围");
+    }
+    settings.appointmentTableColumnWidths = structuredClone(widths);
+    storeAppointmentTableColumnWidths(widths);
+    return structuredClone(settings.appointmentTableColumnWidths);
   },
   async selectExcelFile() {
     return "C:\\Users\\14620\\Desktop\\account.xlsm";
