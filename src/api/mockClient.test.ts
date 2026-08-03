@@ -42,6 +42,7 @@ describe("browser mock API", () => {
   it("uses the same preview token then commit import flow without exposing passwords", async () => {
     const preview = await mockApi.previewExcelImport("C:\\demo\\account.xlsm", 2026);
     expect(preview.previewToken).toBeTruthy();
+    expect(preview.yyChannelCount).toBeGreaterThan(0);
     expect(preview).not.toHaveProperty("password");
     expect(preview).not.toHaveProperty("passwords");
 

@@ -113,7 +113,12 @@ rows writes their four account fields directly to the appointment and stores eac
 row password under that appointment's Stronghold key; it never resolves an
 account-profile relationship. Missing row passwords are accepted with a warning.
 Database writes and all created secrets participate in the same compensation
-ledger.
+ledger. The legacy `account` sheet is optional when appointments are included;
+an accounts-only commit rejects a workbook without that sheet. Record and account
+notes are discovered from every header beginning with `备注`. A single unique
+ASCII-digit note is consumed as a YY channel and written into the existing
+appointment voice columns; conflicting digit notes remain ordinary notes with a
+preview warning.
 
 Full-backup restore validates the exact current migration history, table set,
 columns, indexes, constraints, row values, settings, and Stronghold pair before

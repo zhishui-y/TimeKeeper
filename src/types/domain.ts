@@ -180,6 +180,7 @@ export interface ExcelImportPreview {
   profileCount: number;
   unmatchedProfileCount: number;
   crossMidnightCount: number;
+  yyChannelCount: number;
   passwordConflictCount: number;
   skippedCount: number;
   warningCount: number;

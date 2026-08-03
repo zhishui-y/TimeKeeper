@@ -6,7 +6,9 @@ use std::{
 };
 
 use calamine::{Data, DataType, Reader, open_workbook_auto};
-use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
+use chrono::{
+    DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{Sqlite, Transaction};
@@ -18,6 +20,7 @@ use crate::{
     appointments::{insert_imported_appointment, restore_pending_notifications},
     backup::BackupState,
     db::Database,
+    models::VoicePlatform,
     notifications::NotificationState,
     vault::{VaultState, run_blocking_vault_operation},
 };
@@ -47,6 +50,8 @@ pub(crate) struct LegacyAppointment {
     pub payment_method: Option<String>,
     pub amount_minor: Option<i64>,
     pub notes: Option<String>,
+    pub voice_platform: Option<VoicePlatform>,
+    pub voice_channel: Option<String>,
     pub import_fingerprint: String,
 }
 
@@ -75,6 +80,8 @@ pub(crate) struct ParsedLegacyData {
     pub profiles: Vec<LegacyAccountProfile>,
     pub unmatched_profiles: Vec<LegacyAccountProfile>,
     pub warnings: Vec<String>,
+    pub account_sheet_present: bool,
+    pub yy_channel_count: usize,
     pub cross_midnight_count: usize,
     pub password_conflict_count: usize,
     pub skipped_count: usize,
@@ -118,6 +125,7 @@ pub struct ExcelImportPreview {
     profile_count: usize,
     unmatched_profile_count: usize,
     cross_midnight_count: usize,
+    yy_channel_count: usize,
     password_conflict_count: usize,
     skipped_count: usize,
     warning_count: usize,
@@ -171,10 +179,11 @@ pub async fn preview_excel_import(
         profile_count: parsed.profiles.len(),
         unmatched_profile_count: parsed.unmatched_profiles.len(),
         cross_midnight_count: parsed.cross_midnight_count,
+        yy_channel_count: parsed.yy_channel_count,
         password_conflict_count: parsed.password_conflict_count,
         skipped_count: parsed.skipped_count,
         warning_count: parsed.warnings.len(),
-        warnings: parsed.warnings.iter().take(50).cloned().collect(),
+        warnings: parsed.warnings.clone(),
         preview_token: token.clone(),
     };
 
@@ -253,6 +262,8 @@ async fn commit_excel_import_with_vault(
     parsed: ParsedLegacyData,
     selection: ExcelImportSelection,
 ) -> Result<ExcelImportResult, String> {
+    validate_import_selection_for_workbook(selection, &parsed)?;
+
     let mut transaction = database
         .pool()
         .begin()
@@ -357,6 +368,16 @@ async fn commit_excel_import_with_vault(
         skipped_profile_duplicates,
         warnings: parsed.warnings,
     })
+}
+
+fn validate_import_selection_for_workbook(
+    selection: ExcelImportSelection,
+    parsed: &ParsedLegacyData,
+) -> Result<(), String> {
+    if selection.accounts && !selection.appointments && !parsed.account_sheet_present {
+        return Err("Excel 缺少“account”工作表，无法仅导入账号档案".into());
+    }
+    Ok(())
 }
 
 async fn set_imported_account_secret(
@@ -537,18 +558,33 @@ pub(crate) fn parse_legacy_workbook(
     let record_range = workbook
         .worksheet_range("记录")
         .map_err(|error| format!("无法读取“记录”工作表：{error}"))?;
-    let account_range = workbook
-        .worksheet_range("account")
-        .map_err(|error| format!("无法读取“account”工作表：{error}"))?;
+    let account_sheet_present = workbook.sheet_names().iter().any(|name| name == "account");
+    let account_range = if account_sheet_present {
+        Some(
+            workbook
+                .worksheet_range("account")
+                .map_err(|error| format!("无法读取“account”工作表：{error}"))?,
+        )
+    } else {
+        None
+    };
 
     let mut warnings = Vec::new();
+    if !account_sheet_present {
+        warnings.push("未找到“account”工作表，将只导入预约记录".to_string());
+    }
     let mut skipped_count = 0;
     let mut cross_midnight_count = 0;
+    let mut yy_channel_count = 0;
     let mut appointments = Vec::new();
+    let record_note_columns = note_column_indices(record_range.rows().next());
 
     for (index, row) in record_range.rows().skip(1).enumerate() {
         let excel_row = index + 2;
         if row.iter().all(DataType::is_empty) {
+            continue;
+        }
+        if is_separator_row(row) {
             continue;
         }
 
@@ -578,10 +614,18 @@ pub(crate) fn parse_legacy_workbook(
         }
 
         let time_text = text_at(row, 11);
+        let (time_range_text, embedded_time_date) = split_legacy_time_text(&time_text, base_year);
+        if let Some(embedded_date) = embedded_time_date
+            && embedded_date != source_service_date
+        {
+            warnings.push(format!(
+                "记录第 {excel_row} 行 A列日期 {source_service_date} 与时间列日期 {embedded_date} 不一致，按A列日期导入"
+            ));
+        }
         let (starts_at, ends_at, crossed) = if time_text.is_empty() {
             (None, None, false)
         } else {
-            match parse_time_range(source_service_date, &time_text) {
+            match parse_time_range(source_service_date, time_range_text) {
                 Ok(result) => result,
                 Err(()) => {
                     warnings.push(format!(
@@ -600,7 +644,7 @@ pub(crate) fn parse_legacy_workbook(
             .unwrap_or(source_service_date);
 
         let raw_status = text_at(row, 10);
-        let (service_status, settlement_status) = map_status(&raw_status);
+        let (service_status, mut settlement_status) = map_status(&raw_status);
         let payment_method = optional_text(text_at(row, 7)).filter(|value| value != "-");
         let account_name = optional_text(text_at(row, 8));
         let account_password = optional_text(text_at(row, 9));
@@ -611,8 +655,23 @@ pub(crate) fn parse_legacy_workbook(
         ) {
             warnings.push(warning);
         }
-        let amount_minor = money_minor(row.get(12));
-        let notes = join_notes([text_at(row, 13), text_at(row, 14)]);
+        let (amount_minor, negative_amount_note) =
+            normalize_import_amount(money_minor(row.get(12)));
+        let mut note_values = text_values_at(row, &record_note_columns);
+        if let Some(note) = negative_amount_note {
+            settlement_status = "unsettled";
+            warnings.push(format!(
+                "记录第 {excel_row} 行金额为负数，不符合预约账单约束；原值已保留在备注，并按待结算导入"
+            ));
+            note_values.push(note);
+        }
+        let (notes, voice_platform, voice_channel, yy_warning) = extract_yy_channel(note_values);
+        if let Some(warning) = yy_warning {
+            warnings.push(format!("记录第 {excel_row} 行{warning}"));
+        }
+        if voice_channel.is_some() {
+            yy_channel_count += 1;
+        }
 
         appointments.push(LegacyAppointment {
             service_date,
@@ -631,6 +690,8 @@ pub(crate) fn parse_legacy_workbook(
             payment_method,
             amount_minor,
             notes,
+            voice_platform,
+            voice_channel,
             import_fingerprint: fingerprint(&[
                 "记录",
                 &source_service_date.to_string(),
@@ -644,55 +705,60 @@ pub(crate) fn parse_legacy_workbook(
     }
 
     let mut profiles = Vec::new();
-    for (index, row) in account_range.rows().skip(1).enumerate() {
-        let excel_row = index + 2;
-        if row.iter().all(DataType::is_empty) {
-            continue;
+    if let Some(account_range) = account_range.as_ref() {
+        let header = account_range.rows().next();
+        let account_note_columns = note_column_indices(header);
+        let score_updated_at_column = exact_header_column(header, "更新日期");
+        for (index, row) in account_range.rows().skip(1).enumerate() {
+            let excel_row = index + 2;
+            if row.iter().all(DataType::is_empty) {
+                continue;
+            }
+
+            let account_name = text_at(row, 5);
+            let password = text_at(row, 6);
+            if account_name.is_empty() || password.is_empty() {
+                skipped_count += 1;
+                warnings.push(format!("account 第 {excel_row} 行缺少账号或密码，已跳过"));
+                continue;
+            }
+
+            let contact_name = optional_text(text_at(row, 0));
+            let server = optional_text(text_at(row, 1));
+            let character_name = optional_text(text_at(row, 2));
+            let specialization = optional_text(text_at(row, 3));
+            let gear_score = optional_text(text_at(row, 4));
+            let needs_review = profile_metadata_needs_review(
+                &contact_name,
+                &server,
+                &character_name,
+                &specialization,
+                &gear_score,
+            );
+
+            profiles.push(LegacyAccountProfile {
+                contact_name,
+                server,
+                character_name,
+                specialization,
+                gear_score,
+                account_name: account_name.clone(),
+                password,
+                current_score: integer_value(row.get(7)),
+                highest_score: integer_value(row.get(8)),
+                score_updated_at: score_updated_at_column
+                    .and_then(|column| row.get(column))
+                    .and_then(|cell| parse_date_cell(cell, base_year)),
+                notes: join_note_values(text_values_at(row, &account_note_columns)),
+                needs_review,
+                import_fingerprint: fingerprint(&[
+                    "account",
+                    &normalize_account(&account_name),
+                    &text_at(row, 1),
+                    &text_at(row, 2),
+                ]),
+            });
         }
-
-        let account_name = text_at(row, 5);
-        let password = text_at(row, 6);
-        if account_name.is_empty() || password.is_empty() {
-            skipped_count += 1;
-            warnings.push(format!("account 第 {excel_row} 行缺少账号或密码，已跳过"));
-            continue;
-        }
-
-        let contact_name = optional_text(text_at(row, 0));
-        let server = optional_text(text_at(row, 1));
-        let character_name = optional_text(text_at(row, 2));
-        let specialization = optional_text(text_at(row, 3));
-        let gear_score = optional_text(text_at(row, 4));
-        let needs_review = profile_metadata_needs_review(
-            &contact_name,
-            &server,
-            &character_name,
-            &specialization,
-            &gear_score,
-        );
-
-        profiles.push(LegacyAccountProfile {
-            contact_name,
-            server,
-            character_name,
-            specialization,
-            gear_score,
-            account_name: account_name.clone(),
-            password,
-            current_score: integer_value(row.get(7)),
-            highest_score: integer_value(row.get(8)),
-            score_updated_at: row
-                .get(10)
-                .and_then(|cell| parse_date_cell(cell, base_year)),
-            notes: join_notes([text_at(row, 12), text_at(row, 13)]),
-            needs_review,
-            import_fingerprint: fingerprint(&[
-                "account",
-                &normalize_account(&account_name),
-                &text_at(row, 1),
-                &text_at(row, 2),
-            ]),
-        });
     }
 
     let password_conflict_count = count_password_conflicts(&profiles, &appointments);
@@ -709,6 +775,8 @@ pub(crate) fn parse_legacy_workbook(
         profiles,
         unmatched_profiles: Vec::new(),
         warnings,
+        account_sheet_present,
+        yy_channel_count,
         cross_midnight_count,
         password_conflict_count,
         skipped_count,
@@ -721,6 +789,46 @@ fn text_at(row: &[Data], index: usize) -> String {
         .unwrap_or_default()
         .trim()
         .to_string()
+}
+
+fn text_values_at(row: &[Data], indices: &[usize]) -> Vec<String> {
+    indices
+        .iter()
+        .map(|index| text_at(row, *index))
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn note_column_indices(header: Option<&[Data]>) -> Vec<usize> {
+    header
+        .into_iter()
+        .flat_map(|row| row.iter().enumerate())
+        .filter_map(|(index, cell)| {
+            cell.as_string()
+                .is_some_and(|value| value.trim().starts_with("备注"))
+                .then_some(index)
+        })
+        .collect()
+}
+
+fn exact_header_column(header: Option<&[Data]>, expected: &str) -> Option<usize> {
+    header?.iter().position(|cell| {
+        cell.as_string()
+            .is_some_and(|value| value.trim() == expected)
+    })
+}
+
+fn is_separator_row(row: &[Data]) -> bool {
+    let values = row
+        .iter()
+        .filter_map(DataType::as_string)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    !values.is_empty()
+        && values
+            .iter()
+            .all(|value| value.chars().all(|character| character == '-'))
 }
 
 fn optional_text(value: String) -> Option<String> {
@@ -793,13 +901,54 @@ fn normalize_account(value: &str) -> String {
     value.trim().to_lowercase()
 }
 
-fn join_notes<const N: usize>(values: [String; N]) -> Option<String> {
+fn join_note_values(values: Vec<String>) -> Option<String> {
     let joined = values
         .into_iter()
         .filter(|value| !value.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n");
     optional_text(joined)
+}
+
+fn extract_yy_channel(
+    values: Vec<String>,
+) -> (
+    Option<String>,
+    Option<VoicePlatform>,
+    Option<String>,
+    Option<String>,
+) {
+    let values = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    let channels = values
+        .iter()
+        .filter(|value| value.chars().all(|character| character.is_ascii_digit()))
+        .cloned()
+        .collect::<HashSet<_>>();
+
+    if channels.len() == 1 {
+        let channel = channels.into_iter().next().expect("one YY channel");
+        let notes = join_note_values(
+            values
+                .into_iter()
+                .filter(|value| value != &channel)
+                .collect(),
+        );
+        return (notes, Some(VoicePlatform::Yy), Some(channel), None);
+    }
+    if channels.len() > 1 {
+        return (
+            join_note_values(values),
+            None,
+            None,
+            Some("存在多个不同的纯数字备注，未自动设置 YY 频道".into()),
+        );
+    }
+
+    (join_note_values(values), None, None, None)
 }
 
 fn integer_value(cell: Option<&Data>) -> Option<i64> {
@@ -822,8 +971,33 @@ fn money_minor(cell: Option<&Data>) -> Option<i64> {
     Some((value * 100.0).round() as i64)
 }
 
+fn normalize_import_amount(amount_minor: Option<i64>) -> (Option<i64>, Option<String>) {
+    match amount_minor {
+        Some(value) if value < 0 => {
+            let absolute = i128::from(value).abs();
+            (
+                None,
+                Some(format!(
+                    "历史负数金额：-{}.{:02} 元（未计入账单）",
+                    absolute / 100,
+                    absolute % 100
+                )),
+            )
+        }
+        value => (value, None),
+    }
+}
+
 fn parse_date_cell(cell: &Data, base_year: i32) -> Option<NaiveDate> {
+    if let Data::Float(value) = cell
+        && let Some(date) = parse_numeric_month_day(*value, base_year)
+    {
+        return Some(date);
+    }
     if let Some(date) = cell.as_date() {
+        if matches!(cell, Data::Float(_) | Data::Int(_)) && date.year() < 2000 {
+            return None;
+        }
         return Some(date);
     }
     let value = cell.as_string()?.trim().to_string();
@@ -832,8 +1006,36 @@ fn parse_date_cell(cell: &Data, base_year: i32) -> Option<NaiveDate> {
             return Some(date);
         }
     }
-    let (month, day) = value.split_once('.')?;
+    parse_month_day_text(&value, base_year)
+}
+
+fn parse_numeric_month_day(value: f64, base_year: i32) -> Option<NaiveDate> {
+    if !value.is_finite() || value.fract() == 0.0 {
+        return None;
+    }
+    let value = format!("{value:.10}")
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string();
+    parse_month_day_text(&value, base_year)
+}
+
+fn parse_month_day_text(value: &str, base_year: i32) -> Option<NaiveDate> {
+    let (month, day) = value.trim().split_once('.')?;
     NaiveDate::from_ymd_opt(base_year, month.parse().ok()?, day.parse().ok()?)
+}
+
+fn split_legacy_time_text(value: &str, base_year: i32) -> (&str, Option<NaiveDate>) {
+    let Some((date_text, time_text)) = value.split_once('|') else {
+        return (value, None);
+    };
+    if time_text.contains('|') {
+        return (value, None);
+    }
+    match parse_month_day_text(date_text, base_year) {
+        Some(date) => (time_text.trim(), Some(date)),
+        None => (value, None),
+    }
 }
 
 fn parse_time_range(service_date: NaiveDate, value: &str) -> Result<ParsedTimeRange, ()> {
@@ -856,7 +1058,7 @@ fn parse_clock(value: &str) -> Option<i64> {
     let hour: i64 = hour.parse().ok()?;
     let minute: i64 = minute.parse().ok()?;
     // The legacy workbook uses values such as 24:35 for 00:35 on the next day.
-    if minute >= 60 || hour > 24 {
+    if !(0..60).contains(&minute) || !(0..=24).contains(&hour) {
         return None;
     }
     Some(hour * 60 + minute)
@@ -898,6 +1100,7 @@ fn fingerprint(parts: &[&str]) -> String {
 mod tests {
     use super::*;
     use crate::vault::VaultError;
+    use calamine::{ExcelDateTime, ExcelDateTimeType};
     use sqlx::Row;
     use std::path::PathBuf;
 
@@ -941,6 +1144,8 @@ mod tests {
             payment_method: None,
             amount_minor: None,
             notes: None,
+            voice_platform: None,
+            voice_channel: None,
             import_fingerprint: fingerprint.into(),
         }
     }
@@ -953,6 +1158,8 @@ mod tests {
             profiles: Vec::new(),
             unmatched_profiles: Vec::new(),
             warnings: Vec::new(),
+            account_sheet_present: false,
+            yy_channel_count: 0,
             cross_midnight_count: 0,
             password_conflict_count: 0,
             skipped_count: 0,
@@ -1295,9 +1502,37 @@ mod tests {
 
     #[test]
     fn parses_month_day_with_base_year() {
+        let legacy_numeric_date = "3.14".parse::<f64>().unwrap();
         assert_eq!(
             parse_date_cell(&Data::String("7.17".to_string()), 2026),
             NaiveDate::from_ymd_opt(2026, 7, 17)
+        );
+        assert_eq!(
+            parse_date_cell(&Data::Float(8.21), 2023),
+            NaiveDate::from_ymd_opt(2023, 8, 21)
+        );
+        assert_eq!(
+            parse_date_cell(&Data::Float(legacy_numeric_date), 2026),
+            NaiveDate::from_ymd_opt(2026, 3, 14)
+        );
+        assert_ne!(
+            parse_date_cell(&Data::Float(legacy_numeric_date), 2026),
+            NaiveDate::from_ymd_opt(1900, 1, 3)
+        );
+        assert_eq!(parse_date_cell(&Data::Float(31.5), 2026), None);
+        assert_eq!(parse_date_cell(&Data::Int(3), 2026), None);
+    }
+
+    #[test]
+    fn keeps_real_excel_serial_dates() {
+        let cell = Data::DateTime(ExcelDateTime::new(
+            46_306.0,
+            ExcelDateTimeType::DateTime,
+            false,
+        ));
+        assert_eq!(
+            parse_date_cell(&cell, 2026),
+            NaiveDate::from_ymd_opt(2026, 10, 11)
         );
     }
 
@@ -1311,10 +1546,122 @@ mod tests {
     }
 
     #[test]
+    fn extracts_composite_time_but_keeps_source_date_authoritative() {
+        let source_date = NaiveDate::from_ymd_opt(2021, 8, 2).unwrap();
+        let (time_text, embedded_date) = split_legacy_time_text("8.3|23:00-01:00", 2021);
+        assert_eq!(embedded_date, NaiveDate::from_ymd_opt(2021, 8, 3));
+        let (start, end, crossed) = parse_time_range(source_date, time_text).unwrap();
+        assert_eq!(start.unwrap().date_naive(), source_date);
+        assert_eq!(end.unwrap().date_naive(), source_date + Duration::days(1));
+        assert!(crossed);
+        assert!(parse_time_range(source_date, "20:00-21:00 23:00-24:00").is_err());
+        assert!(parse_time_range(source_date, "晚上安排").is_err());
+        assert!(parse_clock("-1:00").is_none());
+    }
+
+    #[test]
+    fn discovers_legacy_note_columns_and_exact_update_date_header() {
+        let mut old_header = vec![Data::Empty; 12];
+        old_header[10] = Data::String("本周情况".into());
+        old_header[11] = Data::String("备注".into());
+        assert_eq!(note_column_indices(Some(&old_header)), vec![11]);
+        assert_eq!(exact_header_column(Some(&old_header), "更新日期"), None);
+
+        let mut new_header = vec![Data::Empty; 14];
+        new_header[10] = Data::String("更新日期".into());
+        new_header[12] = Data::String("备注".into());
+        new_header[13] = Data::String("备注2".into());
+        assert_eq!(note_column_indices(Some(&new_header)), vec![12, 13]);
+        assert_eq!(exact_header_column(Some(&new_header), "更新日期"), Some(10));
+    }
+
+    #[test]
+    fn extracts_unique_ascii_digit_notes_as_yy_channels() {
+        let (notes, platform, channel, warning) =
+            extract_yy_channel(vec!["\u{2003}123456\u{00a0}".into(), "普通备注".into()]);
+        assert_eq!(platform, Some(VoicePlatform::Yy));
+        assert_eq!(channel.as_deref(), Some("123456"));
+        assert_eq!(notes.as_deref(), Some("普通备注"));
+        assert!(warning.is_none());
+
+        let (notes, platform, channel, warning) =
+            extract_yy_channel(vec!["88".into(), "88".into()]);
+        assert_eq!(
+            (platform, channel.as_deref()),
+            (Some(VoicePlatform::Yy), Some("88"))
+        );
+        assert_eq!(notes, None);
+        assert!(warning.is_none());
+
+        let (notes, platform, channel, warning) =
+            extract_yy_channel(vec!["88".into(), "99".into()]);
+        assert_eq!((platform, channel), (None, None));
+        assert_eq!(notes.as_deref(), Some("88\n99"));
+        assert!(warning.is_some());
+    }
+
+    #[test]
+    fn rejects_non_digit_channel_notes_and_supports_numeric_cells() {
+        for value in ["QQ语音", "2300+", "12-34", "12 34"] {
+            let (_, platform, channel, _) = extract_yy_channel(vec![value.into()]);
+            assert_eq!((platform, channel), (None, None));
+        }
+        let row = vec![Data::Int(123456)];
+        let (_, platform, channel, _) = extract_yy_channel(vec![text_at(&row, 0)]);
+        assert_eq!(platform, Some(VoicePlatform::Yy));
+        assert_eq!(channel.as_deref(), Some("123456"));
+    }
+
+    #[test]
+    fn ignores_all_dash_separator_rows() {
+        assert!(is_separator_row(&[
+            Data::String("------".into()),
+            Data::String("-".into()),
+        ]));
+        assert!(!is_separator_row(&[
+            Data::String("-".into()),
+            Data::String("业务".into()),
+        ]));
+    }
+
+    #[test]
+    fn accounts_only_selection_rejects_missing_account_sheet() {
+        let parsed = parsed_appointments(Vec::new());
+        let error = validate_import_selection_for_workbook(
+            ExcelImportSelection {
+                appointments: false,
+                accounts: true,
+            },
+            &parsed,
+        )
+        .unwrap_err();
+        assert!(error.contains("缺少“account”工作表"));
+        assert!(
+            validate_import_selection_for_workbook(
+                ExcelImportSelection {
+                    appointments: true,
+                    accounts: true,
+                },
+                &parsed,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn keeps_service_and_settlement_status_separate() {
         assert_eq!(map_status("待结"), ("completed", "unsettled"));
         assert_eq!(map_status("完成"), ("completed", "settled"));
         assert_eq!(map_status("周五晚上"), ("scheduled", "unsettled"));
+    }
+
+    #[test]
+    fn preserves_negative_legacy_amount_as_note_without_persisting_negative_money() {
+        assert_eq!(normalize_import_amount(Some(12_345)), (Some(12_345), None));
+        assert_eq!(
+            normalize_import_amount(Some(-3_500)),
+            (None, Some("历史负数金额：-35.00 元（未计入账单）".into()))
+        );
     }
 
     #[test]
@@ -1498,6 +1845,8 @@ mod tests {
             payment_method: None,
             amount_minor: None,
             notes: None,
+            voice_platform: None,
+            voice_channel: None,
             import_fingerprint: "appointment-fingerprint".into(),
         };
 
@@ -1509,11 +1858,18 @@ mod tests {
     fn parses_external_workbook_from_environment() {
         let path = std::env::var("TIMEKEEPER_LEGACY_WORKBOOK")
             .expect("TIMEKEEPER_LEGACY_WORKBOOK must point to a workbook");
-        let parsed = parse_legacy_workbook(Path::new(&path), 2026).expect("workbook should parse");
+        let base_year = std::env::var("TIMEKEEPER_LEGACY_BASE_YEAR")
+            .expect("TIMEKEEPER_LEGACY_BASE_YEAR must match the workbook")
+            .parse()
+            .expect("TIMEKEEPER_LEGACY_BASE_YEAR must be a year");
+        let parsed =
+            parse_legacy_workbook(Path::new(&path), base_year).expect("workbook should parse");
         println!(
-            "appointments={} profiles={} unmatched={} cross_midnight={} password_conflicts={} skipped={}",
+            "appointments={} profiles={} yy_channels={} account_sheet={} unmatched={} cross_midnight={} password_conflicts={} skipped={}",
             parsed.appointments.len(),
             parsed.profiles.len(),
+            parsed.yy_channel_count,
+            parsed.account_sheet_present,
             parsed.unmatched_profiles.len(),
             parsed.cross_midnight_count,
             parsed.password_conflict_count,
@@ -1523,6 +1879,128 @@ mod tests {
             println!("warning: {warning}");
         }
         assert!(!parsed.appointments.is_empty());
-        assert!(!parsed.profiles.is_empty());
+        assert!(
+            parsed
+                .appointments
+                .iter()
+                .all(|appointment| appointment.service_date.year() >= 2000)
+        );
+        if matches!(base_year, 2023 | 2024) {
+            assert!(
+                parsed
+                    .profiles
+                    .iter()
+                    .all(|profile| profile.score_updated_at.is_none())
+            );
+        }
+        if matches!(base_year, 2023..=2025) {
+            assert!(
+                parsed
+                    .profiles
+                    .iter()
+                    .any(|profile| profile.notes.is_some())
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "set TIMEKEEPER_LEGACY_WORKBOOK and TIMEKEEPER_LEGACY_BASE_YEAR for isolated commit acceptance"]
+    fn commits_external_workbook_to_temporary_database_and_vault() {
+        tauri::async_runtime::block_on(async {
+            let path = std::env::var("TIMEKEEPER_LEGACY_WORKBOOK")
+                .expect("TIMEKEEPER_LEGACY_WORKBOOK must point to a workbook");
+            let base_year = std::env::var("TIMEKEEPER_LEGACY_BASE_YEAR")
+                .expect("TIMEKEEPER_LEGACY_BASE_YEAR must match the workbook")
+                .parse()
+                .expect("TIMEKEEPER_LEGACY_BASE_YEAR must be a year");
+            let mut parsed = parse_legacy_workbook(Path::new(&path), base_year)
+                .expect("external workbook should parse");
+            let appointment_count = parsed.appointments.len();
+            let profile_count = parsed.profiles.len();
+            let yy_channel_count = parsed.yy_channel_count;
+            let mut password_probe = None;
+            for appointment in &mut parsed.appointments {
+                if password_probe.is_none()
+                    && let Some(password) = appointment.account_password.as_ref()
+                {
+                    password_probe =
+                        Some((appointment.import_fingerprint.clone(), password.clone()));
+                } else {
+                    // One real appointment secret per workbook is enough for this external smoke
+                    // test; focused unit tests cover multi-secret compensation without hundreds
+                    // of repeated Stronghold snapshot writes in debug builds.
+                    appointment.account_password = None;
+                }
+            }
+            let profile_password_probe = parsed
+                .profiles
+                .first()
+                .map(|profile| (profile.import_fingerprint.clone(), profile.password.clone()));
+
+            let data_dir = TestDataDir::new(&format!("external-{base_year}"));
+            let vault = VaultState::new(data_dir.path()).expect("create temporary vault");
+            vault
+                .initialize("temporary external import password".into())
+                .expect("initialize temporary vault");
+            let database = Database::initialize(data_dir.path().join("timekeeper.db"))
+                .await
+                .expect("initialize temporary database");
+            let selection = ExcelImportSelection {
+                appointments: true,
+                accounts: true,
+            };
+
+            let first =
+                commit_excel_import_with_vault(&database, &vault, parsed.clone(), selection)
+                    .await
+                    .expect("first external import should commit");
+            assert_eq!(first.imported_appointments, appointment_count);
+            assert_eq!(first.imported_profiles, profile_count);
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM appointments WHERE voice_platform = 'yy'"
+                )
+                .fetch_one(database.pool())
+                .await
+                .unwrap() as usize,
+                yy_channel_count
+            );
+
+            if let Some((fingerprint, password)) = password_probe {
+                let appointment_id = sqlx::query_scalar::<_, String>(
+                    "SELECT id FROM appointments WHERE import_fingerprint = ?",
+                )
+                .bind(fingerprint)
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+                assert_eq!(
+                    vault.get_appointment_secret(&appointment_id).unwrap(),
+                    password
+                );
+            }
+            if let Some((fingerprint, password)) = profile_password_probe {
+                let profile_id = sqlx::query_scalar::<_, String>(
+                    "SELECT id FROM account_profiles WHERE import_fingerprint = ?",
+                )
+                .bind(fingerprint)
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+                assert_eq!(vault.get_secret(&profile_id).unwrap(), password);
+            }
+
+            let second = commit_excel_import_with_vault(&database, &vault, parsed, selection)
+                .await
+                .expect("repeat import should skip duplicates");
+            assert_eq!(second.imported_appointments, 0);
+            assert_eq!(second.imported_profiles, 0);
+            assert_eq!(second.skipped_appointment_duplicates, appointment_count);
+            assert_eq!(second.skipped_profile_duplicates, profile_count);
+
+            database.pool().close().await;
+            drop(database);
+            drop(vault);
+        });
     }
 }

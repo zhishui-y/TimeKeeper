@@ -31,6 +31,7 @@ const preview: ExcelImportPreview = {
   profileCount: 23,
   unmatchedProfileCount: 16,
   crossMidnightCount: 63,
+  yyChannelCount: 64,
   passwordConflictCount: 1,
   skippedCount: 0,
   warningCount: 0,
@@ -70,6 +71,7 @@ describe("SettingsWorkspace operation progress", () => {
 
     expect(wrapper.find('[role="status"]').exists()).toBe(false);
     expect(wrapper.text()).toContain("408");
+    expect(wrapper.text()).toContain("64YY频道");
     expect(wrapper.text()).toContain("预览结果");
 
     const replacementPreview = deferred<ExcelImportPreview>();
@@ -161,6 +163,28 @@ describe("SettingsWorkspace operation progress", () => {
     expect(wrapper.text()).toContain("去重跳过 8 条预约、0 个账号");
     expect(ui.dataRevision).toBe(1);
     expect(ui.accountRevision).toBe(0);
+    wrapper.unmount();
+  });
+
+  it("marks YY channels as excluded when appointment import is disabled", async () => {
+    vi.spyOn(mockApi, "selectExcelFile").mockResolvedValue(preview.sourcePath);
+    vi.spyOn(mockApi, "previewExcelImport").mockResolvedValue(preview);
+    const wrapper = mount(SettingsWorkspace, {
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+
+    await wrapper.get('input[aria-label="导入预约记录"]').setValue(false);
+    await buttonWithText(wrapper, "选择文件").trigger("click");
+    await flushPromises();
+    await buttonWithText(wrapper, "生成预览").trigger("click");
+    await flushPromises();
+
+    const yyStat = wrapper
+      .findAll(".preview-stats > span")
+      .find((item) => item.text().includes("YY频道"));
+    expect(yyStat?.text()).toContain("64YY频道（不导入）");
+    expect(yyStat?.classes()).toContain("is-excluded");
     wrapper.unmount();
   });
 

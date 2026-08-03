@@ -2069,7 +2069,7 @@ pub(crate) async fn insert_imported_appointment(
             rate_note, payment_method, amount_minor, reminder_minutes, notes,
             import_fingerprint, created_at, updated_at
         ) VALUES (
-            ?, ?, ?, ?, ?, ?, 'business', ?, ?, ?, ?, ?, ?, ?, NULL, NULL,
+            ?, ?, ?, ?, ?, ?, 'business', ?, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, NULL, ?, ?, ?, ?
         )",
     )
@@ -2088,6 +2088,8 @@ pub(crate) async fn insert_imported_appointment(
     .bind(i64::from(
         account_name.is_some() && appointment.account_password.is_some(),
     ))
+    .bind(appointment.voice_platform.map(VoicePlatform::as_str))
+    .bind(appointment.voice_channel.as_deref())
     .bind(appointment.rate_note.as_deref())
     .bind(appointment.payment_method.as_deref())
     .bind(appointment.amount_minor)
@@ -2892,6 +2894,8 @@ mod tests {
                 payment_method: Some("微信".into()),
                 amount_minor: Some(10_000),
                 notes: None,
+                voice_platform: None,
+                voice_channel: None,
                 import_fingerprint: "appointment-fingerprint".into(),
             };
             let mut transaction = database.pool().begin().await.unwrap();
@@ -2929,6 +2933,8 @@ mod tests {
                 payment_method: None,
                 amount_minor: None,
                 notes: None,
+                voice_platform: Some(VoicePlatform::Yy),
+                voice_channel: Some("123456".into()),
                 import_fingerprint: "embedded-account-import".into(),
             };
             let mut transaction = database.pool().begin().await.unwrap();
@@ -2950,6 +2956,8 @@ mod tests {
                     password_available: true,
                 })
             );
+            assert_eq!(stored.voice_platform, Some(VoicePlatform::Yy));
+            assert_eq!(stored.voice_channel.as_deref(), Some("123456"));
             let matched = list_appointments_impl(
                 &database,
                 AppointmentFilters {

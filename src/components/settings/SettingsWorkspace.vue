@@ -318,6 +318,10 @@ onMounted(() => {
                 ><strong>{{ importPreview.crossMidnightCount }}</strong
                 >跨夜{{ importSelection.appointments ? "" : "（不导入）" }}</span
               >
+              <span :class="{ 'is-excluded': !importSelection.appointments }"
+                ><strong>{{ importPreview.yyChannelCount }}</strong
+                >YY频道{{ importSelection.appointments ? "" : "（不导入）" }}</span
+              >
               <span :class="{ 'is-excluded': !importSelection.accounts }"
                 ><strong>{{ importPreview.passwordConflictCount }}</strong
                 >密码冲突{{ importSelection.accounts ? "" : "（不处理）" }}</span

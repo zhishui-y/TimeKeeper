@@ -174,12 +174,18 @@ application remain available when idle auto-lock is disabled.
 Excel preview tokens are in-memory, expire after 30 minutes, and contain parsed
 secret values only on the Rust side. `selection.appointments` and `selection.accounts`
 independently control which data is committed, and at least one must be selected.
+`ExcelImportPreview.yyChannelCount` reports appointment rows whose unique pure-ASCII-digit note was
+recognized as a YY channel. The `记录` sheet remains required. A missing `account` sheet is a preview
+warning and permits appointment import, but an accounts-only commit fails explicitly.
 Each appointment row writes its four account fields directly into the appointment
 and its password to an appointment-specific Stronghold entry; it does not match or
 persist an account-profile relationship. A row with an account but no password is
 imported with `passwordAvailable=false` and a warning. Appointments and account
 profiles use separate stable row fingerprints; repeated rows are skipped
 independently and reported by data type.
+Legacy negative amounts cannot enter the non-negative appointment billing field. Their original
+value is retained in appointment notes, the billing amount is left empty, settlement becomes
+unsettled, and preview returns a row warning instead of aborting the whole transaction.
 
 `get_revenue_summary` requires both dates for a bounded report. Passing both `from` and `to` as
 empty strings resolves the range from the earliest non-cancelled, positively settled business

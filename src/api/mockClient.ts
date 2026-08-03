@@ -942,6 +942,7 @@ export const mockApi: ApiClient = {
       profileCount: 22,
       unmatchedProfileCount: 0,
       crossMidnightCount: 50,
+      yyChannelCount: 64,
       passwordConflictCount: 1,
       skippedCount: 0,
       warningCount: 2,
