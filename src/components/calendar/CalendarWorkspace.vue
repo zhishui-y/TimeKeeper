@@ -89,9 +89,6 @@ onBeforeUnmount(() => {
           冲突只提醒，不阻止保存
         </span>
       </div>
-      <button class="button button--compact" type="button" @click="ui.openCreateAppointment()">
-        新建预约
-      </button>
     </div>
     <div v-if="loading" class="loading-line" />
     <div v-if="error" class="error-banner">{{ error }}</div>

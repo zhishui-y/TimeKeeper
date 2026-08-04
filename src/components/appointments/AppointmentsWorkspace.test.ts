@@ -2,7 +2,8 @@
 
 import { createPinia } from "pinia";
 import { flushPromises, mount } from "@vue/test-utils";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createMemoryHistory, createRouter } from "vue-router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockApi } from "../../api/mockClient";
 import { useUiStore } from "../../stores/ui";
 import type { AppSettings, Appointment } from "../../types/domain";
@@ -11,6 +12,11 @@ import { DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS } from "../../utils/accountTableCol
 import { DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS } from "../../utils/appointmentTableColumns";
 import AppointmentTable from "./AppointmentTable.vue";
 import AppointmentsWorkspace from "./AppointmentsWorkspace.vue";
+
+const router = createRouter({
+  history: createMemoryHistory(),
+  routes: [{ path: "/appointments", name: "appointments", component: { template: "<div />" } }],
+});
 
 function appointment(serviceStatus: Appointment["serviceStatus"] = "scheduled"): Appointment {
   return {
@@ -70,6 +76,11 @@ function buttonByText(text: string): HTMLButtonElement {
 }
 
 describe("AppointmentsWorkspace", () => {
+  beforeEach(async () => {
+    await router.replace("/appointments");
+    await router.isReady();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     document.body.innerHTML = "";
@@ -85,7 +96,7 @@ describe("AppointmentsWorkspace", () => {
       .spyOn(mockApi, "updateAppointmentTableColumnWidths")
       .mockImplementation(async (widths) => widths);
     const pinia = createPinia();
-    const wrapper = mount(AppointmentsWorkspace, { global: { plugins: [pinia] } });
+    const wrapper = mount(AppointmentsWorkspace, { global: { plugins: [pinia, router] } });
     await flushPromises();
 
     await wrapper.get('button[aria-label="复制账号 demo-account"]').trigger("click");
@@ -119,7 +130,7 @@ describe("AppointmentsWorkspace", () => {
       new Error("该预约未填写YY频道号"),
     );
     const pinia = createPinia();
-    const wrapper = mount(AppointmentsWorkspace, { global: { plugins: [pinia] } });
+    const wrapper = mount(AppointmentsWorkspace, { global: { plugins: [pinia, router] } });
     await flushPromises();
 
     wrapper.findComponent(AppointmentTable).vm.$emit("copyVoiceChannel", target);
@@ -134,7 +145,7 @@ describe("AppointmentsWorkspace", () => {
     vi.spyOn(mockApi, "listAppointmentPage").mockResolvedValue(appointmentPage([target]));
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
     const pinia = createPinia();
-    const wrapper = mount(AppointmentsWorkspace, { global: { plugins: [pinia] } });
+    const wrapper = mount(AppointmentsWorkspace, { global: { plugins: [pinia, router] } });
     await flushPromises();
 
     await wrapper.get('button[aria-label="填写测试联系人 的结算金额"]').trigger("click");
@@ -153,7 +164,7 @@ describe("AppointmentsWorkspace", () => {
       new Error("保存列宽失败"),
     );
     const pinia = createPinia();
-    const wrapper = mount(AppointmentsWorkspace, { global: { plugins: [pinia] } });
+    const wrapper = mount(AppointmentsWorkspace, { global: { plugins: [pinia, router] } });
     await flushPromises();
 
     const table = wrapper.findComponent(AppointmentTable);
@@ -181,7 +192,9 @@ describe("AppointmentsWorkspace", () => {
       serviceStatus: "cancelled",
     });
     const remove = vi.spyOn(mockApi, "deleteAppointment").mockResolvedValue();
-    const wrapper = mount(AppointmentsWorkspace, { global: { plugins: [createPinia()] } });
+    const wrapper = mount(AppointmentsWorkspace, {
+      global: { plugins: [createPinia(), router] },
+    });
     await flushPromises();
 
     await wrapper.get('button[aria-label="删除"]').trigger("click");
@@ -219,7 +232,9 @@ describe("AppointmentsWorkspace", () => {
       deletedCount: 9_999,
     });
     vi.spyOn(globalThis, "confirm").mockReturnValue(true);
-    const wrapper = mount(AppointmentsWorkspace, { global: { plugins: [createPinia()] } });
+    const wrapper = mount(AppointmentsWorkspace, {
+      global: { plugins: [createPinia(), router] },
+    });
     await flushPromises();
 
     await wrapper.get('input[aria-label="全选全部筛选结果"]').setValue(true);
@@ -238,6 +253,145 @@ describe("AppointmentsWorkspace", () => {
       token: "all-filtered",
       excludedIds: [target.id],
     });
+    wrapper.unmount();
+  });
+
+  it("loads canonical route filters once and removes the duplicate create button", async () => {
+    await router.replace({
+      path: "/appointments",
+      query: { progressStatus: "pending_settlement", page: "3" },
+    });
+    const list = vi.spyOn(mockApi, "listAppointmentPage").mockResolvedValue(appointmentPage([]));
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
+
+    const wrapper = mount(AppointmentsWorkspace, {
+      global: { plugins: [createPinia(), router] },
+    });
+    await flushPromises();
+
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(list).toHaveBeenCalledWith({ progressStatus: "pending_settlement" }, 1, 100);
+    expect(router.currentRoute.value.query).toEqual({
+      progressStatus: "pending_settlement",
+    });
+    expect(wrapper.findAll("button").some((button) => button.text().trim() === "新建")).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("clears selection and returns to page one when route filters change", async () => {
+    const target = appointment();
+    const list = vi
+      .spyOn(mockApi, "listAppointmentPage")
+      .mockImplementation(async (_filters, page = 1, pageSize = 100) => ({
+        items: [target],
+        totalCount: 200,
+        page,
+        pageSize,
+        totalPages: 2,
+      }));
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
+    const wrapper = mount(AppointmentsWorkspace, {
+      global: { plugins: [createPinia(), router] },
+    });
+    await flushPromises();
+
+    await wrapper.get('input[aria-label="选择该预约"]').setValue(true);
+    expect(wrapper.text()).toContain("1 条已选中");
+    await wrapper.get('button[aria-label="下一页"]').trigger("click");
+    await flushPromises();
+    expect(list).toHaveBeenLastCalledWith({}, 2, 100);
+
+    await router.push({ path: "/appointments", query: { mode: "business" } });
+    await flushPromises();
+    expect(list).toHaveBeenLastCalledWith({ mode: "business" }, 1, 100);
+    expect(wrapper.text()).not.toContain("1 条已选中");
+    wrapper.unmount();
+  });
+
+  it("restores filters when navigating backward and forward", async () => {
+    const list = vi.spyOn(mockApi, "listAppointmentPage").mockResolvedValue(appointmentPage([]));
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
+    const wrapper = mount(AppointmentsWorkspace, {
+      global: { plugins: [createPinia(), router] },
+    });
+    await flushPromises();
+
+    await router.push({ path: "/appointments", query: { mode: "business" } });
+    await flushPromises();
+    await router.push({
+      path: "/appointments",
+      query: { progressStatus: "pending_settlement" },
+    });
+    await flushPromises();
+
+    router.back();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({ mode: "business" });
+    expect(list).toHaveBeenLastCalledWith({ mode: "business" }, 1, 100);
+
+    router.forward();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({
+      progressStatus: "pending_settlement",
+    });
+    expect(list).toHaveBeenLastCalledWith({ progressStatus: "pending_settlement" }, 1, 100);
+
+    wrapper.unmount();
+  });
+
+  it("replaces the URL when applying or resetting filters", async () => {
+    const list = vi.spyOn(mockApi, "listAppointmentPage").mockResolvedValue(appointmentPage([]));
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
+    const replace = vi.spyOn(router, "replace");
+    const wrapper = mount(AppointmentsWorkspace, {
+      global: { plugins: [createPinia(), router] },
+    });
+    await flushPromises();
+
+    await wrapper.get('input[placeholder="搜索联系人、内容或账号"]').setValue("  阿水  ");
+    await wrapper.get('select[aria-label="预约进度"]').setValue("pending_settlement");
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(replace).toHaveBeenLastCalledWith({
+      query: { query: "阿水", progressStatus: "pending_settlement" },
+    });
+    expect(router.currentRoute.value.query).toEqual({
+      query: "阿水",
+      progressStatus: "pending_settlement",
+    });
+    expect(list).toHaveBeenLastCalledWith(
+      { query: "阿水", progressStatus: "pending_settlement" },
+      1,
+      100,
+    );
+
+    await wrapper.get('button[aria-label="重置筛选"]').trigger("click");
+    await flushPromises();
+    expect(replace).toHaveBeenLastCalledWith({ query: {} });
+    expect(router.currentRoute.value.query).toEqual({});
+    expect(list).toHaveBeenLastCalledWith({}, 1, 100);
+    wrapper.unmount();
+  });
+
+  it("keeps the applied results when a page-entered date range is invalid", async () => {
+    const list = vi.spyOn(mockApi, "listAppointmentPage").mockResolvedValue(appointmentPage([]));
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
+    const pinia = createPinia();
+    const wrapper = mount(AppointmentsWorkspace, {
+      global: { plugins: [pinia, router] },
+    });
+    await flushPromises();
+
+    await wrapper.get('input[aria-label="开始日期"]').setValue("2026-08-10");
+    await wrapper.get('input[aria-label="结束日期"]').setValue("2026-08-03");
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(router.currentRoute.value.query).toEqual({});
+    expect(useUiStore(pinia).toast?.message).toBe("开始日期不能晚于结束日期");
     wrapper.unmount();
   });
 });

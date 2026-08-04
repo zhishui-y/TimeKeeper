@@ -31,22 +31,32 @@ const appointments: Appointment[] = [
     createdAt: "2026-08-01T00:00:00Z",
     updatedAt: "2026-08-01T00:00:00Z",
   },
+  {
+    id: "cancelled-business-appointment",
+    serviceDate: "2026-08-01",
+    contactName: "已取消业务",
+    mode: "business",
+    serviceStatus: "cancelled",
+    settlementStatus: "unsettled",
+    createdAt: "2026-08-01T00:00:00Z",
+    updatedAt: "2026-08-01T00:00:00Z",
+  },
 ];
 
 describe("RevenueDayAppointments", () => {
-  it("shows all appointments and their business or entertainment state", () => {
+  it("only shows non-cancelled business appointments that match the report", () => {
     const wrapper = mount(RevenueDayAppointments, {
       props: { appointments, loading: false, error: null },
     });
 
-    expect(wrapper.get("h3").text()).toBe("当日预约情况");
-    expect(wrapper.findAll(".day-appointment")).toHaveLength(2);
+    expect(wrapper.get("h3").text()).toBe("当日业务预约");
+    expect(wrapper.findAll(".day-appointment")).toHaveLength(1);
     expect(wrapper.text()).toContain("13:30–15:00");
     expect(wrapper.text()).toContain("小北");
     expect(wrapper.text()).toContain("¥180");
     expect(wrapper.text()).toContain("待结算");
-    expect(wrapper.text()).toContain("青禾");
-    expect(wrapper.text()).toContain("无需结算");
+    expect(wrapper.text()).not.toContain("青禾");
+    expect(wrapper.text()).not.toContain("已取消业务");
   });
 
   it("shows an empty state after loading", () => {
@@ -54,6 +64,6 @@ describe("RevenueDayAppointments", () => {
       props: { appointments: [], loading: false, error: null },
     });
 
-    expect(wrapper.text()).toContain("当天没有预约");
+    expect(wrapper.text()).toContain("当天没有符合收益口径的业务预约");
   });
 });

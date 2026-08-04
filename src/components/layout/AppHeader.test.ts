@@ -3,6 +3,16 @@ import { describe, expect, it } from "vitest";
 import AppHeader from "./AppHeader.vue";
 
 describe("AppHeader", () => {
+  it("emits the global appointment creation action", async () => {
+    const wrapper = mount(AppHeader, {
+      props: { title: "今日工作台", subtitle: "今天的安排" },
+    });
+
+    await wrapper.get(".header__actions .button--primary").trigger("click");
+
+    expect(wrapper.emitted("createAppointment")).toHaveLength(1);
+  });
+
   it("emits an explicit notification-settings action", async () => {
     const wrapper = mount(AppHeader, {
       props: { title: "今日工作台", subtitle: "今天的安排" },

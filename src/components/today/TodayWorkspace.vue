@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CalendarClock, CircleDollarSign, Clock3, Plus, WalletCards } from "@lucide/vue";
+import { CalendarClock, CircleDollarSign, Clock3, WalletCards } from "@lucide/vue";
 import {
   addDays,
   differenceInMinutes,
@@ -11,17 +11,20 @@ import {
 } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import { computed, onMounted, onUnmounted, shallowRef, watch } from "vue";
+import { useRouter } from "vue-router";
 import { api, errorMessage } from "../../api/client";
 import { useAppointments } from "../../composables/useAppointments";
 import { useDashboard } from "../../composables/useDashboard";
 import { useUiStore } from "../../stores/ui";
 import type { Appointment, ServiceStatus } from "../../types/domain";
+import { appointmentFiltersToQuery } from "../../utils/appointmentRouteQuery";
 import { findNextScheduledAppointment, sortAppointmentsByStartTime } from "../../utils/appointment";
 import { formatCurrency, formatDateHeading, formatTimeRange } from "../../utils/formatters";
 import TodayAppointmentList from "./TodayAppointmentList.vue";
 import WeekSchedule from "./WeekSchedule.vue";
 
 const now = shallowRef(new Date());
+const router = useRouter();
 const todayKey = computed(() => format(now.value, "yyyy-MM-dd"));
 const selectedDateKey = shallowRef(todayKey.value);
 const weekStart = computed(() => startOfWeek(now.value, { weekStartsOn: 1 }));
@@ -168,6 +171,13 @@ function selectDate(serviceDate: string): void {
   selectedDateKey.value = serviceDate;
 }
 
+function openPendingAppointments(): void {
+  void router.push({
+    name: "appointments",
+    query: appointmentFiltersToQuery({ progressStatus: "pending_settlement" }),
+  });
+}
+
 watch(
   () => ui.dataRevision,
   () => void refresh(),
@@ -242,23 +252,20 @@ onUnmounted(() => {
             <small>周一至周日</small>
           </div>
         </div>
-        <div class="metric metric--pending">
+        <button
+          class="metric metric--pending"
+          type="button"
+          aria-label="查看待结算预约"
+          @click="openPendingAppointments"
+        >
           <Clock3 :size="18" />
           <div>
             <span>待结场次</span>
             <strong class="mono-number">{{ dashboard.summary.value?.pendingCount ?? 0 }}</strong>
             <small>已完成但未结算</small>
           </div>
-        </div>
+        </button>
       </div>
-      <button
-        class="button button--primary today-lead__create"
-        type="button"
-        @click="ui.openCreateAppointment(todayKey)"
-      >
-        <Plus :size="16" />
-        记一笔预约
-      </button>
     </section>
 
     <WeekSchedule
@@ -317,7 +324,7 @@ onUnmounted(() => {
   position: relative;
   display: grid;
   min-height: 0;
-  grid-template-columns: minmax(235px, 0.76fr) minmax(0, 2.6fr) auto;
+  grid-template-columns: minmax(235px, 0.76fr) minmax(0, 2.6fr);
   align-items: center;
   gap: 14px;
   padding: 18px 18px 18px 22px;
@@ -440,16 +447,22 @@ onUnmounted(() => {
 
 .metric--pending {
   color: var(--amber);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
 }
 
 .metric--pending > svg {
   background: var(--amber-soft);
 }
 
-.today-lead__create {
-  min-height: 40px;
-  padding-inline: 14px;
-  white-space: nowrap;
+.metric--pending:hover {
+  border-color: var(--amber-border);
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--amber) 12%, transparent);
+  transform: translateY(-1px);
 }
 
 .today-workspace__week,
@@ -459,7 +472,7 @@ onUnmounted(() => {
 
 @media (max-width: 1350px) {
   .today-lead {
-    grid-template-columns: minmax(210px, 0.72fr) minmax(0, 2.5fr) auto;
+    grid-template-columns: minmax(210px, 0.72fr) minmax(0, 2.5fr);
     gap: 11px;
     padding-inline: 18px 16px;
   }
@@ -506,7 +519,7 @@ onUnmounted(() => {
 
 @media (max-width: 1180px) {
   .today-lead {
-    grid-template-columns: 200px minmax(0, 2.45fr) auto;
+    grid-template-columns: 200px minmax(0, 2.45fr);
     gap: 9px;
     padding-inline: 16px 14px;
   }
@@ -543,12 +556,6 @@ onUnmounted(() => {
 
   .metric strong {
     font-size: 15px;
-  }
-
-  .today-lead__create {
-    min-height: 38px;
-    padding-inline: 10px;
-    font-size: 12px;
   }
 }
 </style>

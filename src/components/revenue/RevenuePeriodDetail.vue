@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import { CalendarDays, Clock3, Coins, X } from "@lucide/vue";
+import { ArrowLeft, CalendarDays, ChevronRight, Clock3, Coins, X } from "@lucide/vue";
 import { format, parseISO } from "date-fns";
 import { zhCN } from "date-fns/locale";
-import { computed, useTemplateRef, type DeepReadonly } from "vue";
+import { computed, nextTick, shallowRef, useTemplateRef, type DeepReadonly } from "vue";
 import { useModalFocus } from "../../composables/useModalFocus";
-import type { Appointment, ReportGranularity, RevenueSummary } from "../../types/domain";
+import type {
+  Appointment,
+  ReportGranularity,
+  RevenuePoint,
+  RevenueSummary,
+} from "../../types/domain";
 import { formatCurrency } from "../../utils/formatters";
 import RevenueDayAppointments from "./RevenueDayAppointments.vue";
 
@@ -22,18 +27,28 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: [];
+  daySelect: [point: RevenuePoint];
+  dayBack: [];
 }>();
 
 const panelRef = useTemplateRef("panel");
+const backButtonRef = useTemplateRef("backButton");
+const selectedDay = shallowRef<RevenuePoint | null>(null);
+const isDayView = computed(() => props.granularity === "day" || selectedDay.value !== null);
+const visibleSummary = computed(() => selectedDay.value ?? props.summary);
+const relevantDayCount = computed(
+  () => props.summary?.points.filter((point) => point.appointmentCount > 0).length ?? 0,
+);
 const title = computed(() => {
-  if (props.granularity === "day") return "当日预约明细";
+  if (isDayView.value) return "当日预约明细";
   return props.granularity === "week" ? "周收入明细" : "月收入明细";
 });
-const dateRangeLabel = computed(() =>
-  props.from === props.to
+const dateRangeLabel = computed(() => {
+  if (selectedDay.value) return formatDate(selectedDay.value.period);
+  return props.from === props.to
     ? formatDate(props.from)
-    : `${formatDate(props.from)} — ${formatDate(props.to)}`,
-);
+    : `${formatDate(props.from)} — ${formatDate(props.to)}`;
+});
 
 function formatDate(date: string): string {
   return format(parseISO(date), "yyyy年M月d日");
@@ -41,6 +56,25 @@ function formatDate(date: string): string {
 
 function formatPointDate(date: string): string {
   return format(parseISO(date), "M月d日 EEE", { locale: zhCN });
+}
+
+async function selectDay(point: RevenuePoint): Promise<void> {
+  if (point.appointmentCount <= 0) return;
+  selectedDay.value = point;
+  emit("daySelect", point);
+  await nextTick();
+  backButtonRef.value?.focus();
+}
+
+async function backToPeriod(): Promise<void> {
+  const period = selectedDay.value?.period;
+  selectedDay.value = null;
+  emit("dayBack");
+  await nextTick();
+  if (period) {
+    const dayButton = panelRef.value?.querySelector(`[data-period="${period}"]`);
+    if (dayButton instanceof globalThis.HTMLElement) dayButton.focus();
+  }
 }
 
 useModalFocus({
@@ -68,12 +102,24 @@ useModalFocus({
         tabindex="-1"
       >
         <header class="period-detail__header">
-          <div>
-            <span class="section-kicker">{{
-              granularity === "day" ? "APPOINTMENTS" : "DAILY BREAKDOWN"
-            }}</span>
-            <h2 id="period-detail-title">{{ title }}</h2>
-            <p><CalendarDays :size="14" />{{ dateRangeLabel }}</p>
+          <div class="period-detail__heading">
+            <button
+              v-if="selectedDay"
+              ref="backButton"
+              class="period-detail__back"
+              type="button"
+              :aria-label="`返回${granularity === 'week' ? '周' : '月'}收入明细`"
+              @click="backToPeriod"
+            >
+              <ArrowLeft :size="16" />
+            </button>
+            <div>
+              <span class="section-kicker">{{
+                isDayView ? "APPOINTMENTS" : "DAILY BREAKDOWN"
+              }}</span>
+              <h2 id="period-detail-title">{{ title }}</h2>
+              <p><CalendarDays :size="14" />{{ dateRangeLabel }}</p>
+            </div>
           </div>
           <button class="icon-button" type="button" aria-label="关闭" @click="emit('close')">
             <X :size="18" />
@@ -88,27 +134,31 @@ useModalFocus({
             <div>
               <Coins :size="17" />
               <span>已结收益</span>
-              <strong class="mono-number">{{ formatCurrency(summary?.settledMinor) }}</strong>
+              <strong class="mono-number">{{
+                formatCurrency(visibleSummary?.settledMinor)
+              }}</strong>
             </div>
             <div>
               <Clock3 :size="17" />
               <span>待结场次</span>
-              <strong class="mono-number">{{ summary?.pendingCount ?? 0 }}场</strong>
+              <strong class="mono-number">{{ visibleSummary?.pendingCount ?? 0 }}场</strong>
             </div>
             <div>
               <Clock3 :size="17" />
               <span>业务工时</span>
-              <strong class="mono-number">{{ (summary?.businessHours ?? 0).toFixed(1) }}h</strong>
+              <strong class="mono-number"
+                >{{ (visibleSummary?.businessHours ?? 0).toFixed(1) }}h</strong
+              >
             </div>
             <div>
               <CalendarDays :size="17" />
               <span>业务预约</span>
-              <strong class="mono-number">{{ summary?.appointmentCount ?? 0 }}场</strong>
+              <strong class="mono-number">{{ visibleSummary?.appointmentCount ?? 0 }}场</strong>
             </div>
           </section>
 
           <RevenueDayAppointments
-            v-if="granularity === 'day'"
+            v-if="isDayView"
             :appointments="appointments"
             :loading="appointmentsLoading"
             :error="appointmentsError"
@@ -120,32 +170,39 @@ useModalFocus({
                 <span class="section-kicker">BY DAY</span>
                 <h3>每日明细</h3>
               </div>
-              <span>{{ summary?.points.length ?? 0 }} 个有记录日期</span>
+              <span>{{ relevantDayCount }} 个有业务日期</span>
             </header>
 
             <div v-if="summary?.points.length" class="daily-table-wrap">
-              <table class="daily-table">
-                <thead>
-                  <tr>
-                    <th>日期</th>
-                    <th>已结收益</th>
-                    <th>待结场次</th>
-                    <th>业务工时</th>
-                    <th>预约</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="point in summary.points" :key="point.period">
-                    <th scope="row">{{ formatPointDate(point.period) }}</th>
-                    <td class="mono-number daily-table__settled">
-                      {{ formatCurrency(point.settledMinor) }}
-                    </td>
-                    <td class="mono-number">{{ point.pendingCount }}场</td>
-                    <td class="mono-number">{{ point.businessHours.toFixed(1) }}h</td>
-                    <td class="mono-number">{{ point.appointmentCount }}场</td>
-                  </tr>
-                </tbody>
-              </table>
+              <div class="daily-table" aria-label="每日收入明细">
+                <div class="daily-table__head" aria-hidden="true">
+                  <span>日期</span>
+                  <span>已结收益</span>
+                  <span>待结场次</span>
+                  <span>业务工时</span>
+                  <span>预约</span>
+                  <span />
+                </div>
+                <button
+                  v-for="point in summary.points"
+                  :key="point.period"
+                  class="daily-table__row"
+                  type="button"
+                  :data-period="point.period"
+                  :disabled="point.appointmentCount === 0"
+                  :aria-label="`查看${formatPointDate(point.period)}业务预约`"
+                  @click="selectDay(point)"
+                >
+                  <strong>{{ formatPointDate(point.period) }}</strong>
+                  <span class="mono-number daily-table__settled">
+                    {{ formatCurrency(point.settledMinor) }}
+                  </span>
+                  <span class="mono-number">{{ point.pendingCount }}场</span>
+                  <span class="mono-number">{{ point.businessHours.toFixed(1) }}h</span>
+                  <span class="mono-number">{{ point.appointmentCount }}场</span>
+                  <ChevronRight :size="15" />
+                </button>
+              </div>
             </div>
             <div v-else-if="!loading && !error" class="daily-empty">该时间段暂无业务记录</div>
           </section>
@@ -201,6 +258,38 @@ useModalFocus({
       transparent 62%
     ),
     color-mix(in srgb, var(--surface) 95%, transparent);
+}
+
+.period-detail__heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.period-detail__back {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--gold) 28%, var(--line));
+  border-radius: 10px;
+  color: var(--gold-strong);
+  background: color-mix(in srgb, var(--gold-soft) 56%, var(--surface));
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    transform 150ms ease;
+}
+
+.period-detail__back:hover {
+  border-color: var(--gold-border);
+  background: var(--gold-soft);
+  transform: translateX(-1px);
 }
 
 .period-detail__header h2 {
@@ -299,42 +388,80 @@ useModalFocus({
 }
 
 .daily-table {
+  min-width: 590px;
   width: 100%;
-  border-collapse: collapse;
   color: var(--ink-muted);
   font-size: 11px;
+}
+
+.daily-table__head,
+.daily-table__row {
+  display: grid;
+  grid-template-columns: minmax(118px, 1.25fr) repeat(4, minmax(76px, 0.8fr)) 24px;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
   text-align: right;
 }
 
-.daily-table th,
-.daily-table td {
-  padding: 12px 15px;
-  border-bottom: 1px solid var(--line);
-  white-space: nowrap;
-}
-
-.daily-table thead th {
+.daily-table__head {
   color: var(--ink-muted);
   background: color-mix(in srgb, var(--surface-soft) 54%, transparent);
   font-size: 10px;
   font-weight: 600;
 }
 
-.daily-table th:first-child {
+.daily-table__head > span:first-child,
+.daily-table__row > strong {
   text-align: left;
 }
 
-.daily-table tbody th {
+.daily-table__row {
+  width: 100%;
+  border-top: 0;
+  border-right: 0;
+  border-left: 0;
+  color: var(--ink-muted);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease;
+}
+
+.daily-table__row > strong {
   color: var(--ink-strong);
+  font-size: 11px;
   font-weight: 650;
 }
 
-.daily-table tbody tr:last-child > * {
+.daily-table__row > span {
+  white-space: nowrap;
+}
+
+.daily-table__row > svg {
+  justify-self: end;
+  color: var(--gold-strong);
+}
+
+.daily-table__row:last-child {
   border-bottom: 0;
 }
 
-.daily-table tbody tr:hover {
+.daily-table__row:hover:not(:disabled) {
   background: color-mix(in srgb, var(--gold-soft) 30%, transparent);
+}
+
+.daily-table__row:disabled {
+  color: var(--ink-faint);
+  background: color-mix(in srgb, var(--neutral-soft) 45%, transparent);
+  cursor: default;
+  opacity: 0.68;
+}
+
+.daily-table__row:disabled > svg {
+  visibility: hidden;
 }
 
 .daily-table__settled {

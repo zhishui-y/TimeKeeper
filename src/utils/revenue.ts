@@ -19,6 +19,27 @@ export interface RevenuePeriodRange {
 export type RevenueRangeUnit = "week" | "month";
 export type RevenueRangeKind = "all" | "custom" | RevenueRangeUnit;
 
+export function isRevenueDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = parseISO(value);
+  return isValid(parsed) && format(parsed, "yyyy-MM-dd") === value;
+}
+
+export function isRevenueRange(range: RevenuePeriodRange): boolean {
+  return isRevenueDate(range.from) && isRevenueDate(range.to) && range.from <= range.to;
+}
+
+export function intersectRevenueRanges(
+  first: RevenuePeriodRange,
+  second: RevenuePeriodRange,
+): RevenuePeriodRange | null {
+  if (!isRevenueRange(first) || !isRevenueRange(second)) return null;
+
+  const from = first.from > second.from ? first.from : second.from;
+  const to = first.to < second.to ? first.to : second.to;
+  return from <= to ? { from, to } : null;
+}
+
 export function revenueNaturalRange(
   unit: RevenueRangeUnit,
   referenceDate: Date = new Date(),

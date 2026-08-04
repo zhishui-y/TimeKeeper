@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { Plus, Trash2 } from "@lucide/vue";
+import { Trash2 } from "@lucide/vue";
 import { computed, onMounted, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAppointmentPage } from "../../composables/useAppointmentPage";
+import { useAppointmentRouteFilters } from "../../composables/useAppointmentRouteFilters";
 import { useAppointmentSelection } from "../../composables/useAppointmentSelection";
 import { useUiStore } from "../../stores/ui";
 import type {
@@ -23,7 +24,8 @@ import AppointmentPagination from "./AppointmentPagination.vue";
 import AppointmentTable from "./AppointmentTable.vue";
 
 const ui = useUiStore();
-const history = useAppointmentPage({}, { pageSize: 100 });
+const routeFilters = useAppointmentRouteFilters();
+const history = useAppointmentPage(routeFilters.initialFilters, { pageSize: 100 });
 const selection = useAppointmentSelection();
 const columnWidths = shallowRef<AppointmentTableColumnWidths>(
   cloneAppointmentTableColumnWidths(DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS),
@@ -100,12 +102,12 @@ function commitColumnWidth(columnKey: AppointmentTableColumnKey, width: number):
 }
 
 async function applyFilters(next: AppointmentFilters): Promise<void> {
-  selection.clear();
-  await history.applyFilters(next);
+  const validationError = await routeFilters.replaceFilters(next);
+  if (validationError) ui.notify(validationError, "warning");
 }
 
 async function resetFilters(): Promise<void> {
-  await applyFilters({});
+  await routeFilters.resetFilters();
 }
 
 async function changePage(page: number): Promise<void> {
@@ -227,6 +229,11 @@ async function removeBatch(): Promise<void> {
   }
 }
 
+watch(routeFilters.filters, (filters) => {
+  selection.clear();
+  void history.applyFilters(filters);
+});
+
 watch(
   () => ui.dataRevision,
   () => {
@@ -255,10 +262,6 @@ onMounted(loadColumnWidths);
       >
         <Trash2 :size="15" />
         {{ batchDeletePending ? "正在删除…" : "批量删除" }}
-      </button>
-      <button class="button button--primary" type="button" @click="ui.openCreateAppointment()">
-        <Plus :size="15" />
-        新建
       </button>
     </div>
     <div class="result-line">

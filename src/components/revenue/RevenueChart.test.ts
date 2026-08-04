@@ -80,6 +80,44 @@ describe("RevenueChart", () => {
     expect(wrapper.emitted("periodSelect")).toEqual([[points[1]]]);
   });
 
+  it("focuses the chart before a pointer drill-down so detail can restore focus", async () => {
+    const wrapper = mount(RevenueChart, {
+      attachTo: document.body,
+      props: {
+        points,
+        granularity: "day",
+        from: "2026-07-27",
+        to: "2026-08-03",
+        drillable: true,
+      },
+    });
+
+    const chart = wrapper.get(".revenue-chart");
+    await chart.trigger("pointerdown");
+
+    expect(chart.attributes("tabindex")).toBe("0");
+    expect(document.activeElement).toBe(chart.element);
+    wrapper.unmount();
+  });
+
+  it("opens the first business point from the keyboard when drill-down is enabled", async () => {
+    const wrapper = mount(RevenueChart, {
+      props: {
+        points,
+        granularity: "day",
+        from: "2026-07-27",
+        to: "2026-08-03",
+        drillable: true,
+      },
+    });
+
+    await wrapper.get(".revenue-chart").trigger("keydown", { key: "Enter" });
+    await wrapper.setProps({ drillable: false });
+    await wrapper.get(".revenue-chart").trigger("keydown", { key: " " });
+
+    expect(wrapper.emitted("periodSelect")).toEqual([[points[0]]]);
+  });
+
   it("emits line clicks and ignores non-series or disabled clicks", async () => {
     const wrapper = mount(RevenueChart, {
       props: {

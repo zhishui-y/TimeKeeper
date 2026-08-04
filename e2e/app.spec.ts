@@ -36,6 +36,27 @@ async function readSettledMinor(page: Page): Promise<number> {
   return Math.round(Number(text.replace(/[^\d.-]/g, "")) * 100);
 }
 
+async function expectOnlyGlobalCreateAction(page: Page): Promise<void> {
+  const createAction = page.getByRole("button", { name: "新建预约", exact: true });
+  await expect(createAction).toHaveCount(1);
+  await expect(
+    page.locator(".header").getByRole("button", { name: "新建预约", exact: true }),
+  ).toHaveCount(1);
+}
+
+async function readHashRoute(page: Page): Promise<{
+  path: string;
+  queryEntries: [string, string][];
+}> {
+  return page.evaluate(() => {
+    const [path = "", search = ""] = globalThis.location.hash.slice(1).split("?");
+    return {
+      path,
+      queryEntries: Array.from(new URLSearchParams(search).entries()),
+    };
+  });
+}
+
 test("核心页面在桌面窗口中可访问且没有横向溢出", async ({ page }) => {
   test.setTimeout(60_000);
   const consoleErrors: string[] = [];
@@ -45,6 +66,8 @@ test("核心页面在桌面窗口中可访问且没有横向溢出", async ({ pa
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "今日工作台" })).toBeVisible();
+  await expectOnlyGlobalCreateAction(page);
+  await expect(page.getByRole("button", { name: "记一笔预约", exact: true })).toHaveCount(0);
   const dateHeading = page.getByRole("heading", { name: /今天 · \d+月\d+日 星期/ });
   await expect(dateHeading).toBeVisible();
   expect(await dateHeading.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
@@ -87,9 +110,13 @@ test("核心页面在桌面窗口中可访问且没有横向溢出", async ({ pa
   for (const [linkName, headingName] of routes) {
     await page.getByRole("link", { name: linkName }).click();
     await expect(page.getByRole("heading", { name: headingName, level: 1 })).toBeVisible();
+    await expectOnlyGlobalCreateAction(page);
     if (linkName === "预约记录") {
       await expect(page.getByPlaceholder("搜索联系人、内容或账号")).toBeVisible();
       await expect(page.getByLabel("预约模式")).toBeVisible();
+      await expect(
+        page.locator(".appointments-workspace").getByRole("button", { name: "新建", exact: true }),
+      ).toHaveCount(0);
     }
     if (linkName === "数据与设置") {
       const backup = page.locator(".settings-section--backup");
@@ -116,6 +143,108 @@ test("核心页面在桌面窗口中可访问且没有横向溢出", async ({ pa
   await expect(page.getByRole("button", { name: "从备份恢复" })).toBeVisible();
 
   expect(consoleErrors).toEqual([]);
+});
+
+test("今日待结场次仅传递待结状态且浏览器前进后退可恢复筛选", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "今日工作台" })).toBeVisible();
+
+  await page.getByRole("button", { name: "查看待结算预约", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "预约记录", level: 1 })).toBeVisible();
+  expect(await readHashRoute(page)).toEqual({
+    path: "/appointments",
+    queryEntries: [["progressStatus", "pending_settlement"]],
+  });
+  await expect(page.getByLabel("开始日期")).toHaveValue("");
+  await expect(page.getByLabel("结束日期")).toHaveValue("");
+  await expect(page.getByLabel("预约模式").locator("option:checked")).toHaveText("全部模式");
+  await expect(page.getByLabel("预约进度")).toHaveValue("pending_settlement");
+
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "今日工作台", level: 1 })).toBeVisible();
+
+  await page.goForward();
+  await expect(page.getByRole("heading", { name: "预约记录", level: 1 })).toBeVisible();
+  expect(await readHashRoute(page)).toEqual({
+    path: "/appointments",
+    queryEntries: [["progressStatus", "pending_settlement"]],
+  });
+  await expect(page.getByLabel("预约进度")).toHaveValue("pending_settlement");
+});
+
+test("收益待结场次使用最后成功报表的日期范围过滤预约", async ({ page }) => {
+  await page.goto("/#/revenue");
+  await expect(page.getByRole("heading", { name: "收益总结", level: 1 })).toBeVisible();
+
+  const pendingAction = page.getByRole("button", {
+    name: "查看当前统计范围内的待结算预约",
+    exact: true,
+  });
+  await expect(pendingAction).toBeEnabled();
+  const rangeLabel = (await page.locator(".range-navigator__actual").innerText()).trim();
+  const rangeMatch = rangeLabel.match(/^(\d{4}-\d{2}-\d{2}) — (\d{4}-\d{2}-\d{2})$/);
+  if (!rangeMatch?.[1] || !rangeMatch[2]) {
+    throw new Error(`收益页未显示有效的实际统计范围：${rangeLabel}`);
+  }
+  const [, from, to] = rangeMatch;
+
+  await pendingAction.click();
+
+  await expect(page.getByRole("heading", { name: "预约记录", level: 1 })).toBeVisible();
+  const route = await readHashRoute(page);
+  expect(route.path).toBe("/appointments");
+  expect(route.queryEntries).toHaveLength(3);
+  expect(Object.fromEntries(route.queryEntries)).toEqual({
+    from,
+    to,
+    progressStatus: "pending_settlement",
+  });
+  await expect(page.getByLabel("开始日期")).toHaveValue(from);
+  await expect(page.getByLabel("结束日期")).toHaveValue(to);
+  await expect(page.getByLabel("预约进度")).toHaveValue("pending_settlement");
+});
+
+test("收益周明细可下钻到当日并恢复键盘焦点", async ({ page }) => {
+  await page.goto("/#/revenue");
+  await expect(page.getByRole("heading", { name: "收益总结", level: 1 })).toBeVisible();
+
+  const grouping = page.getByLabel("趋势分组");
+  const weeklyGrouping = grouping.getByRole("button", { name: "周", exact: true });
+  await weeklyGrouping.click();
+  await expect(weeklyGrouping).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".revenue-dashboard .loading-line")).toHaveCount(0);
+  await weeklyGrouping.focus();
+
+  const canvas = page.locator(".revenue-chart canvas");
+  await expect(canvas).toBeVisible();
+  const chartBox = await canvas.boundingBox();
+  if (!chartBox) throw new Error("收益趋势图未生成可点击画布");
+  await canvas.click({
+    position: {
+      x: chartBox.width / 2 + 17,
+      y: chartBox.height - 46,
+    },
+  });
+
+  const detail = page.locator("aside.period-detail");
+  await expect(detail).toBeVisible();
+  await expect(detail.getByRole("heading", { name: "周收入明细" })).toBeVisible();
+  expect(await detail.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+
+  const dayRow = detail.locator(".daily-table__row:not(:disabled)").first();
+  await dayRow.click();
+  await expect(detail.getByRole("heading", { name: "当日预约明细" })).toBeVisible();
+  const backButton = detail.getByRole("button", { name: "返回周收入明细" });
+  await expect(backButton).toBeFocused();
+
+  await backButton.click();
+  await expect(detail.getByRole("heading", { name: "周收入明细" })).toBeVisible();
+  await expect(dayRow).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  await expect(detail).toBeHidden();
+  await expect(page.locator(".revenue-chart")).toBeFocused();
 });
 
 test("预约抽屉圈定键盘焦点并可用 Escape 关闭", async ({ page }) => {
@@ -213,7 +342,7 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
 
   await page.goto("/");
   await page.getByRole("link", { name: "数据与设置" }).click();
-  await page.getByRole("button", { name: "立即锁定" }).click();
+  await page.getByRole("button", { name: "立即锁定", exact: true }).click();
 
   const accessGate = page.getByRole("dialog", { name: "解锁时约管家" });
   await expect(accessGate).toBeVisible();

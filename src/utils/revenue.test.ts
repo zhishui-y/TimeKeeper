@@ -1,5 +1,58 @@
 import { describe, expect, it } from "vitest";
-import { revenueNaturalRange, revenuePeriodRange, shiftRevenueRange } from "./revenue";
+import {
+  intersectRevenueRanges,
+  isRevenueDate,
+  isRevenueRange,
+  revenueNaturalRange,
+  revenuePeriodRange,
+  shiftRevenueRange,
+} from "./revenue";
+
+describe("revenue range validation", () => {
+  it("accepts only real, zero-padded ISO calendar dates", () => {
+    expect(isRevenueDate("2026-08-04")).toBe(true);
+    expect(isRevenueDate("2026-8-4")).toBe(false);
+    expect(isRevenueDate("2026-02-30")).toBe(false);
+  });
+
+  it("requires an ordered pair of valid dates", () => {
+    expect(isRevenueRange({ from: "2026-08-01", to: "2026-08-04" })).toBe(true);
+    expect(isRevenueRange({ from: "2026-08-04", to: "2026-08-01" })).toBe(false);
+  });
+});
+
+describe("intersectRevenueRanges", () => {
+  it("returns the inclusive overlap between two ranges", () => {
+    expect(
+      intersectRevenueRanges(
+        { from: "2026-08-01", to: "2026-08-10" },
+        { from: "2026-08-08", to: "2026-08-15" },
+      ),
+    ).toEqual({ from: "2026-08-08", to: "2026-08-10" });
+
+    expect(
+      intersectRevenueRanges(
+        { from: "2026-08-10", to: "2026-08-10" },
+        { from: "2026-08-10", to: "2026-08-12" },
+      ),
+    ).toEqual({ from: "2026-08-10", to: "2026-08-10" });
+  });
+
+  it("returns null for disjoint or invalid ranges", () => {
+    expect(
+      intersectRevenueRanges(
+        { from: "2026-08-01", to: "2026-08-05" },
+        { from: "2026-08-06", to: "2026-08-10" },
+      ),
+    ).toBeNull();
+    expect(
+      intersectRevenueRanges(
+        { from: "2026-08-10", to: "2026-08-01" },
+        { from: "2026-08-01", to: "2026-08-10" },
+      ),
+    ).toBeNull();
+  });
+});
 
 describe("revenueNaturalRange", () => {
   const referenceDate = new Date(2026, 7, 1, 12, 0, 0);

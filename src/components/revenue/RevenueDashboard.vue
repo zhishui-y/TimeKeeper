@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { CalendarRange, CheckCircle2, Clock3, Coins, Gauge } from "@lucide/vue";
-import { computed, defineAsyncComponent, reactive, shallowRef, watch } from "vue";
+import { CheckCircle2, Clock3, Coins, Gauge } from "@lucide/vue";
+import { computed, defineAsyncComponent, shallowRef, watch } from "vue";
+import { useRouter } from "vue-router";
 import { useAppointments } from "../../composables/useAppointments";
 import { useRevenue } from "../../composables/useRevenue";
+import { useRevenueRange } from "../../composables/useRevenueRange";
 import { useUiStore } from "../../stores/ui";
 import type { ReportGranularity, RevenuePoint } from "../../types/domain";
+import { appointmentFiltersToQuery } from "../../utils/appointmentRouteQuery";
 import { formatCurrency } from "../../utils/formatters";
 import {
-  revenueNaturalRange,
+  intersectRevenueRanges,
   revenuePeriodRange,
-  shiftRevenueRange,
-  type RevenueRangeKind,
-  type RevenueRangeUnit,
+  type RevenuePeriodRange,
 } from "../../utils/revenue";
 import RevenueRangeNavigator from "./RevenueRangeNavigator.vue";
 
@@ -28,14 +29,9 @@ interface SelectedPeriod {
   to: string;
 }
 
-const today = new Date();
-const initialRange = revenueNaturalRange("week", today);
-const range = reactive({
-  from: initialRange.from,
-  to: initialRange.to,
-  granularity: "day" as ReportGranularity,
-});
+const router = useRouter();
 const ui = useUiStore();
+const revenueRange = useRevenueRange();
 const { summary, loading, error, load } = useRevenue();
 const {
   summary: detailSummary,
@@ -51,18 +47,15 @@ const {
   load: loadDetailAppointments,
 } = useAppointments({}, { immediate: false });
 const selectedPeriod = shallowRef<SelectedPeriod | null>(null);
-const activeRange = shallowRef<RevenueRangeKind>("week");
-const navigationUnit = shallowRef<RevenueRangeUnit>("week");
-const reportQuery = computed(() => ({
-  from: activeRange.value === "all" ? "" : range.from,
-  to: activeRange.value === "all" ? "" : range.to,
-  granularity: range.granularity,
-}));
-const isCurrentNavigationPeriod = computed(() => {
-  if (activeRange.value !== navigationUnit.value) return false;
-  const currentRange = revenueNaturalRange(navigationUnit.value, today);
-  return range.from === currentRange.from && range.to === currentRange.to;
-});
+const detailSummaryForView = computed(() =>
+  detailLoading.value || detailError.value ? null : detailSummary.value,
+);
+const detailAppointmentsForView = computed(() =>
+  detailAppointmentsLoading.value || detailAppointmentsError.value ? [] : detailAppointments.value,
+);
+const pendingNavigationReady = computed(
+  () => !loading.value && !revenueRange.customError.value && summary.value !== null,
+);
 
 const completionRate = computed(() => {
   if (!summary.value?.appointmentCount) return 0;
@@ -75,58 +68,62 @@ const maxPayment = computed(() =>
 
 const chartDescription = computed(
   () =>
-    `收益与工时趋势，${summary.value?.from ?? range.from} 至 ${summary.value?.to ?? range.to}，共 ${summary.value?.points.length ?? 0} 个数据点，${range.granularity === "day" ? "可点击图中数据查看当日预约" : "可点击图中数据查看每日明细"}`,
+    `收益与工时趋势，${summary.value?.from ?? revenueRange.displayRange.value?.from ?? ""} 至 ${summary.value?.to ?? revenueRange.displayRange.value?.to ?? ""}，共 ${summary.value?.points.length ?? 0} 个数据点，${revenueRange.granularity.value === "day" ? "可点击图中数据查看当日预约" : "可点击图中数据查看每日明细"}；键盘按回车查看首个有业务数据点`,
 );
 
-const summaryRangeLabel = computed(
-  () => `${summary.value?.from ?? range.from} — ${summary.value?.to ?? range.to}`,
-);
+const summaryRangeLabel = computed(() => {
+  const visible = revenueRange.displayRange.value;
+  if (!visible) return "正在确认实际范围";
+  return `${visible.from} — ${visible.to}`;
+});
 
-function applyQuickRange(unit: RevenueRangeUnit, nextRange: { from: string; to: string }): void {
-  navigationUnit.value = unit;
-  activeRange.value = unit;
-  range.from = nextRange.from;
-  range.to = nextRange.to;
+function reportRange(): RevenuePeriodRange | null {
+  if (summary.value) return { from: summary.value.from, to: summary.value.to };
+  return revenueRange.displayRange.value;
 }
 
-function selectAllRange(): void {
-  activeRange.value = "all";
-}
-
-function selectRangeUnit(unit: RevenueRangeUnit): void {
-  applyQuickRange(unit, revenueNaturalRange(unit, today));
-}
-
-function navigateRange(offset: -1 | 0 | 1): void {
-  const unit = navigationUnit.value;
-  const nextRange =
-    offset === 0
-      ? revenueNaturalRange(unit, today)
-      : activeRange.value === "all"
-        ? revenueNaturalRange(unit, today, offset)
-        : (shiftRevenueRange(range.from, unit, offset) ?? revenueNaturalRange(unit, today, offset));
-  applyQuickRange(unit, nextRange);
-}
-
-function useCustomRange(): void {
-  activeRange.value = "custom";
+function loadAppointmentsForDay(serviceDate: string): void {
+  detailAppointmentFilters.from = serviceDate;
+  detailAppointmentFilters.to = serviceDate;
+  detailAppointmentFilters.mode = "business";
+  void loadDetailAppointments();
 }
 
 function showPeriodDetail(point: RevenuePoint): void {
-  const granularity = range.granularity;
-  const selectedRange =
+  if (loading.value) return;
+  const granularity = revenueRange.granularity.value;
+  const periodRange =
     granularity === "day"
       ? { from: point.period, to: point.period }
       : revenuePeriodRange(point.period, granularity);
+  const activeReportRange = reportRange();
+  const selectedRange =
+    periodRange && activeReportRange
+      ? intersectRevenueRanges(periodRange, activeReportRange)
+      : periodRange;
   if (!selectedRange) return;
 
   selectedPeriod.value = { granularity, ...selectedRange };
   void loadDetail(selectedRange.from, selectedRange.to, "day");
   if (granularity === "day") {
-    detailAppointmentFilters.from = selectedRange.from;
-    detailAppointmentFilters.to = selectedRange.to;
-    void loadDetailAppointments();
+    loadAppointmentsForDay(selectedRange.from);
   }
+}
+
+function showDayAppointments(point: RevenuePoint): void {
+  loadAppointmentsForDay(point.period);
+}
+
+function openPendingAppointments(): void {
+  if (!pendingNavigationReady.value || !summary.value) return;
+  void router.push({
+    name: "appointments",
+    query: appointmentFiltersToQuery({
+      from: summary.value.from,
+      to: summary.value.to,
+      progressStatus: "pending_settlement",
+    }),
+  });
 }
 
 function closePeriodDetail(): void {
@@ -134,71 +131,51 @@ function closePeriodDetail(): void {
 }
 
 watch(
-  () => [reportQuery.value, ui.dataRevision] as const,
-  ([query]) => {
-    if (query.from || query.to) {
-      if (query.from && query.to) void load(query.from, query.to, query.granularity);
-      return;
-    }
-    void load("", "", query.granularity);
+  () =>
+    [
+      revenueRange.requestRange.value.from,
+      revenueRange.requestRange.value.to,
+      revenueRange.granularity.value,
+      ui.dataRevision,
+    ] as const,
+  ([from, to, granularity]) => {
+    void load(from, to, granularity);
   },
   { immediate: true },
 );
 
 watch(summary, (nextSummary) => {
-  if (activeRange.value !== "all" || !nextSummary) return;
-  range.from = nextSummary.from;
-  range.to = nextSummary.to;
+  if (revenueRange.rangeKind.value !== "all" || !nextSummary) return;
+  revenueRange.resolveAllRange({ from: nextSummary.from, to: nextSummary.to });
 });
 
-watch(() => [range.from, range.to, range.granularity] as const, closePeriodDetail);
+watch(
+  () =>
+    [
+      revenueRange.requestRange.value.from,
+      revenueRange.requestRange.value.to,
+      revenueRange.granularity.value,
+    ] as const,
+  closePeriodDetail,
+);
 </script>
 
 <template>
   <div class="revenue-dashboard page-stack">
     <div class="page-toolbar revenue-toolbar">
-      <div class="revenue-toolbar__range">
-        <CalendarRange :size="16" />
-        <input
-          v-model="range.from"
-          class="input"
-          type="date"
-          aria-label="统计开始日期"
-          @input="useCustomRange"
-        />
-        <span>至</span>
-        <input
-          v-model="range.to"
-          class="input"
-          type="date"
-          aria-label="统计结束日期"
-          @input="useCustomRange"
-        />
-        <RevenueRangeNavigator
-          :unit="navigationUnit"
-          :active-range="activeRange"
-          :is-current-period="isCurrentNavigationPeriod"
-          @select-all="selectAllRange"
-          @select-unit="selectRangeUnit"
-          @navigate="navigateRange"
-        />
-      </div>
-      <div class="segmented" aria-label="统计粒度">
-        <button
-          v-for="item in [
-            ['day', '按日'],
-            ['week', '按周'],
-            ['month', '按月'],
-          ] as const"
-          :key="item[0]"
-          class="segmented__item"
-          :class="{ 'is-active': range.granularity === item[0] }"
-          type="button"
-          @click="range.granularity = item[0]"
-        >
-          {{ item[1] }}
-        </button>
-      </div>
+      <RevenueRangeNavigator
+        :range-kind="revenueRange.rangeKind.value"
+        :display-range="revenueRange.displayRange.value"
+        :is-current-period="revenueRange.isCurrentPeriod.value"
+        :custom-from="revenueRange.customDraft.value.from"
+        :custom-to="revenueRange.customDraft.value.to"
+        :custom-error="revenueRange.customError.value"
+        @select-range="revenueRange.selectRange"
+        @navigate="revenueRange.navigatePeriod"
+        @return-current="revenueRange.returnToCurrentPeriod"
+        @update-custom-from="revenueRange.updateCustomDate('from', $event)"
+        @update-custom-to="revenueRange.updateCustomDate('to', $event)"
+      />
     </div>
     <div v-if="loading" class="loading-line" />
     <div v-if="error" class="error-banner">{{ error }}</div>
@@ -210,17 +187,23 @@ watch(() => [range.from, range.to, range.granularity] as const, closePeriodDetai
         <strong class="mono-number">{{ formatCurrency(summary?.settledMinor) }}</strong>
         <small>按服务日期归属</small>
       </div>
-      <div class="revenue-metric revenue-metric--pending">
+      <button
+        class="revenue-metric revenue-metric--pending revenue-metric--actionable"
+        type="button"
+        :disabled="!pendingNavigationReady"
+        aria-label="查看当前统计范围内的待结算预约"
+        @click="openPendingAppointments"
+      >
         <Clock3 :size="18" />
         <span>待结场次</span>
         <strong class="mono-number">{{ summary?.pendingCount ?? 0 }}</strong>
-        <small>已完成但未结算</small>
-      </div>
+        <small>已完成但未结算 · 查看记录</small>
+      </button>
       <div class="revenue-metric">
         <Gauge :size="18" />
         <span>业务工时 / 时薪</span>
         <strong class="mono-number">{{ (summary?.businessHours ?? 0).toFixed(1) }}h</strong>
-        <small>平均 {{ formatCurrency(summary?.averageHourlyMinor) }}/h</small>
+        <small> 已结收益 ÷ 完工时长 {{ formatCurrency(summary?.averageHourlyMinor) }}/h </small>
       </div>
       <div class="revenue-metric">
         <CheckCircle2 :size="18" />
@@ -233,29 +216,49 @@ watch(() => [range.from, range.to, range.granularity] as const, closePeriodDetai
     <section class="revenue-body">
       <div class="chart-panel">
         <header class="panel-header">
-          <div>
+          <div class="panel-header__title">
             <span class="section-kicker">TREND</span>
             <h2>收益与工时趋势</h2>
-          </div>
-          <div class="panel-header__meta">
-            <span class="chart-drill-hint">
+            <small class="chart-drill-hint">
               {{
-                range.granularity === "day"
-                  ? "点击图中数据查看当日预约"
-                  : "点击图中数据查看每日明细"
+                revenueRange.granularity.value === "day"
+                  ? "点击数据点查看当日业务预约"
+                  : "点击数据点查看周期每日明细"
               }}
-            </span>
-            <span>{{ summaryRangeLabel }}</span>
+            </small>
+          </div>
+          <div class="panel-header__controls">
+            <div class="trend-grouping" aria-label="趋势分组">
+              <span>趋势分组</span>
+              <div class="segmented segmented--compact">
+                <button
+                  v-for="item in [
+                    ['day', '日'],
+                    ['week', '周'],
+                    ['month', '月'],
+                  ] as const"
+                  :key="item[0]"
+                  class="segmented__item"
+                  :class="{ 'is-active': revenueRange.granularity.value === item[0] }"
+                  type="button"
+                  :aria-pressed="revenueRange.granularity.value === item[0]"
+                  @click="revenueRange.setGranularity(item[0])"
+                >
+                  {{ item[1] }}
+                </button>
+              </div>
+            </div>
+            <span class="panel-header__range mono-number">{{ summaryRangeLabel }}</span>
           </div>
         </header>
         <RevenueChart
           role="img"
           :aria-label="chartDescription"
           :points="summary?.points ?? []"
-          :granularity="range.granularity"
-          :from="summary?.from ?? range.from"
-          :to="summary?.to ?? range.to"
-          drillable
+          :granularity="revenueRange.granularity.value"
+          :from="summary?.from ?? revenueRange.displayRange.value?.from ?? ''"
+          :to="summary?.to ?? revenueRange.displayRange.value?.to ?? ''"
+          :drillable="!loading"
           @period-select="showPeriodDetail"
         />
       </div>
@@ -286,12 +289,13 @@ watch(() => [range.from, range.to, range.granularity] as const, closePeriodDetai
       :granularity="selectedPeriod.granularity"
       :from="selectedPeriod.from"
       :to="selectedPeriod.to"
-      :summary="detailSummary"
+      :summary="detailSummaryForView"
       :loading="detailLoading"
       :error="detailError"
-      :appointments="detailAppointments"
+      :appointments="detailAppointmentsForView"
       :appointments-loading="detailAppointmentsLoading"
       :appointments-error="detailAppointmentsError"
+      @day-select="showDayAppointments"
       @close="closePeriodDetail"
     />
   </div>
@@ -303,20 +307,14 @@ watch(() => [range.from, range.to, range.granularity] as const, closePeriodDetai
   gap: 14px;
 }
 
-.revenue-toolbar__range {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--ink-muted);
-  font-size: 12px;
-}
-
-.revenue-toolbar__range > svg {
-  color: var(--brand);
-}
-
-.revenue-toolbar__range .input {
-  width: 138px;
+.revenue-toolbar {
+  min-height: 46px;
+  justify-content: flex-start;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg, 14px);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: var(--shadow-xs, 0 3px 14px rgba(31, 49, 42, 0.04));
 }
 
 .revenue-metrics {
@@ -340,6 +338,7 @@ watch(() => [range.from, range.to, range.granularity] as const, closePeriodDetai
   color: var(--blue);
   background: var(--surface);
   box-shadow: var(--shadow-soft);
+  text-align: left;
 }
 
 .revenue-metric > svg {
@@ -376,6 +375,25 @@ watch(() => [range.from, range.to, range.granularity] as const, closePeriodDetai
   color: var(--amber);
 }
 
+.revenue-metric--actionable {
+  font: inherit;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.revenue-metric--actionable:hover:not(:disabled) {
+  border-color: var(--amber-border);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--amber) 14%, transparent);
+  transform: translateY(-2px);
+}
+
+.revenue-metric--actionable:active:not(:disabled) {
+  transform: translateY(0);
+}
+
 .revenue-body {
   display: grid;
   min-height: 0;
@@ -388,7 +406,7 @@ watch(() => [range.from, range.to, range.granularity] as const, closePeriodDetai
 .payment-panel {
   display: grid;
   min-height: 0;
-  grid-template-rows: 60px minmax(0, 1fr);
+  grid-template-rows: 68px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg, 18px);
@@ -411,20 +429,54 @@ watch(() => [range.from, range.to, range.granularity] as const, closePeriodDetai
   font-size: 14px;
 }
 
-.panel-header__meta {
+.panel-header__title {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.chart-drill-hint {
+  overflow: hidden;
+  color: var(--gold-strong);
+  font-size: 9px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-header__controls {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 10px;
 }
 
-.panel-header__meta > span {
-  color: var(--ink-muted);
-  font-size: 10px;
+.trend-grouping {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
 }
 
-.panel-header__meta > .chart-drill-hint {
-  color: var(--gold-strong);
-  font-weight: 650;
+.trend-grouping > span,
+.panel-header__range {
+  color: var(--ink-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.segmented--compact {
+  height: 30px;
+  padding: 2px;
+  border-radius: 9px;
+}
+
+.segmented--compact .segmented__item {
+  width: 30px;
+  height: 24px;
+  padding: 0;
+  border-radius: 7px;
+  font-size: 11px;
 }
 
 .payment-list {
@@ -484,6 +536,14 @@ watch(() => [range.from, range.to, range.granularity] as const, closePeriodDetai
 }
 
 @media (max-width: 1180px) {
+  .revenue-dashboard {
+    gap: 10px;
+  }
+
+  .revenue-toolbar {
+    min-height: 44px;
+  }
+
   .revenue-metrics {
     gap: 9px;
   }
@@ -499,6 +559,18 @@ watch(() => [range.from, range.to, range.granularity] as const, closePeriodDetai
   .revenue-body {
     grid-template-columns: minmax(0, 1fr) 230px;
     gap: 10px;
+  }
+
+  .panel-header__range {
+    display: none;
+  }
+
+  .panel-header {
+    padding-inline: 13px;
+  }
+
+  .trend-grouping > span {
+    display: none;
   }
 }
 </style>

@@ -14,11 +14,12 @@ const emit = defineEmits<{
 
 const draft = reactive<AppointmentFilters>({ ...props.filters });
 
-watch(
-  () => props.filters,
-  (value) => Object.assign(draft, value),
-  { deep: true },
-);
+function replaceDraft(value: AppointmentFilters): void {
+  Object.keys(draft).forEach((key) => delete draft[key as keyof AppointmentFilters]);
+  Object.assign(draft, value);
+}
+
+watch(() => props.filters, replaceDraft, { deep: true });
 
 watch(
   () => draft.mode,
@@ -30,7 +31,7 @@ watch(
 );
 
 function reset(): void {
-  Object.keys(draft).forEach((key) => delete draft[key as keyof AppointmentFilters]);
+  replaceDraft({});
   emit("reset");
 }
 </script>

@@ -8,6 +8,12 @@ import { useUiStore } from "../../stores/ui";
 import type { Appointment } from "../../types/domain";
 import TodayWorkspace from "./TodayWorkspace.vue";
 
+const { routerPush } = vi.hoisted(() => ({ routerPush: vi.fn() }));
+
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push: routerPush }),
+}));
+
 function appointment(overrides: Partial<Appointment>): Appointment {
   return {
     id: "appointment-1",
@@ -27,6 +33,7 @@ function appointment(overrides: Partial<Appointment>): Appointment {
 
 describe("TodayWorkspace", () => {
   afterEach(() => {
+    routerPush.mockReset();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -87,11 +94,37 @@ describe("TodayWorkspace", () => {
     });
     await flushPromises();
 
-    expect(wrapper.get(".metric--pending span").text()).toBe("待结场次");
-    expect(wrapper.get(".metric--pending strong").text()).toBe("3");
-    expect(wrapper.get(".metric--pending small").text()).toBe("已完成但未结算");
+    const pendingMetric = wrapper.get('button[aria-label="查看待结算预约"]');
+    expect(pendingMetric.get("span").text()).toBe("待结场次");
+    expect(pendingMetric.get("strong").text()).toBe("3");
+    expect(pendingMetric.get("small").text()).toBe("已完成但未结算");
+    await pendingMetric.trigger("click");
+    expect(routerPush).toHaveBeenCalledWith({
+      name: "appointments",
+      query: { progressStatus: "pending_settlement" },
+    });
     expect(wrapper.get(".metric--next strong").text()).toBe("待定时段");
     expect(wrapper.get(".metric--next small").text()).toContain("待定联系人");
+
+    wrapper.unmount();
+  });
+
+  it("does not render a duplicate appointment creation button in the lead section", async () => {
+    vi.spyOn(mockApi, "listAppointments").mockResolvedValue([]);
+    vi.spyOn(mockApi, "getDashboardSummary").mockResolvedValue({
+      todaySettledMinor: 0,
+      weekSettledMinor: 0,
+      pendingCount: 0,
+      nextAppointment: null,
+    });
+
+    const wrapper = mount(TodayWorkspace, {
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+
+    expect(wrapper.find(".today-lead__create").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("记一笔预约");
 
     wrapper.unmount();
   });

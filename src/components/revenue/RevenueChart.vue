@@ -4,7 +4,7 @@ import { GridComponent, LegendComponent, TooltipComponent } from "echarts/compon
 import { use } from "echarts/core";
 import type { ECElementEvent } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
-import { computed, onBeforeUnmount, onMounted, shallowRef } from "vue";
+import { computed, onBeforeUnmount, onMounted, shallowRef, useTemplateRef } from "vue";
 import VChart from "vue-echarts";
 import type { ReportGranularity, RevenuePoint } from "../../types/domain";
 
@@ -22,6 +22,8 @@ const emit = defineEmits<{
   periodSelect: [point: RevenuePoint];
 }>();
 
+const chartRef = useTemplateRef("chart");
+
 const reducedMotionQuery =
   typeof globalThis.matchMedia === "function"
     ? globalThis.matchMedia("(prefers-reduced-motion: reduce)")
@@ -35,6 +37,17 @@ function updateReducedMotion(): void {
 function handleChartClick(event: ECElementEvent): void {
   if (!props.drillable || event.componentType !== "series") return;
   const point = props.points[event.dataIndex];
+  if (point) emit("periodSelect", point);
+}
+
+function focusChart(): void {
+  if (!props.drillable) return;
+  chartRef.value?.focus();
+}
+
+function selectKeyboardPoint(): void {
+  if (!props.drillable) return;
+  const point = props.points.find((item) => item.appointmentCount > 0) ?? props.points[0];
   if (point) emit("periodSelect", point);
 }
 
@@ -132,13 +145,22 @@ const option = computed(() => ({
 </script>
 
 <template>
-  <VChart
+  <div
+    ref="chart"
     class="revenue-chart"
-    :option="option"
-    :init-options="{ renderer: 'canvas' }"
-    :autoresize="{ throttle: 120 }"
-    @click="handleChartClick"
-  />
+    :tabindex="drillable ? 0 : -1"
+    @pointerdown="focusChart"
+    @keydown.enter.prevent="selectKeyboardPoint"
+    @keydown.space.prevent="selectKeyboardPoint"
+  >
+    <VChart
+      class="revenue-chart__canvas"
+      :option="option"
+      :init-options="{ renderer: 'canvas' }"
+      :autoresize="{ throttle: 120 }"
+      @click="handleChartClick"
+    />
+  </div>
 </template>
 
 <style scoped>
@@ -146,5 +168,16 @@ const option = computed(() => ({
   width: 100%;
   height: 100%;
   min-height: 240px;
+}
+
+.revenue-chart__canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.revenue-chart:focus-visible {
+  border-radius: 8px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -3px;
 }
 </style>

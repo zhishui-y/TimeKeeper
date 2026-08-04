@@ -1,15 +1,21 @@
 <script setup lang="ts">
-import type { DeepReadonly } from "vue";
+import { computed, type DeepReadonly } from "vue";
 import type { Appointment } from "../../types/domain";
 import { formatCurrency, formatTimeRange, modeLabels } from "../../utils/formatters";
 import { appointmentProgressStatus } from "../../utils/appointmentProgress";
 import StatusBadge from "../common/StatusBadge.vue";
 
-defineProps<{
+const props = defineProps<{
   appointments: DeepReadonly<Appointment[]>;
   loading: boolean;
   error: string | null;
 }>();
+
+const visibleAppointments = computed(() =>
+  props.appointments.filter(
+    (appointment) => appointment.mode === "business" && appointment.serviceStatus !== "cancelled",
+  ),
+);
 </script>
 
 <template>
@@ -17,15 +23,19 @@ defineProps<{
     <header>
       <div>
         <span class="section-kicker">SCHEDULE</span>
-        <h3>当日预约情况</h3>
+        <h3>当日业务预约</h3>
       </div>
-      <span>{{ appointments.length }} 场</span>
+      <span>{{ visibleAppointments.length }} 场</span>
     </header>
 
     <div v-if="loading" class="loading-line" />
     <div v-if="error" class="error-banner" role="alert">{{ error }}</div>
-    <div v-if="appointments.length" class="day-appointments__list">
-      <article v-for="appointment in appointments" :key="appointment.id" class="day-appointment">
+    <div v-if="visibleAppointments.length" class="day-appointments__list">
+      <article
+        v-for="appointment in visibleAppointments"
+        :key="appointment.id"
+        class="day-appointment"
+      >
         <time class="day-appointment__time mono-number">
           {{ formatTimeRange(appointment.startsAt, appointment.endsAt) }}
         </time>
@@ -35,20 +45,21 @@ defineProps<{
           <small>{{ appointment.account?.accountName || "未使用账号" }}</small>
         </div>
         <div class="day-appointment__status">
-          <span class="day-appointment__mode" :class="`is-${appointment.mode}`">
+          <span class="day-appointment__mode">
             {{ modeLabels[appointment.mode] }}
           </span>
           <StatusBadge :progress-status="appointmentProgressStatus(appointment)" />
         </div>
         <div class="day-appointment__billing">
-          <strong v-if="appointment.mode === 'business'" class="mono-number">
+          <strong class="mono-number">
             {{ formatCurrency(appointment.amountMinor) }}
           </strong>
-          <span v-else>无需结算</span>
         </div>
       </article>
     </div>
-    <div v-else-if="!loading && !error" class="day-appointments__empty">当天没有预约</div>
+    <div v-else-if="!loading && !error" class="day-appointments__empty">
+      当天没有符合收益口径的业务预约
+    </div>
   </section>
 </template>
 
@@ -164,10 +175,6 @@ defineProps<{
   color: var(--brand-strong);
   font-size: 10px;
   font-weight: 700;
-}
-
-.day-appointment__mode.is-entertainment {
-  color: var(--blue);
 }
 
 .day-appointments__empty {

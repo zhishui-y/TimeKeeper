@@ -29,4 +29,31 @@ describe("AppointmentFiltersBar", () => {
     await wrapper.get("form").trigger("submit");
     expect(wrapper.emitted("apply")?.[0]?.[0]).not.toHaveProperty("progressStatus");
   });
+
+  it("clears stale draft fields when external filters are replaced", async () => {
+    const wrapper = mount(AppointmentFiltersBar, {
+      props: {
+        filters: {
+          from: "2026-08-03",
+          to: "2026-08-09",
+          mode: "business",
+          progressStatus: "pending_settlement",
+        },
+      },
+    });
+
+    await wrapper.setProps({ filters: { query: "阿水" } });
+
+    expect(wrapper.get<HTMLInputElement>('input[aria-label="开始日期"]').element.value).toBe("");
+    expect(wrapper.get<HTMLInputElement>('input[aria-label="结束日期"]').element.value).toBe("");
+    expect(
+      wrapper.get<HTMLSelectElement>('select[aria-label="预约模式"]').element.selectedIndex,
+    ).toBe(0);
+    expect(
+      wrapper.get<HTMLSelectElement>('select[aria-label="预约进度"]').element.selectedIndex,
+    ).toBe(0);
+    expect(
+      wrapper.get<HTMLInputElement>('input[placeholder="搜索联系人、内容或账号"]').element.value,
+    ).toBe("阿水");
+  });
 });
