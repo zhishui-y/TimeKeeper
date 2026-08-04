@@ -257,6 +257,29 @@ describe("AccountTable", () => {
     expect(input.attributes("disabled")).toBeDefined();
   });
 
+  it("leaves an empty weekly field visually blank", () => {
+    const wrapper = mount(AccountTable, {
+      props: {
+        profiles: [profiles[0]!],
+        selectedIds: [],
+        sortKey: null,
+        sortDirection: "asc",
+        reorderEnabled: true,
+        reorderDisabledReason: "",
+        usageDrafts: { "account-1": "" },
+        savingUsageIds: new Set<string>(),
+        columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+        clearingWeekly: false,
+      },
+    });
+
+    const input = wrapper.get('input[aria-label="编辑本周 账号一"]');
+    expect(input.element).toHaveProperty("value", "");
+    expect(input.attributes("placeholder")).toBeUndefined();
+    expect(input.attributes("title")).toBeUndefined();
+  });
+
   it("renders twelve resizable content columns including account and password", () => {
     const columnWidths = { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS, weekly: 240 };
     const wrapper = mount(AccountTable, {
