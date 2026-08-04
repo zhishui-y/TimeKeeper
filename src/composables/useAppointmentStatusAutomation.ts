@@ -1,6 +1,9 @@
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { onMounted, onUnmounted } from "vue";
-import { api, errorMessage } from "../api/client";
+import { api, errorMessage, isTauri } from "../api/client";
 import { useUiStore } from "../stores/ui";
+
+const STATUS_SYNCED_EVENT = "appointment-statuses-synced";
 
 interface AppointmentStatusAutomationOptions {
   intervalMs?: number;
@@ -11,6 +14,8 @@ export function useAppointmentStatusAutomation({
 }: AppointmentStatusAutomationOptions = {}) {
   const ui = useUiStore();
   let timer: ReturnType<typeof globalThis.setInterval> | undefined;
+  let unlisten: UnlistenFn | undefined;
+  let mounted = false;
   let syncing = false;
   let errorReported = false;
 
@@ -32,11 +37,26 @@ export function useAppointmentStatusAutomation({
   }
 
   onMounted(() => {
+    mounted = true;
+    if (isTauri) {
+      void listen<number>(STATUS_SYNCED_EVENT, ({ payload }) => {
+        if (payload > 0) ui.markDataChanged();
+      })
+        .then((stopListening) => {
+          if (mounted) unlisten = stopListening;
+          else stopListening();
+        })
+        .catch(() => {
+          // Native event delivery is an optimization; periodic command syncing remains authoritative.
+        });
+    }
     void sync();
     timer = globalThis.setInterval(() => void sync(), intervalMs);
   });
 
   onUnmounted(() => {
+    mounted = false;
+    unlisten?.();
     if (timer !== undefined) globalThis.clearInterval(timer);
   });
 

@@ -72,10 +72,17 @@ function loadStoredAccountTableColumnWidths(): AccountTableColumnWidths {
   try {
     const stored = globalThis.localStorage?.getItem(ACCOUNT_TABLE_WIDTHS_STORAGE_KEY);
     if (!stored) return { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS };
-    const widths = JSON.parse(stored) as AccountTableColumnWidths;
-    return accountTableColumnWidthsAreValid(widths)
-      ? widths
-      : { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS };
+    const parsed = JSON.parse(stored) as Partial<AccountTableColumnWidths>;
+    const widths = {
+      ...parsed,
+      accountName: parsed.accountName ?? DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS.accountName,
+      password: parsed.password ?? DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS.password,
+    } as AccountTableColumnWidths;
+    if (!accountTableColumnWidthsAreValid(widths)) {
+      return { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS };
+    }
+    storeAccountTableColumnWidths(widths);
+    return widths;
   } catch {
     return { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS };
   }
@@ -463,10 +470,26 @@ function syncAppointmentServiceStatuses(now: Date): number {
         : appointment.serviceStatus === "scheduled"
           ? "in_progress"
           : appointment.serviceStatus;
-    if (nextStatus === appointment.serviceStatus) return appointment;
+    const nextSettlementStatus =
+      nextStatus === "completed"
+        ? appointment.mode === "business"
+          ? "unsettled"
+          : "not_applicable"
+        : appointment.settlementStatus;
+    if (
+      nextStatus === appointment.serviceStatus &&
+      nextSettlementStatus === appointment.settlementStatus
+    ) {
+      return appointment;
+    }
 
     changedCount += 1;
-    return { ...appointment, serviceStatus: nextStatus, updatedAt: now.toISOString() };
+    return {
+      ...appointment,
+      serviceStatus: nextStatus,
+      settlementStatus: nextSettlementStatus,
+      updatedAt: now.toISOString(),
+    };
   });
   return changedCount;
 }

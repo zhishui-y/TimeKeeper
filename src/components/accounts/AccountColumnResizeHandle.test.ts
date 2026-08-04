@@ -22,11 +22,11 @@ describe("AccountColumnResizeHandle", () => {
 
     dispatchPointerEvent(handle.element, "pointerdown", 100, 1);
     dispatchPointerEvent(handle.element, "pointermove", -100, 1);
-    expect(wrapper.emitted("preview")).toEqual([["contactName", 72]]);
+    expect(wrapper.emitted("preview")).toEqual([["contactName", 48]]);
     expect(wrapper.emitted("commit")).toBeUndefined();
 
     dispatchPointerEvent(handle.element, "pointerup", -100, 1);
-    expect(wrapper.emitted("commit")).toEqual([["contactName", 72]]);
+    expect(wrapper.emitted("commit")).toEqual([["contactName", 48]]);
   });
 
   it("cancels an active drag with Escape and supports keyboard resizing", async () => {

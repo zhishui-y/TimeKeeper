@@ -1,4 +1,5 @@
 import type { AccountTableColumnWidths } from "../types/domain";
+import { MAX_RESIZABLE_TABLE_COLUMN_WIDTH, MIN_RESIZABLE_TABLE_COLUMN_WIDTH } from "./tableColumns";
 
 export type AccountTableColumnKey = keyof AccountTableColumnWidths;
 
@@ -8,6 +9,8 @@ export const ACCOUNT_TABLE_COLUMN_KEYS: readonly AccountTableColumnKey[] = [
   "characterName",
   "specialization",
   "gearScore",
+  "accountName",
+  "password",
   "currentScore",
   "highestScore",
   "scoreUpdatedAt",
@@ -21,6 +24,8 @@ export const DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS: AccountTableColumnWidths = {
   characterName: 86,
   specialization: 82,
   gearScore: 68,
+  accountName: 48,
+  password: 104,
   currentScore: 62,
   highestScore: 62,
   scoreUpdatedAt: 102,
@@ -29,21 +34,23 @@ export const DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS: AccountTableColumnWidths = {
 };
 
 export const MIN_ACCOUNT_TABLE_COLUMN_WIDTHS: AccountTableColumnWidths = {
-  contactName: 72,
-  server: 72,
-  characterName: 72,
-  specialization: 80,
-  gearScore: 60,
-  currentScore: 60,
-  highestScore: 60,
-  scoreUpdatedAt: 92,
-  weekly: 100,
-  notes: 100,
+  contactName: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  server: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  characterName: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  specialization: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  gearScore: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  accountName: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  password: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  currentScore: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  highestScore: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  scoreUpdatedAt: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  weekly: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  notes: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
 };
 
-export const MAX_ACCOUNT_TABLE_COLUMN_WIDTH = 480;
-// Selection, account copy, password controls, and sticky row actions.
-export const ACCOUNT_TABLE_FIXED_WIDTH = 58 + 40 + 104 + 108;
+export const MAX_ACCOUNT_TABLE_COLUMN_WIDTH = MAX_RESIZABLE_TABLE_COLUMN_WIDTH;
+// Selection controls and sticky row actions.
+export const ACCOUNT_TABLE_FIXED_WIDTH = 58 + 108;
 
 export function clampAccountTableColumnWidth(key: AccountTableColumnKey, width: number): number {
   return Math.min(

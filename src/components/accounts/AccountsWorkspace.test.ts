@@ -287,7 +287,7 @@ describe("AccountsWorkspace batch delete feedback", () => {
     });
     vi.spyOn(mockApi, "getSettings").mockResolvedValue({
       ...settingsFixture,
-      accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS, weekly: 220 },
+      accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS, accountName: 72 },
     });
     const updateWidths = vi
       .spyOn(mockApi, "updateAccountTableColumnWidths")
@@ -298,16 +298,16 @@ describe("AccountsWorkspace batch delete feedback", () => {
     });
     await flushPromises();
     const table = wrapper.findComponent(AccountTable);
-    expect(table.props("columnWidths").weekly).toBe(220);
+    expect(table.props("columnWidths").accountName).toBe(72);
 
-    table.vm.$emit("previewColumnWidth", "weekly", 248);
+    table.vm.$emit("previewColumnWidth", "accountName", 88);
     await wrapper.vm.$nextTick();
-    expect(table.props("columnWidths").weekly).toBe(248);
-    table.vm.$emit("commitColumnWidth", "weekly", 248);
+    expect(table.props("columnWidths").accountName).toBe(88);
+    table.vm.$emit("commitColumnWidth", "accountName", 88);
     await flushPromises();
     expect(updateWidths).toHaveBeenCalledWith({
       ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS,
-      weekly: 248,
+      accountName: 88,
     });
     expect(wrapper.text()).not.toContain("恢复默认列宽");
     wrapper.unmount();

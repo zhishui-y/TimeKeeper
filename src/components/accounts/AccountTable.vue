@@ -189,8 +189,8 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
           <col :style="{ width: `${columnWidths.characterName}px` }" />
           <col :style="{ width: `${columnWidths.specialization}px` }" />
           <col :style="{ width: `${columnWidths.gearScore}px` }" />
-          <col style="width: 40px" />
-          <col style="width: 104px" />
+          <col :style="{ width: `${columnWidths.accountName}px` }" />
+          <col :style="{ width: `${columnWidths.password}px` }" />
           <col :style="{ width: `${columnWidths.currentScore}px` }" />
           <col :style="{ width: `${columnWidths.highestScore}px` }" />
           <col :style="{ width: `${columnWidths.scoreUpdatedAt}px` }" />
@@ -329,8 +329,30 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
                 @cancel="cancelColumnResize"
               />
             </th>
-            <th>账号</th>
-            <th>密码</th>
+            <th class="resizable-header">
+              账号
+              <AccountColumnResizeHandle
+                column-key="accountName"
+                label="账号"
+                :width="columnWidths.accountName"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
+            <th class="resizable-header">
+              密码
+              <AccountColumnResizeHandle
+                column-key="password"
+                label="密码"
+                :width="columnWidths.password"
+                :disabled="savingColumnWidths"
+                @preview="previewColumnWidth"
+                @commit="commitColumnWidth"
+                @cancel="cancelColumnResize"
+              />
+            </th>
             <th class="resizable-header" :aria-sort="ariaSort('currentScore')">
               <button
                 class="sort-button"
@@ -610,6 +632,8 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
 
 .resizable-header {
   position: sticky;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .select-cell {
@@ -649,9 +673,11 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
 
 .sort-button {
   display: inline-flex;
+  max-width: calc(100% - 6px);
   align-items: center;
   gap: 3px;
   padding: 0;
+  overflow: hidden;
   border: 0;
   color: inherit;
   background: transparent;

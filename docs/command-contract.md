@@ -73,9 +73,11 @@ verifier，不触碰业务表或凭据表。
 `voiceChannel`。
 
 冲突检查排除取消预约与正在编辑的自身，只比较开始和结束都存在的记录；冲突只警告不阻止保存。
-跨天结束时间在规范化后进入次日。`sync_appointment_service_statuses` 使用北京时间且幂等；无结束
-时间的预约可自动开始但不自动完成。业务“已完成服务、未结算”投影为 `pending_settlement`，结算
-命令原子写入服务完成与已结算状态。
+跨天结束时间在规范化后进入次日。`sync_appointment_service_statuses` 使用北京时间且幂等；预约到达
+开始时间进入 `in_progress`，到达结束时间后，业务预约进入“服务完成 + 未结算”（统一投影为
+`pending_settlement`），娱乐预约进入 `completed + not_applicable`。无结束时间的预约可自动开始但不
+自动完成。桌面进程在入口解锁后每 30 秒执行同一同步逻辑，前端也保留即时与周期同步用于刷新页面；
+结算命令原子写入服务完成与已结算状态。
 
 联系人预设只取每个联系人最新的非取消预约，最多 10 条；可返回账号密码本身以便显示/复用，
 也保留 `sourceAppointmentId` 供 `copyFromAppointment` 协议使用。三种复制 command 都从 SQLite
@@ -147,4 +149,6 @@ Dashboard 只统计非取消业务预约的已结金额，待结数量只包含�
 
 `AppSettings` 不再包含 `autoLockMinutes`。入口锁没有空闲计时器；托盘恢复保持解锁，手动锁定和
 进程重启仍生效。表格列宽命令只更新各自字段并保留其余设置；角色数据服务器 URL 必须是无凭据、
-无 query、无 fragment 的绝对 HTTP(S) 基础 URL。
+无 query、无 fragment 的绝对 HTTP(S) 基础 URL。账号表格列宽包含 `accountName` 与 `password`；
+账号和预约表格的所有可调列统一允许 `48..=480` 像素，48 像素约为当前字号下两个中文字符加单元格
+内边距。

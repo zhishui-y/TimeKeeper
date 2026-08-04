@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { format } from "date-fns";
 import type { AppointmentInput } from "../types/domain";
 import { appointmentToInput } from "../utils/appointment";
+import { DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS } from "../utils/accountTableColumns";
 import { DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS } from "../utils/appointmentTableColumns";
+import { appointmentProgressStatus } from "../utils/appointmentProgress";
 import { mockApi } from "./mockClient";
 
 const allAppointmentDates = { from: "2000-01-01", to: "2100-12-31" } as const;
@@ -316,7 +318,7 @@ describe("browser mock API", () => {
     }
   });
 
-  it("automatically starts timed appointments and completes only those with an end time", async () => {
+  it("automatically starts timed appointments and completes each mode with its proper progress", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2099-08-08T10:00:00+08:00"));
     const current = await mockApi.createAppointment(
@@ -329,8 +331,15 @@ describe("browser mock API", () => {
       ...businessInput("2099-08-08", "10:00", "11:00", "结束待定", 8_800),
       endTime: null,
     });
+    const entertainment = await mockApi.createAppointment({
+      ...businessInput("2099-08-08", "10:00", "11:00", "娱乐完成", 0),
+      mode: "entertainment",
+      settlementStatus: "not_applicable",
+      rateNote: null,
+      amountMinor: null,
+    });
 
-    await expect(mockApi.syncAppointmentServiceStatuses()).resolves.toBeGreaterThanOrEqual(3);
+    await expect(mockApi.syncAppointmentServiceStatuses()).resolves.toBeGreaterThanOrEqual(4);
     await expect(mockApi.getAppointment(current.appointment.id)).resolves.toMatchObject({
       serviceStatus: "in_progress",
     });
@@ -340,12 +349,27 @@ describe("browser mock API", () => {
     await expect(mockApi.getAppointment(openEnded.appointment.id)).resolves.toMatchObject({
       serviceStatus: "in_progress",
     });
+    await expect(mockApi.getAppointment(entertainment.appointment.id)).resolves.toMatchObject({
+      serviceStatus: "in_progress",
+      settlementStatus: "not_applicable",
+    });
 
     vi.setSystemTime(new Date("2099-08-08T11:00:00+08:00"));
-    await expect(mockApi.syncAppointmentServiceStatuses()).resolves.toBe(1);
+    await expect(mockApi.syncAppointmentServiceStatuses()).resolves.toBe(2);
     await expect(mockApi.getAppointment(current.appointment.id)).resolves.toMatchObject({
       serviceStatus: "completed",
+      settlementStatus: "unsettled",
     });
+    expect(appointmentProgressStatus(await mockApi.getAppointment(current.appointment.id))).toBe(
+      "pending_settlement",
+    );
+    await expect(mockApi.getAppointment(entertainment.appointment.id)).resolves.toMatchObject({
+      serviceStatus: "completed",
+      settlementStatus: "not_applicable",
+    });
+    expect(
+      appointmentProgressStatus(await mockApi.getAppointment(entertainment.appointment.id)),
+    ).toBe("completed");
     await expect(mockApi.getAppointment(openEnded.appointment.id)).resolves.toMatchObject({
       serviceStatus: "in_progress",
     });
@@ -462,7 +486,7 @@ describe("browser mock API", () => {
     expect(localStorage.getItem("timekeeper.demo.accountTableColumnWidths")).toBe(
       JSON.stringify(widths),
     );
-    await expect(mockApi.updateAccountTableColumnWidths({ ...widths, weekly: 99 })).rejects.toThrow(
+    await expect(mockApi.updateAccountTableColumnWidths({ ...widths, weekly: 47 })).rejects.toThrow(
       "列宽超出允许范围",
     );
 
@@ -481,7 +505,7 @@ describe("browser mock API", () => {
       JSON.stringify(widths),
     );
     await expect(
-      mockApi.updateAppointmentTableColumnWidths({ ...widths, account: 149 }),
+      mockApi.updateAppointmentTableColumnWidths({ ...widths, account: 47 }),
     ).rejects.toThrow("列宽超出允许范围");
 
     await mockApi.updateAppointmentTableColumnWidths(previous);
@@ -516,6 +540,29 @@ describe("browser mock API", () => {
       notes: 88,
     });
     localStorage.removeItem("timekeeper.demo.appointmentTableColumnWidths");
+  });
+
+  it("adds account and password widths to legacy browser settings", async () => {
+    const current = (await mockApi.getSettings()).accountTableColumnWidths;
+    const legacyWidths: Partial<typeof current> = { ...current };
+    delete legacyWidths.accountName;
+    delete legacyWidths.password;
+    localStorage.setItem(
+      "timekeeper.demo.accountTableColumnWidths",
+      JSON.stringify({ ...legacyWidths, weekly: 224 }),
+    );
+    vi.resetModules();
+
+    const { mockApi: migratedMockApi } = await import("./mockClient");
+    await expect(migratedMockApi.getSettings()).resolves.toMatchObject({
+      accountTableColumnWidths: {
+        ...legacyWidths,
+        accountName: DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS.accountName,
+        password: DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS.password,
+        weekly: 224,
+      },
+    });
+    localStorage.removeItem("timekeeper.demo.accountTableColumnWidths");
   });
 
   it("preserves the first weekly usage marker then clears at China Monday", async () => {

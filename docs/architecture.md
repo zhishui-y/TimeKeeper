@@ -49,6 +49,9 @@ Vue 采用 Composition API、`<script setup lang="ts">`、Pinia 与 Vue Router�
 加载、分页、选择、写入副作用与反馈计时由对应 composable/store 管理；纯日期、格式化和统一进度
 投影留在 utility。组件通过 typed props/emits 通信，不直接执行 SQL 或访问正式数据目录。
 
+预约状态由 Rust 以北京时间落库推进：应用解锁后后台任务周期同步，前端 composable 监听变更事件
+并保留 command 轮询兜底。业务预约结束后保持未结算并投影为待结算，娱乐预约结束后直接完成。
+
 | Surface                 | Responsibility                                                              |
 | ----------------------- | --------------------------------------------------------------------------- |
 | `App.vue`               | 只启动入口状态和选择入口页/已认证壳层                                       |

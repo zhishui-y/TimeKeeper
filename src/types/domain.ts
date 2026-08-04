@@ -250,6 +250,8 @@ export interface AccountTableColumnWidths {
   characterName: number;
   specialization: number;
   gearScore: number;
+  accountName: number;
+  password: number;
   currentScore: number;
   highestScore: number;
   scoreUpdatedAt: number;

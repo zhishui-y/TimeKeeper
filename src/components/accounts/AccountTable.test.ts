@@ -257,7 +257,7 @@ describe("AccountTable", () => {
     expect(input.attributes("disabled")).toBeDefined();
   });
 
-  it("renders ten resizable content columns and keeps weekly input disabled during clearing", () => {
+  it("renders twelve resizable content columns including account and password", () => {
     const columnWidths = { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS, weekly: 240 };
     const wrapper = mount(AccountTable, {
       props: {
@@ -275,13 +275,13 @@ describe("AccountTable", () => {
       },
     });
 
-    expect(wrapper.findAll('button[aria-label^="调整"]')).toHaveLength(10);
+    expect(wrapper.findAll('button[aria-label^="调整"]')).toHaveLength(12);
     expect(wrapper.get("table").attributes("style")).toContain(
       `min-width: ${accountTableTotalWidth(columnWidths)}px`,
     );
     expect(wrapper.get('input[aria-label="编辑本周 账号一"]').attributes("disabled")).toBeDefined();
-    expect(wrapper.find('th:nth-child(7) button[aria-label^="调整"]').exists()).toBe(false);
-    expect(wrapper.find('th:nth-child(8) button[aria-label^="调整"]').exists()).toBe(false);
+    expect(wrapper.get('th:nth-child(7) button[aria-label="调整账号列宽"]')).toBeTruthy();
+    expect(wrapper.get('th:nth-child(8) button[aria-label="调整密码列宽"]')).toBeTruthy();
     expect(wrapper.find('th:last-child button[aria-label^="调整"]').exists()).toBe(false);
   });
 });

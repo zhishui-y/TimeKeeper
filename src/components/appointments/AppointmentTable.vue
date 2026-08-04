@@ -348,6 +348,8 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
 
 .resizable-header {
   position: sticky;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .cell-title,

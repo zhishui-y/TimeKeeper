@@ -27,6 +27,16 @@ fn default_appointment_voice_column_width() -> u32 {
     88
 }
 
+fn default_account_name_column_width() -> u32 {
+    48
+}
+
+fn default_account_password_column_width() -> u32 {
+    104
+}
+
+const MIN_RESIZABLE_TABLE_COLUMN_WIDTH: u32 = 48;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountTableColumnWidths {
@@ -35,6 +45,10 @@ pub struct AccountTableColumnWidths {
     pub character_name: u32,
     pub specialization: u32,
     pub gear_score: u32,
+    #[serde(default = "default_account_name_column_width")]
+    pub account_name: u32,
+    #[serde(default = "default_account_password_column_width")]
+    pub password: u32,
     pub current_score: u32,
     pub highest_score: u32,
     pub score_updated_at: u32,
@@ -50,6 +64,8 @@ impl Default for AccountTableColumnWidths {
             character_name: 86,
             specialization: 82,
             gear_score: 68,
+            account_name: default_account_name_column_width(),
+            password: default_account_password_column_width(),
             current_score: 62,
             highest_score: 62,
             score_updated_at: 102,
@@ -62,16 +78,42 @@ impl Default for AccountTableColumnWidths {
 impl AccountTableColumnWidths {
     fn validate(&self) -> Result<(), SettingsError> {
         let widths = [
-            ("联系人", self.contact_name, 72),
-            ("服务器", self.server, 72),
-            ("角色名", self.character_name, 72),
-            ("职业 / 心法", self.specialization, 80),
-            ("装分", self.gear_score, 60),
-            ("当前分", self.current_score, 60),
-            ("最高分", self.highest_score, 60),
-            ("更新日期", self.score_updated_at, 92),
-            ("本周", self.weekly, 100),
-            ("备注", self.notes, 100),
+            (
+                "联系人",
+                self.contact_name,
+                MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+            ),
+            ("服务器", self.server, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
+            (
+                "角色名",
+                self.character_name,
+                MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+            ),
+            (
+                "职业 / 心法",
+                self.specialization,
+                MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+            ),
+            ("装分", self.gear_score, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
+            ("账号", self.account_name, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
+            ("密码", self.password, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
+            (
+                "当前分",
+                self.current_score,
+                MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+            ),
+            (
+                "最高分",
+                self.highest_score,
+                MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+            ),
+            (
+                "更新日期",
+                self.score_updated_at,
+                MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+            ),
+            ("本周", self.weekly, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
+            ("备注", self.notes, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
         ];
         for (label, width, minimum) in widths {
             if !(minimum..=480).contains(&width) {
@@ -121,16 +163,24 @@ impl Default for AppointmentTableColumnWidths {
 impl AppointmentTableColumnWidths {
     fn validate(&self) -> Result<(), SettingsError> {
         let widths = [
-            ("日期", self.service_date, 60),
-            ("时间", self.time_range, 88),
-            ("联系人", self.contact_name, 72),
-            ("内容", self.content, 100),
-            ("账号", self.account, 150),
-            ("语音", self.voice, 72),
-            ("模式", self.mode, 56),
-            ("进度", self.service_status, 74),
-            ("金额", self.amount, 64),
-            ("备注", self.notes, 58),
+            ("日期", self.service_date, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
+            ("时间", self.time_range, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
+            (
+                "联系人",
+                self.contact_name,
+                MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+            ),
+            ("内容", self.content, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
+            ("账号", self.account, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
+            ("语音", self.voice, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
+            ("模式", self.mode, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
+            (
+                "进度",
+                self.service_status,
+                MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+            ),
+            ("金额", self.amount, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
+            ("备注", self.notes, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
         ];
         for (label, width, minimum) in widths {
             if !(minimum..=480).contains(&width) {
@@ -570,6 +620,27 @@ mod tests {
     }
 
     #[test]
+    fn loads_legacy_account_widths_with_account_and_password_defaults() {
+        let widths: AccountTableColumnWidths = serde_json::from_value(serde_json::json!({
+            "contactName": 90,
+            "server": 86,
+            "characterName": 86,
+            "specialization": 82,
+            "gearScore": 68,
+            "currentScore": 62,
+            "highestScore": 62,
+            "scoreUpdatedAt": 102,
+            "weekly": 224,
+            "notes": 160
+        }))
+        .unwrap();
+
+        assert_eq!(widths.account_name, default_account_name_column_width());
+        assert_eq!(widths.password, default_account_password_column_width());
+        assert_eq!(widths.weekly, 224);
+    }
+
+    #[test]
     fn validates_normalizes_and_persists_role_data_server_url() {
         let dir = test_dir("role-data-server-url");
         let state = SettingsState::load(&dir).unwrap();
@@ -636,7 +707,7 @@ mod tests {
         );
 
         let invalid = AccountTableColumnWidths {
-            weekly: 99,
+            weekly: 47,
             ..AccountTableColumnWidths::default()
         };
         assert!(state.update_account_table_column_widths(invalid).is_err());
@@ -679,7 +750,7 @@ mod tests {
         );
 
         let invalid = AppointmentTableColumnWidths {
-            voice: 71,
+            voice: 47,
             ..AppointmentTableColumnWidths::default()
         };
         assert!(

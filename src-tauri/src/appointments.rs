@@ -9,7 +9,7 @@ use chrono::{
 };
 use futures_util::TryStreamExt;
 use sqlx::{QueryBuilder, Row, Sqlite, Transaction, sqlite::SqliteRow};
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use uuid::Uuid;
 
 use crate::{
@@ -38,6 +38,8 @@ const DEFAULT_PAGE_SIZE: i64 = 100;
 const MAX_PAGE_SIZE: i64 = 200;
 const DELETE_CHUNK_SIZE: usize = 500;
 const SELECTION_TTL_MINUTES: i64 = 10;
+const STATUS_SYNC_INTERVAL_SECONDS: u64 = 30;
+const STATUS_SYNCED_EVENT: &str = "appointment-statuses-synced";
 const APPOINTMENT_WITH_CREDENTIAL_SELECT: &str =
     "SELECT a.id, a.service_date, a.starts_at, a.ends_at, a.contact_name, a.content,
             a.mode, a.service_status, a.settlement_status,
@@ -1759,6 +1761,12 @@ pub(crate) async fn sync_appointment_service_statuses_impl(
                WHEN ends_at IS NOT NULL AND ends_at <= ? THEN 'completed'
                ELSE 'in_progress'
              END,
+             settlement_status = CASE
+               WHEN ends_at IS NOT NULL AND ends_at <= ? AND mode = 'business' THEN 'unsettled'
+               WHEN ends_at IS NOT NULL AND ends_at <= ? AND mode = 'entertainment'
+                 THEN 'not_applicable'
+               ELSE settlement_status
+             END,
              updated_at = ?
          WHERE service_status IN ('scheduled', 'in_progress')
            AND starts_at IS NOT NULL
@@ -1770,6 +1778,8 @@ pub(crate) async fn sync_appointment_service_statuses_impl(
          RETURNING *",
     )
     .bind(&local_time)
+    .bind(&local_time)
+    .bind(&local_time)
     .bind(Utc::now().to_rfc3339())
     .bind(&local_time)
     .bind(&local_time)
@@ -1778,6 +1788,65 @@ pub(crate) async fn sync_appointment_service_statuses_impl(
     .map_err(db_error)?;
 
     rows.iter().map(appointment_from_row).collect()
+}
+
+pub fn spawn_appointment_status_sync_task<R: Runtime>(app: AppHandle<R>) {
+    let (access, database, notifications, backup) = {
+        let Some(access) = app.try_state::<AppAccessState>() else {
+            return;
+        };
+        let Some(database) = app.try_state::<Database>() else {
+            return;
+        };
+        let Some(notifications) = app.try_state::<NotificationState>() else {
+            return;
+        };
+        let Some(backup) = app.try_state::<BackupState>() else {
+            return;
+        };
+        (
+            AppAccessState::clone(access.inner()),
+            Database::clone(database.inner()),
+            NotificationState::clone(notifications.inner()),
+            BackupState::clone(backup.inner()),
+        )
+    };
+
+    tauri::async_runtime::spawn(async move {
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(STATUS_SYNC_INTERVAL_SECONDS));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut error_reported = false;
+        loop {
+            interval.tick().await;
+            if access.require_unlocked().is_err() {
+                continue;
+            }
+
+            let _operation_guard = backup.lock_data_operation().await;
+            let Some(offset) = FixedOffset::east_opt(8 * 60 * 60) else {
+                continue;
+            };
+            let now = Utc::now().with_timezone(&offset).naive_local();
+            match sync_appointment_service_statuses_impl(&database, now).await {
+                Ok(changed) => {
+                    error_reported = false;
+                    if changed.is_empty() {
+                        continue;
+                    }
+                    for appointment in &changed {
+                        sync_notification(&app, &notifications, appointment);
+                    }
+                    let _ = app.emit(STATUS_SYNCED_EVENT, changed.len());
+                }
+                Err(error) if !error_reported => {
+                    eprintln!("automatic appointment status sync failed: {error}");
+                    error_reported = true;
+                }
+                Err(_) => {}
+            }
+        }
+    });
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -2341,6 +2410,80 @@ mod tests {
             assert_eq!(settled.service_status, ServiceStatus::Completed);
             assert_eq!(settled.settlement_status, SettlementStatus::Settled);
             assert_eq!(settled.amount_minor, Some(0));
+        });
+    }
+
+    #[test]
+    fn timed_appointments_advance_to_mode_specific_completion_states() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let business =
+                create_appointment_impl(&database, business_input("2026-08-08", "10:00", "11:00"))
+                    .await
+                    .unwrap()
+                    .appointment;
+            let mut entertainment_input = business_input("2026-08-08", "10:00", "11:00");
+            entertainment_input.mode = AppointmentMode::Entertainment;
+            entertainment_input.settlement_status = SettlementStatus::NotApplicable;
+            entertainment_input.rate_note = None;
+            entertainment_input.amount_minor = None;
+            let entertainment = create_appointment_impl(&database, entertainment_input)
+                .await
+                .unwrap()
+                .appointment;
+
+            assert!(
+                sync_appointment_service_statuses_impl(
+                    &database,
+                    NaiveDate::from_ymd_opt(2026, 8, 8)
+                        .unwrap()
+                        .and_hms_opt(9, 59, 59)
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .is_empty()
+            );
+
+            let started = sync_appointment_service_statuses_impl(
+                &database,
+                NaiveDate::from_ymd_opt(2026, 8, 8)
+                    .unwrap()
+                    .and_hms_opt(10, 0, 0)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(started.len(), 2);
+            assert!(
+                started
+                    .iter()
+                    .all(|appointment| appointment.service_status == ServiceStatus::InProgress)
+            );
+
+            let completed = sync_appointment_service_statuses_impl(
+                &database,
+                NaiveDate::from_ymd_opt(2026, 8, 8)
+                    .unwrap()
+                    .and_hms_opt(11, 0, 0)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(completed.len(), 2);
+
+            let business = get_appointment_impl(&database, &business.id).await.unwrap();
+            assert_eq!(business.service_status, ServiceStatus::Completed);
+            assert_eq!(business.settlement_status, SettlementStatus::Unsettled);
+
+            let entertainment = get_appointment_impl(&database, &entertainment.id)
+                .await
+                .unwrap();
+            assert_eq!(entertainment.service_status, ServiceStatus::Completed);
+            assert_eq!(
+                entertainment.settlement_status,
+                SettlementStatus::NotApplicable
+            );
         });
     }
 

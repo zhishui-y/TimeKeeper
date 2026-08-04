@@ -1,4 +1,5 @@
 import type { AppointmentTableColumnWidths } from "../types/domain";
+import { MAX_RESIZABLE_TABLE_COLUMN_WIDTH, MIN_RESIZABLE_TABLE_COLUMN_WIDTH } from "./tableColumns";
 
 export type AppointmentTableColumnKey = keyof AppointmentTableColumnWidths;
 
@@ -29,19 +30,19 @@ export const DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS: AppointmentTableColumnWidt
 };
 
 export const MIN_APPOINTMENT_TABLE_COLUMN_WIDTHS: AppointmentTableColumnWidths = {
-  serviceDate: 60,
-  timeRange: 88,
-  contactName: 72,
-  content: 100,
-  account: 150,
-  voice: 72,
-  mode: 56,
-  serviceStatus: 74,
-  amount: 64,
-  notes: 58,
+  serviceDate: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  timeRange: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  contactName: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  content: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  account: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  voice: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  mode: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  serviceStatus: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  amount: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  notes: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
 };
 
-export const MAX_APPOINTMENT_TABLE_COLUMN_WIDTH = 480;
+export const MAX_APPOINTMENT_TABLE_COLUMN_WIDTH = MAX_RESIZABLE_TABLE_COLUMN_WIDTH;
 export const APPOINTMENT_TABLE_FIXED_WIDTH = 44 + 112;
 
 export function clampAppointmentTableColumnWidth(

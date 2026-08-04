@@ -130,6 +130,7 @@ pub fn run() {
             app.manage(account_role_data_refresh);
             setup_tray(app).map_err(setup_error)?;
             backup::spawn_automatic_backup_task(app.handle().clone());
+            appointments::spawn_appointment_status_sync_task(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
