@@ -282,7 +282,13 @@ function appointmentTitle(appointment: Appointment): string {
   --event-ink: #365d70;
 }
 
-.schedule-chip--in_progress,
+.schedule-chip--in_progress {
+  --event-accent: var(--accent);
+  --event-background: var(--accent-soft);
+  --event-border: var(--accent-border);
+  --event-ink: var(--accent-strong);
+}
+
 .schedule-chip--pending_settlement {
   --event-accent: var(--amber);
   --event-background: var(--amber-soft);

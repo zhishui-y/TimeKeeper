@@ -361,7 +361,13 @@ function move(direction: "prev" | "next" | "today"): void {
   --event-ink: #365d70;
 }
 
-.calendar-board__canvas :deep(.appointment-event--in_progress),
+.calendar-board__canvas :deep(.appointment-event--in_progress) {
+  --event-accent: var(--accent);
+  --event-background: var(--accent-soft);
+  --event-border: var(--accent-border);
+  --event-ink: var(--accent-strong);
+}
+
 .calendar-board__canvas :deep(.appointment-event--pending_settlement) {
   --event-accent: var(--amber);
   --event-background: var(--amber-soft);
@@ -417,6 +423,11 @@ function move(direction: "prev" | "next" | "today"): void {
 .calendar-board__canvas :deep(.appointment-event--pending_settlement .fc-event-progress) {
   color: #815414;
   background: color-mix(in srgb, var(--amber-soft) 82%, var(--surface));
+}
+
+.calendar-board__canvas :deep(.appointment-event--in_progress .fc-event-progress) {
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent-soft) 84%, var(--surface));
 }
 
 .calendar-board__canvas :deep(.appointment-event--completed .fc-event-progress) {

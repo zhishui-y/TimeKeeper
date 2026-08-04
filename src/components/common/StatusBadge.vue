@@ -47,7 +47,12 @@ const label = computed(() => appointmentProgressStatusLabels[props.progressStatu
   background: var(--blue-soft);
 }
 
-.badge--in_progress,
+.badge--in_progress {
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
 .badge--pending_settlement {
   border-color: var(--amber-border);
   color: var(--amber);

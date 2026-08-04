@@ -144,9 +144,9 @@ onBeforeUnmount(() => {
 }
 
 .calendar-legend .legend-item--in-progress {
-  border-color: var(--amber-border);
-  color: #815414;
-  background: var(--amber-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
 }
 
 .calendar-legend .legend-item--next {
