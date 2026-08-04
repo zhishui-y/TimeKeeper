@@ -32,6 +32,7 @@ function appointment(serviceStatus: Appointment["serviceStatus"] = "scheduled"):
     serviceStatus,
     settlementStatus: "unsettled",
     account: {
+      source: "embedded",
       specialization: "冰心",
       gearScore: "19.8万",
       server: "梦江南",
@@ -83,6 +84,7 @@ describe("AppointmentsWorkspace", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
     document.body.innerHTML = "";
   });
 
@@ -119,6 +121,35 @@ describe("AppointmentsWorkspace", () => {
       ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS,
       content: 208,
     });
+    wrapper.unmount();
+  });
+
+  it("opens the table copy as an unsaved today draft without calling duplicate", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-03T16:30:00Z"));
+    const target = appointment();
+    vi.spyOn(mockApi, "listAppointmentPage").mockResolvedValue(appointmentPage([target]));
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
+    const duplicate = vi.spyOn(mockApi, "duplicateAppointment");
+    const pinia = createPinia();
+    const wrapper = mount(AppointmentsWorkspace, { global: { plugins: [pinia, router] } });
+    await flushPromises();
+
+    await wrapper.get('button[aria-label="复制预约"]').trigger("click");
+
+    const ui = useUiStore(pinia);
+    expect(duplicate).not.toHaveBeenCalled();
+    expect(ui.dataRevision).toBe(0);
+    expect(ui.activeAppointment).toBeNull();
+    expect(ui.appointmentDraftSeed).toEqual({
+      sourceAppointmentId: target.id,
+      input: expect.objectContaining({
+        serviceDate: "2026-08-04",
+        serviceStatus: "scheduled",
+        settlementStatus: "unsettled",
+      }),
+    });
+    expect(ui.appointmentDrawerOpen).toBe(true);
     wrapper.unmount();
   });
 

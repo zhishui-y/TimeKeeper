@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BriefcaseBusiness, Gamepad2, Save, Trash2, X } from "@lucide/vue";
+import { BriefcaseBusiness, CheckCircle2, Copy, Gamepad2, Save, Trash2, X } from "@lucide/vue";
 import { computed, useTemplateRef } from "vue";
 import AppointmentAccountFields from "./AppointmentAccountFields.vue";
 import AppointmentContactFields from "./AppointmentContactFields.vue";
@@ -8,7 +8,13 @@ import {
   type AppointmentAccountDraft,
 } from "../../composables/useAppointmentDraft";
 import { useModalFocus } from "../../composables/useModalFocus";
-import type { AccountProfile, Appointment, AppointmentInput } from "../../types/domain";
+import type {
+  AccountProfile,
+  Appointment,
+  AppointmentDraftSeed,
+  AppointmentInput,
+} from "../../types/domain";
+import { todayInChina } from "../../utils/appointment";
 import {
   appointmentProgressStatusLabels,
   appointmentProgressStatusesForMode,
@@ -28,6 +34,7 @@ const props = withDefaults(
   defineProps<{
     open: boolean;
     appointment: Appointment | null;
+    draftSeed?: AppointmentDraftSeed | null;
     initialFocus?: "default" | "amount";
     requestedDate: string;
     requestedStartTime: string | null;
@@ -37,12 +44,19 @@ const props = withDefaults(
     saving?: boolean;
     deleting?: boolean;
   }>(),
-  { accountsLoading: false, deleting: false, initialFocus: "default", saving: false },
+  {
+    accountsLoading: false,
+    deleting: false,
+    draftSeed: null,
+    initialFocus: "default",
+    saving: false,
+  },
 );
 
 const emit = defineEmits<{
   close: [];
   delete: [];
+  duplicate: [seed: AppointmentDraftSeed];
   save: [input: AppointmentInput];
   copyPassword: [appointmentId: string];
 }>();
@@ -62,9 +76,11 @@ const {
   selectMode,
   setCurrentTime,
   submit,
+  duplicateAsToday,
 } = useAppointmentDraft({
   open: () => props.open,
   appointment: () => props.appointment,
+  seed: () => props.draftSeed,
   requestedDate: () => props.requestedDate,
   requestedStartTime: () => props.requestedStartTime,
   defaultReminderMinutes: () => props.defaultReminderMinutes,
@@ -89,6 +105,16 @@ const accountModel = computed<AppointmentAccountDraft>({
 function close(): void {
   clearSecrets();
   emit("close");
+}
+
+function submitWithProgressStatus(status: "completed" | "cancelled"): void {
+  progressStatus.value = status;
+  submit();
+}
+
+function duplicate(): void {
+  if (!props.appointment || props.saving || props.deleting) return;
+  emit("duplicate", duplicateAsToday(todayInChina(), props.appointment.id));
 }
 
 function updateVoiceChannel(value: string): void {
@@ -358,26 +384,67 @@ useModalFocus({
           </form>
 
           <footer class="drawer__footer">
-            <button
-              v-if="appointment"
-              class="button button--danger"
-              type="button"
-              :disabled="saving || deleting"
-              @click="emit('delete')"
-            >
-              <Trash2 :size="16" />
-              {{ deleting ? "删除中…" : "删除预约" }}
-            </button>
+            <div v-if="appointment" class="drawer__footer-actions">
+              <button
+                class="button button--danger"
+                type="button"
+                aria-label="删除预约"
+                :disabled="saving || deleting"
+                @click="emit('delete')"
+              >
+                <Trash2 :size="16" />
+                {{ deleting ? "删除中…" : "删除" }}
+              </button>
+              <button
+                class="button"
+                type="button"
+                aria-label="复制为今日预约"
+                :disabled="saving || deleting"
+                @click="duplicate"
+              >
+                <Copy :size="16" />
+                复制
+              </button>
+              <button
+                class="button drawer__complete-action"
+                type="button"
+                aria-label="完成预约"
+                :disabled="saving || deleting || progressStatus === 'completed'"
+                @click="submitWithProgressStatus('completed')"
+              >
+                <CheckCircle2 :size="16" />
+                完成
+              </button>
+              <button
+                class="button button--danger"
+                type="button"
+                aria-label="取消预约"
+                :disabled="saving || deleting || progressStatus === 'cancelled'"
+                @click="submitWithProgressStatus('cancelled')"
+              >
+                <X :size="16" />
+                取消
+              </button>
+            </div>
             <div class="drawer__footer-actions">
-              <button class="button" type="button" @click="close">取消</button>
+              <button
+                class="button"
+                type="button"
+                aria-label="关闭预约编辑"
+                :disabled="saving || deleting"
+                @click="close"
+              >
+                关闭
+              </button>
               <button
                 class="button button--primary"
                 type="submit"
                 form="appointment-form"
+                aria-label="保存预约"
                 :disabled="saving || deleting"
               >
                 <Save :size="16" />
-                {{ saving ? "保存中…" : "保存预约" }}
+                {{ saving ? "保存中…" : "保存" }}
               </button>
             </div>
           </footer>
@@ -456,7 +523,22 @@ useModalFocus({
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.drawer__footer-actions:last-child {
   margin-left: auto;
+}
+
+.drawer__complete-action {
+  border-color: color-mix(in srgb, var(--brand) 42%, var(--line));
+  color: var(--brand-strong);
+  background: color-mix(in srgb, var(--brand-soft) 58%, var(--surface));
+}
+
+.drawer__complete-action:hover:not(:disabled) {
+  border-color: var(--brand);
+  color: var(--brand-strong);
+  background: var(--brand-soft);
 }
 
 .mode-switch {

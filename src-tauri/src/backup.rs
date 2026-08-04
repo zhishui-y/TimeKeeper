@@ -1141,7 +1141,7 @@ async fn validate_v2_database_contract(
     expected_pool.close().await;
     if actual_schema != expected_schema {
         return Err(BackupError::InvalidBackup(
-            "数据库结构与当前 TimeKeeper migration 0005 不一致".into(),
+            "数据库结构与当前 TimeKeeper migration 0006 不一致".into(),
         ));
     }
 
@@ -1235,6 +1235,12 @@ async fn validate_v2_database_rows(connection: &mut SqliteConnection) -> Result<
         let account_server: Option<String> = row
             .try_get("account_server")
             .map_err(database_schema_error)?;
+        let account_source: Option<String> = row
+            .try_get("account_source")
+            .map_err(database_schema_error)?;
+        let account_character_name: Option<String> = row
+            .try_get("account_character_name")
+            .map_err(database_schema_error)?;
         let service_date = NaiveDate::parse_from_str(&appointment.service_date, "%Y-%m-%d")
             .map_err(|_| {
                 BackupError::InvalidBackup(format!("预约 {} 的服务日期无效", appointment.id))
@@ -1258,8 +1264,14 @@ async fn validate_v2_database_rows(connection: &mut SqliteConnection) -> Result<
                     account_specialization.is_some()
                         || account_gear_score.is_some()
                         || account_server.is_some()
+                        || account_source.is_some()
+                        || account_character_name.is_some()
                 }
             }
+            || matches!(account_source.as_deref(), Some("embedded"))
+                && account_character_name.is_some()
+            || account_name.is_some()
+                && !matches!(account_source.as_deref(), Some("profile" | "embedded"))
         {
             return Err(BackupError::InvalidBackup(format!(
                 "预约 {} 的字段值不符合当前 TimeKeeper 契约",
@@ -2722,7 +2734,7 @@ mod tests {
             .fetch_one(upgraded.pool())
             .await
             .unwrap();
-            assert_eq!(latest_version, 5);
+            assert_eq!(latest_version, 6);
             assert_eq!(queued, 1);
             upgraded.pool().close().await;
         });
@@ -3402,6 +3414,17 @@ mod tests {
             assert_eq!(stored.service_date, "2026-03-05");
             assert_eq!(stored.starts_at.as_deref(), Some("2026-03-05T00:00:00"));
             assert_eq!(stored.ends_at.as_deref(), Some("2026-03-05T01:00:00"));
+            assert_eq!(
+                stored.account.as_ref().map(|account| account.source),
+                Some(crate::models::AppointmentAccountSource::Embedded)
+            );
+            assert_eq!(
+                stored
+                    .account
+                    .as_ref()
+                    .and_then(|account| account.character_name.as_deref()),
+                None
+            );
 
             let duplicate =
                 duplicate_appointment_impl(&database, &write.record_id, Some("2026-03-12".into()))
@@ -3453,6 +3476,13 @@ mod tests {
             assert_eq!(
                 restored_duplicate.starts_at.as_deref(),
                 Some("2026-03-12T00:00:00")
+            );
+            assert_eq!(
+                restored_import
+                    .account
+                    .as_ref()
+                    .map(|account| account.source),
+                Some(crate::models::AppointmentAccountSource::Embedded)
             );
             restored_database.pool().close().await;
         });

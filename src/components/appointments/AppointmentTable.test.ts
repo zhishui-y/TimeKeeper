@@ -19,6 +19,8 @@ function appointment(withAccount = true, overrides: Partial<Appointment> = {}): 
     settlementStatus: "unsettled",
     account: withAccount
       ? {
+          source: "profile",
+          characterName: "唯满侠",
           specialization: "冰心",
           gearScore: "19.8万",
           server: "梦江南",
@@ -69,7 +71,7 @@ describe("AppointmentTable", () => {
       .findAll(".appointment-account-summary__line");
     expect(accountLines[0]!.text()).toBe("冰心·19.8万");
     expect(accountLines[0]!.findAll("button")).toHaveLength(0);
-    expect(accountLines[1]!.text()).toBe("梦江南");
+    expect(accountLines[1]!.text()).toBe("梦江南·唯满侠··");
     expect(accountLines[1]!.findAll("button")).toHaveLength(2);
     expect(accountLines[1]!.text()).not.toContain("demo-account");
     expect(accountLines[1]!.text()).not.toContain("••••••");

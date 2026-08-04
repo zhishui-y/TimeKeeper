@@ -1,5 +1,41 @@
 import { addDays, format, parseISO } from "date-fns";
-import type { Appointment, AppointmentInput } from "../types/domain";
+import type { Appointment, AppointmentDraftSeed, AppointmentInput } from "../types/domain";
+
+export function todayInChina(now = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
+function snapshotAccountInput(
+  appointment: Appointment,
+  credential: "keep" | "copy",
+): AppointmentInput["account"] {
+  const account = appointment.account;
+  if (!account) return null;
+  return {
+    kind: "snapshot",
+    source: account.source,
+    characterName: account.characterName ?? null,
+    details: {
+      accountName: account.accountName,
+      server: account.server,
+      specialization: account.specialization,
+      gearScore: account.gearScore,
+    },
+    credential:
+      credential === "keep"
+        ? { kind: "keep" }
+        : account.password
+          ? { kind: "copyFromAppointment", sourceAppointmentId: appointment.id }
+          : { kind: "none" },
+  };
+}
 
 export function appointmentToInput(appointment: Appointment): AppointmentInput {
   return {
@@ -11,18 +47,7 @@ export function appointmentToInput(appointment: Appointment): AppointmentInput {
     mode: appointment.mode,
     serviceStatus: appointment.serviceStatus,
     settlementStatus: appointment.settlementStatus,
-    account: appointment.account
-      ? {
-          kind: "embedded",
-          details: {
-            accountName: appointment.account.accountName,
-            server: appointment.account.server,
-            specialization: appointment.account.specialization,
-            gearScore: appointment.account.gearScore,
-          },
-          credential: { kind: "keep" },
-        }
-      : null,
+    account: snapshotAccountInput(appointment, "keep"),
     rateNote: appointment.rateNote,
     paymentMethod: appointment.paymentMethod,
     amountMinor: appointment.amountMinor,
@@ -30,6 +55,23 @@ export function appointmentToInput(appointment: Appointment): AppointmentInput {
     voicePlatform: appointment.voicePlatform,
     voiceChannel: appointment.voiceChannel,
     notes: appointment.notes,
+  };
+}
+
+export function duplicateAppointmentDraft(
+  appointment: Appointment,
+  serviceDate = todayInChina(),
+): AppointmentDraftSeed {
+  const input = appointmentToInput(appointment);
+  return {
+    sourceAppointmentId: appointment.id,
+    input: {
+      ...input,
+      serviceDate,
+      serviceStatus: "scheduled",
+      settlementStatus: appointment.mode === "business" ? "unsettled" : "not_applicable",
+      account: snapshotAccountInput(appointment, "copy"),
+    },
   };
 }
 

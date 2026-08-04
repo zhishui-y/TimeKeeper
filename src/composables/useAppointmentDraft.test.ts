@@ -35,6 +35,8 @@ function preset(): ContactPreset {
     content: "赛季冲分",
     mode: "business",
     account: {
+      source: "profile",
+      characterName: "南枝角色",
       accountName: "nanzhi_0217",
       specialization: "无方",
       gearScore: "19.8万",
@@ -114,6 +116,9 @@ describe("useAppointmentDraft", () => {
       password: "",
       sourceAppointmentId: "",
       hasPassword: false,
+      source: "embedded",
+      characterName: null,
+      preservesSnapshot: false,
     };
 
     submit();
@@ -134,6 +139,9 @@ describe("useAppointmentDraft", () => {
       password: "",
       sourceAppointmentId: "",
       hasPassword: false,
+      source: "embedded",
+      characterName: null,
+      preservesSnapshot: false,
     };
     draft.amountYuan = -1;
 
@@ -156,6 +164,7 @@ describe("useAppointmentDraft", () => {
       serviceStatus: "scheduled",
       settlementStatus: "unsettled",
       account: {
+        source: "embedded",
         accountName: "legacy-account",
         specialization: null,
         gearScore: null,
@@ -176,6 +185,9 @@ describe("useAppointmentDraft", () => {
       kind: "embedded",
       credentialKind: "keep",
       hasPassword: false,
+      source: "embedded",
+      characterName: null,
+      preservesSnapshot: true,
     });
     submit();
 
@@ -198,12 +210,16 @@ describe("useAppointmentDraft", () => {
       password: "one-time-secret",
       sourceAppointmentId: "",
       hasPassword: false,
+      source: "embedded",
+      characterName: null,
+      preservesSnapshot: false,
     };
 
     submit();
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({
         account: expect.objectContaining({
+          kind: "embedded",
           credential: { kind: "replace", password: "one-time-secret" },
         }),
       }),
@@ -212,5 +228,55 @@ describe("useAppointmentDraft", () => {
     open.value = false;
     await nextTick();
     expect(draft.account.password).toBe("");
+  });
+
+  it("preserves a profile snapshot and converts its kept password when copied", () => {
+    const onSave = vi.fn();
+    const appointment: Appointment = {
+      id: "profile-snapshot",
+      serviceDate: "2026-08-20",
+      contactName: "档案联系人",
+      mode: "business",
+      serviceStatus: "in_progress",
+      settlementStatus: "unsettled",
+      account: {
+        source: "profile",
+        characterName: "清心",
+        accountName: "profile-login",
+        server: "梦江南",
+        specialization: "冰心",
+        gearScore: "19.8万",
+        password: "secret",
+      },
+      createdAt: "2026-08-01T00:00:00Z",
+      updatedAt: "2026-08-01T00:00:00Z",
+    };
+    const { draft, submit, duplicateAsToday } = setup({ appointment, onSave });
+
+    submit();
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account: expect.objectContaining({
+          kind: "snapshot",
+          source: "profile",
+          characterName: "清心",
+          credential: { kind: "keep" },
+        }),
+      }),
+    );
+
+    draft.content = "未保存修改";
+    expect(duplicateAsToday("2026-08-04", appointment.id).input).toEqual(
+      expect.objectContaining({
+        content: "未保存修改",
+        serviceStatus: "scheduled",
+        settlementStatus: "unsettled",
+        account: expect.objectContaining({
+          source: "profile",
+          characterName: "清心",
+          credential: { kind: "copyFromAppointment", sourceAppointmentId: appointment.id },
+        }),
+      }),
+    );
   });
 });

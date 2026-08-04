@@ -124,6 +124,8 @@ function appointment(input: DemoAppointmentInput): Appointment {
       mode === "entertainment" ? "not_applicable" : (input.settlementStatus ?? "unsettled"),
     account: account
       ? {
+          source: "profile",
+          characterName: account.characterName,
           accountName: account.accountName,
           server: account.server,
           specialization: account.specialization,

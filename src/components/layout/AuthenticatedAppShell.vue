@@ -160,6 +160,7 @@ onUnmounted(() => {
       v-if="appointmentDrawerLoaded"
       :open="ui.appointmentDrawerOpen"
       :appointment="ui.activeAppointment"
+      :draft-seed="ui.appointmentDraftSeed"
       :initial-focus="ui.appointmentDrawerInitialFocus"
       :requested-date="ui.requestedDate"
       :requested-start-time="ui.requestedStartTime"
@@ -171,6 +172,7 @@ onUnmounted(() => {
       @close="ui.closeAppointmentDrawer"
       @copy-password="copyAppointmentPassword"
       @delete="removeActiveAppointment"
+      @duplicate="ui.openDuplicateAppointment"
       @save="saveAppointment"
     />
 

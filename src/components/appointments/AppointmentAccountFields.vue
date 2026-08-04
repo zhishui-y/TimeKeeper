@@ -37,7 +37,17 @@ function emptyDetails(): AppointmentAccountDetails {
 }
 
 function selectKind(kind: AppointmentAccountDraft["kind"]): void {
-  if (kind === model.value.kind) return;
+  if (kind === model.value.kind) {
+    if (kind === "embedded" && model.value.preservesSnapshot) {
+      model.value = {
+        ...model.value,
+        source: "embedded",
+        characterName: null,
+        preservesSnapshot: false,
+      };
+    }
+    return;
+  }
   model.value = {
     kind,
     profileId: "",
@@ -46,6 +56,9 @@ function selectKind(kind: AppointmentAccountDraft["kind"]): void {
     password: "",
     sourceAppointmentId: "",
     hasPassword: false,
+    source: "embedded",
+    characterName: null,
+    preservesSnapshot: false,
   };
 }
 
@@ -97,9 +110,15 @@ function chooseNewPassword(): void {
         class="account-kind__item"
         :class="{ 'is-active': model.kind === 'embedded' }"
         type="button"
+        :aria-label="
+          model.preservesSnapshot && model.source === 'profile'
+            ? '档案账号快照，点击改为一次性账号'
+            : '一次性账号'
+        "
         @click="selectKind('embedded')"
       >
-        <FileKey2 :size="15" />一次性账号
+        <FileKey2 :size="15" />
+        {{ model.preservesSnapshot && model.source === "profile" ? "档案账号快照" : "一次性账号" }}
       </button>
     </div>
 

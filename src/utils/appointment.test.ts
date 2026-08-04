@@ -3,9 +3,11 @@ import { differenceInHours, parseISO } from "date-fns";
 import type { Appointment } from "../types/domain";
 import {
   combineDateTime,
+  duplicateAppointmentDraft,
   findNextScheduledAppointment,
   rescheduledInput,
   sortAppointmentsByStartTime,
+  todayInChina,
 } from "./appointment";
 
 function appointment(overrides: Partial<Appointment>): Appointment {
@@ -67,6 +69,31 @@ describe("combineDateTime", () => {
         startTime: null,
         endTime: null,
       },
+    );
+  });
+
+  it("keeps account source and character snapshots when calendar reschedules", () => {
+    const input = rescheduledInput(
+      appointment({
+        account: {
+          source: "profile",
+          characterName: "清心",
+          accountName: "profile-login",
+          password: null,
+        },
+      }),
+      new Date(2026, 7, 4, 16, 30),
+      new Date(2026, 7, 4, 17, 30),
+      false,
+    );
+
+    expect(input.account).toEqual(
+      expect.objectContaining({
+        kind: "snapshot",
+        source: "profile",
+        characterName: "清心",
+        credential: { kind: "keep" },
+      }),
     );
   });
 
@@ -179,5 +206,46 @@ describe("combineDateTime", () => {
     );
 
     expect(result).toBeNull();
+  });
+});
+
+describe("duplicateAppointmentDraft", () => {
+  it("prefills an unsaved today draft while preserving snapshot data and resetting progress", () => {
+    const source = appointment({
+      serviceStatus: "completed",
+      settlementStatus: "settled",
+      account: {
+        source: "profile",
+        characterName: "清心",
+        accountName: "profile-login",
+        server: "梦江南",
+        specialization: "冰心",
+        gearScore: "19.8万",
+        password: "secret",
+      },
+      reminderMinutes: 15,
+      notes: "保留备注",
+    });
+
+    expect(duplicateAppointmentDraft(source, "2026-08-04")).toEqual({
+      sourceAppointmentId: source.id,
+      input: expect.objectContaining({
+        serviceDate: "2026-08-04",
+        serviceStatus: "scheduled",
+        settlementStatus: "unsettled",
+        reminderMinutes: 15,
+        notes: "保留备注",
+        account: expect.objectContaining({
+          kind: "snapshot",
+          source: "profile",
+          characterName: "清心",
+          credential: { kind: "copyFromAppointment", sourceAppointmentId: source.id },
+        }),
+      }),
+    });
+  });
+
+  it("uses the Beijing calendar date at the UTC day boundary", () => {
+    expect(todayInChina(new Date("2026-08-03T16:30:00Z"))).toBe("2026-08-04");
   });
 });

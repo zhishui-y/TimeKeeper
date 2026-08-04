@@ -120,6 +120,8 @@ mod tests {
                 "account_gear_score",
                 "account_server",
                 "account_name",
+                "account_source",
+                "account_character_name",
                 "voice_platform",
                 "voice_channel",
             ] {
@@ -349,6 +351,104 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(foreign_key_count, 0);
+        });
+    }
+
+    #[test]
+    fn account_source_migration_only_matches_unique_normalized_profile_names() {
+        run_async(async {
+            let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:")
+                .await
+                .unwrap();
+            for migration in [
+                include_str!("../migrations/0001_initial.sql"),
+                include_str!("../migrations/0002_account_profile_sort_order.sql"),
+                include_str!("../migrations/0003_account_profile_usage_info.sql"),
+                include_str!("../migrations/0004_appointment_embedded_account_voice.sql"),
+                include_str!("../migrations/0005_app_access_sqlite_credentials.sql"),
+            ] {
+                sqlx::raw_sql(migration)
+                    .execute(&mut connection)
+                    .await
+                    .unwrap();
+            }
+
+            for (id, account_name, character_name, sort_order) in [
+                ("unique", "  Unique-Account ", "唯一角色", 0_i64),
+                ("duplicate-a", "duplicate", "重复甲", 1_i64),
+                ("duplicate-b", " DUPLICATE ", "重复乙", 2_i64),
+            ] {
+                sqlx::query(
+                    "INSERT INTO account_profiles (
+                        id, character_name, account_name, needs_review, sort_order,
+                        created_at, updated_at
+                     ) VALUES (?, ?, ?, 0, ?, '2026-08-04T00:00:00Z', '2026-08-04T00:00:00Z')",
+                )
+                .bind(id)
+                .bind(character_name)
+                .bind(account_name)
+                .bind(sort_order)
+                .execute(&mut connection)
+                .await
+                .unwrap();
+            }
+            for (id, account_name) in [
+                ("unique-match", Some("unique-account")),
+                ("duplicate-match", Some("duplicate")),
+                ("missing-match", Some("missing")),
+                ("no-account", None),
+            ] {
+                sqlx::query(
+                    "INSERT INTO appointments (
+                        id, service_date, contact_name, mode, service_status,
+                        settlement_status, account_name, created_at, updated_at
+                     ) VALUES (?, '2026-08-04', '联系人', 'business', 'scheduled',
+                               'unsettled', ?, '2026-08-04T00:00:00Z', '2026-08-04T00:00:00Z')",
+                )
+                .bind(id)
+                .bind(account_name)
+                .execute(&mut connection)
+                .await
+                .unwrap();
+            }
+
+            sqlx::raw_sql(include_str!(
+                "../migrations/0006_appointment_account_snapshot_source.sql"
+            ))
+            .execute(&mut connection)
+            .await
+            .unwrap();
+
+            let rows = sqlx::query(
+                "SELECT id, account_source, account_character_name
+                 FROM appointments ORDER BY id",
+            )
+            .fetch_all(&mut connection)
+            .await
+            .unwrap();
+            let snapshots = rows
+                .iter()
+                .map(|row| {
+                    (
+                        row.get::<String, _>("id"),
+                        row.get::<Option<String>, _>("account_source"),
+                        row.get::<Option<String>, _>("account_character_name"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                snapshots,
+                vec![
+                    ("duplicate-match".into(), Some("embedded".into()), None),
+                    ("missing-match".into(), Some("embedded".into()), None),
+                    ("no-account".into(), None, None),
+                    (
+                        "unique-match".into(),
+                        Some("profile".into()),
+                        Some("唯一角色".into())
+                    ),
+                ]
+            );
         });
     }
 }

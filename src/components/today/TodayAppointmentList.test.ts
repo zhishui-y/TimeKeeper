@@ -26,6 +26,8 @@ describe("TodayAppointmentList", () => {
       id: "metadata",
       serviceStatus: "scheduled",
       account: {
+        source: "profile",
+        characterName: "长歌角色",
         specialization: "莫问",
         gearScore: "794676",
         server: "梦江南",
@@ -43,6 +45,7 @@ describe("TodayAppointmentList", () => {
           appointment({
             id: "missing-password",
             account: {
+              source: "embedded",
               specialization: null,
               gearScore: null,
               server: null,
@@ -66,7 +69,7 @@ describe("TodayAppointmentList", () => {
       .find(".appointment-account-summary")
       .findAll(".appointment-account-summary__line");
     expect(accountLines[0]!.text()).toBe("莫问·794676");
-    expect(accountLines[1]!.text()).toBe("梦江南");
+    expect(accountLines[1]!.text()).toBe("梦江南·长歌角色··");
     expect(accountLines[1]!.findAll("button")).toHaveLength(2);
     expect(accountLines[1]!.text()).not.toContain("demo-account");
     expect(accountLines[1]!.text()).not.toContain("••••••");

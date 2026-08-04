@@ -17,7 +17,7 @@ const appointments: Appointment[] = [
     serviceStatus: "completed",
     settlementStatus: "unsettled",
     amountMinor: 18_000,
-    account: { accountName: "剑胆琴心", password: null },
+    account: { source: "embedded", accountName: "剑胆琴心", password: null },
     createdAt: "2026-08-01T00:00:00Z",
     updatedAt: "2026-08-01T00:00:00Z",
   },

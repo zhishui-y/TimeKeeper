@@ -18,6 +18,7 @@ import {
   DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS,
   type AppointmentTableColumnKey,
 } from "../../utils/appointmentTableColumns";
+import { duplicateAppointmentDraft } from "../../utils/appointment";
 import AppointmentDeleteDialog from "./AppointmentDeleteDialog.vue";
 import AppointmentFiltersBar from "./AppointmentFiltersBar.vue";
 import AppointmentPagination from "./AppointmentPagination.vue";
@@ -123,15 +124,9 @@ async function toggleAll(selected: boolean): Promise<void> {
   if (!succeeded && selection.error.value) ui.notify(selection.error.value, "danger");
 }
 
-async function duplicate(appointment: Appointment): Promise<void> {
-  try {
-    const result = await api.duplicateAppointment(appointment.id);
-    ui.markDataChanged();
-    ui.openEditAppointment(result.appointment);
-    ui.notify("已复制预约，请确认日期和时间", "success");
-  } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
-  }
+function duplicate(appointment: Appointment): void {
+  ui.openDuplicateAppointment(duplicateAppointmentDraft(appointment));
+  ui.notify("已复制到今日的新建预约，请确认后保存", "success");
 }
 
 async function copyAccount(appointment: Appointment): Promise<void> {

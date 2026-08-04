@@ -286,6 +286,8 @@ function toAppointment(input: AppointmentInput, existing?: Appointment): Appoint
 
 function accountDetailsFromProfile(profile: AccountProfile): NonNullable<Appointment["account"]> {
   return {
+    source: "profile",
+    characterName: profile.characterName,
     accountName: profile.accountName,
     server: profile.server,
     specialization: profile.specialization,
@@ -310,6 +312,11 @@ function resolveAppointmentAccount(
 
   const details = input.account.details;
   const account = {
+    source: input.account.kind === "snapshot" ? input.account.source : ("embedded" as const),
+    characterName:
+      input.account.kind === "snapshot" && input.account.source === "profile"
+        ? (input.account.characterName ?? null)
+        : null,
     accountName: details.accountName.trim(),
     server: details.server?.trim() || null,
     specialization: details.specialization?.trim() || null,
@@ -317,7 +324,12 @@ function resolveAppointmentAccount(
     password: null as string | null,
   };
   const credential = input.account.credential;
-  if (credential.kind === "keep") {
+  if (credential.kind === "none") {
+    if (input.account.kind === "embedded") {
+      throw new Error("一次性账号不能使用无密码凭据状态");
+    }
+    account.password = null;
+  } else if (credential.kind === "keep") {
     account.password = existing?.account?.password ?? null;
   } else if (credential.kind === "replace") {
     if (!credential.password) throw new Error("临时账号必须填写密码");
@@ -574,7 +586,9 @@ export const mockApi: ApiClient = {
       settlementStatus: source.mode === "business" ? "unsettled" : "not_applicable",
       account: source.account
         ? {
-            kind: "embedded",
+            kind: "snapshot",
+            source: source.account.source,
+            characterName: source.account.characterName,
             details: {
               accountName: source.account.accountName,
               server: source.account.server,
@@ -583,7 +597,7 @@ export const mockApi: ApiClient = {
             },
             credential: source.account.password
               ? { kind: "copyFromAppointment", sourceAppointmentId: source.id }
-              : { kind: "keep" },
+              : { kind: "none" },
           }
         : null,
       rateNote: source.rateNote,

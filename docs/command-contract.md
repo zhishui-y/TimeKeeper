@@ -60,17 +60,26 @@ verifier，不触碰业务表或凭据表。
 再次使用。后端在同一事务中以每批 500 个 ID 删除，凭据外键级联；成功提交后通知状态一次加锁
 批量取消。取消预约仍调用进度命令，不等同于永久删除。
 
-`Appointment.account` 为 `null` 或内嵌 `specialization`、`gearScore`、`server`、
-`accountName`、`password: string | null`。`AppointmentInput.account` 为：
+`Appointment.account` 为 `null` 或内嵌 `source: "profile" | "embedded"`、只读历史快照
+`characterName`、`specialization`、`gearScore`、`server`、`accountName`、
+`password: string | null`。`AppointmentInput.account` 为：
 
 - `null`：不保存账号。
-- `{ kind: "profile", profileId }`：在 Rust 事务中复制当前档案元数据与密码，不保存档案 ID。
+- `{ kind: "profile", profileId }`：在 Rust 事务中复制当前档案元数据、角色名与密码，并保存
+  `source = "profile"`，不保存档案 ID。
 - `{ kind: "embedded", details, credential }`：保存一次性账号；`credential` 为 `keep`、
   `replace { password }` 或 `copyFromAppointment { sourceAppointmentId }`。
+- `{ kind: "snapshot", source, characterName, details, credential }`：编辑、日历改期、联系人预设或
+  待保存复制时保留现有来源和角色名；`credential` 还可使用 `{ kind: "none" }` 明确保留无密码。
 
-已有预约的 `keep` 保留当前凭据；明确替换、复制或移除与预约元数据同事务提交。新增一次性账号
-要求非空账号名和替换密码。`voicePlatform` 接受 `yy`、`qq` 或 `null`；只有 YY 可保存纯数字
-`voiceChannel`。
+已有预约的 `keep` 保留当前凭据；明确替换、复制或移除与预约元数据同事务提交。新增手工一次性
+账号要求非空账号名和替换密码。Excel 导入保存为 `embedded` 且角色名为空。迁移后的 `profile`
+角色名仍是历史快照，不关联或跟随档案。`voicePlatform` 接受 `yy`、`qq` 或 `null`；只有 YY 可
+保存纯数字 `voiceChannel`。
+
+`duplicate_appointment` 保留兼容并会立即创建记录；当前界面不调用它。预约记录表格和编辑抽屉先在
+前端生成北京时间今天的待保存草稿，业务状态重置为 `scheduled + unsettled`，娱乐状态重置为
+`scheduled + not_applicable`，再次点击保存后才调用 `create_appointment`。
 
 冲突检查排除取消预约与正在编辑的自身，只比较开始和结束都存在的记录；冲突只警告不阻止保存。
 跨天结束时间在规范化后进入次日。`sync_appointment_service_statuses` 使用北京时间且幂等；预约到达

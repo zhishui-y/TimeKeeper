@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
-import { format } from "date-fns";
 import { shallowRef } from "vue";
-import type { Appointment } from "../types/domain";
+import type { Appointment, AppointmentDraftSeed } from "../types/domain";
+import { todayInChina } from "../utils/appointment";
 
 export type ToastTone = "success" | "warning" | "danger" | "neutral";
 
@@ -14,8 +14,9 @@ export interface ToastMessage {
 export const useUiStore = defineStore("ui", () => {
   const appointmentDrawerOpen = shallowRef(false);
   const activeAppointment = shallowRef<Appointment | null>(null);
+  const appointmentDraftSeed = shallowRef<AppointmentDraftSeed | null>(null);
   const appointmentDrawerInitialFocus = shallowRef<"default" | "amount">("default");
-  const requestedDate = shallowRef(format(new Date(), "yyyy-MM-dd"));
+  const requestedDate = shallowRef(todayInChina());
   const requestedStartTime = shallowRef<string | null>(null);
   const dataRevision = shallowRef(0);
   const accountRevision = shallowRef(0);
@@ -25,11 +26,9 @@ export const useUiStore = defineStore("ui", () => {
   let toastTimer: number | undefined;
   let toastSequence = 0;
 
-  function openCreateAppointment(
-    serviceDate = format(new Date(), "yyyy-MM-dd"),
-    startTime?: string,
-  ): void {
+  function openCreateAppointment(serviceDate = todayInChina(), startTime?: string): void {
     activeAppointment.value = null;
+    appointmentDraftSeed.value = null;
     appointmentDrawerInitialFocus.value = "default";
     requestedDate.value = serviceDate;
     requestedStartTime.value = startTime ?? null;
@@ -38,6 +37,7 @@ export const useUiStore = defineStore("ui", () => {
 
   function openEditAppointment(appointment: Appointment): void {
     activeAppointment.value = appointment;
+    appointmentDraftSeed.value = null;
     appointmentDrawerInitialFocus.value = "default";
     requestedDate.value = appointment.serviceDate;
     requestedStartTime.value = null;
@@ -46,15 +46,26 @@ export const useUiStore = defineStore("ui", () => {
 
   function openSettleAppointment(appointment: Appointment): void {
     activeAppointment.value = appointment;
+    appointmentDraftSeed.value = null;
     appointmentDrawerInitialFocus.value = "amount";
     requestedDate.value = appointment.serviceDate;
     requestedStartTime.value = null;
     appointmentDrawerOpen.value = true;
   }
 
+  function openDuplicateAppointment(seed: AppointmentDraftSeed): void {
+    activeAppointment.value = null;
+    appointmentDraftSeed.value = seed;
+    appointmentDrawerInitialFocus.value = "default";
+    requestedDate.value = seed.input.serviceDate;
+    requestedStartTime.value = seed.input.startTime ?? null;
+    appointmentDrawerOpen.value = true;
+  }
+
   function closeAppointmentDrawer(): void {
     appointmentDrawerOpen.value = false;
     activeAppointment.value = null;
+    appointmentDraftSeed.value = null;
     appointmentDrawerInitialFocus.value = "default";
   }
 
@@ -103,6 +114,7 @@ export const useUiStore = defineStore("ui", () => {
   return {
     appointmentDrawerOpen,
     activeAppointment,
+    appointmentDraftSeed,
     appointmentDrawerInitialFocus,
     requestedDate,
     requestedStartTime,
@@ -113,6 +125,7 @@ export const useUiStore = defineStore("ui", () => {
     openCreateAppointment,
     openEditAppointment,
     openSettleAppointment,
+    openDuplicateAppointment,
     closeAppointmentDrawer,
     markDataChanged,
     markAccountsChanged,

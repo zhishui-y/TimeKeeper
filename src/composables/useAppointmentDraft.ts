@@ -3,7 +3,11 @@ import { computed, reactive, readonly, shallowRef, toValue, watch } from "vue";
 import type { MaybeRefOrGetter } from "vue";
 import type {
   Appointment,
+  AppointmentAccountCredential,
   AppointmentAccountDetails,
+  AppointmentAccountInput,
+  AppointmentAccountSource,
+  AppointmentDraftSeed,
   AppointmentInput,
   AppointmentMode,
   AppointmentProgressStatus,
@@ -18,7 +22,7 @@ import {
 } from "../utils/appointmentProgress";
 
 export type AppointmentAccountDraftKind = "none" | "profile" | "embedded";
-export type AppointmentCredentialDraftKind = "keep" | "replace" | "copyFromAppointment";
+export type AppointmentCredentialDraftKind = "none" | "keep" | "replace" | "copyFromAppointment";
 
 export interface AppointmentAccountDraft {
   kind: AppointmentAccountDraftKind;
@@ -28,6 +32,9 @@ export interface AppointmentAccountDraft {
   password: string;
   sourceAppointmentId: string;
   hasPassword: boolean;
+  source: AppointmentAccountSource;
+  characterName: string | null;
+  preservesSnapshot: boolean;
 }
 
 export interface AppointmentDraft {
@@ -53,6 +60,7 @@ export interface AppointmentDraft {
 interface UseAppointmentDraftOptions {
   open: MaybeRefOrGetter<boolean>;
   appointment: MaybeRefOrGetter<Appointment | null>;
+  seed?: MaybeRefOrGetter<AppointmentDraftSeed | null>;
   requestedDate: MaybeRefOrGetter<string>;
   requestedStartTime: MaybeRefOrGetter<string | null>;
   defaultReminderMinutes: MaybeRefOrGetter<number>;
@@ -69,6 +77,9 @@ function emptyAccountDraft(): AppointmentAccountDraft {
     password: "",
     sourceAppointmentId: "",
     hasPassword: false,
+    source: "embedded",
+    characterName: null,
+    preservesSnapshot: false,
   };
 }
 
@@ -85,10 +96,15 @@ function embeddedAccountDraft(
     hasPassword: boolean;
     sourceAppointmentId?: string;
     editing?: boolean;
+    source?: AppointmentAccountSource;
+    characterName?: string | null;
+    preservesSnapshot?: boolean;
+    credential?: AppointmentAccountCredential;
   },
 ): AppointmentAccountDraft {
   const canKeep = Boolean(options.editing);
   const canCopy = Boolean(options.sourceAppointmentId && options.hasPassword);
+  const credential = options.credential;
   return {
     kind: "embedded",
     profileId: "",
@@ -98,11 +114,34 @@ function embeddedAccountDraft(
       gearScore: details.gearScore ?? null,
       server: details.server ?? null,
     },
-    credentialKind: canKeep ? "keep" : canCopy ? "copyFromAppointment" : "replace",
-    password: "",
-    sourceAppointmentId: canCopy ? options.sourceAppointmentId! : "",
+    credentialKind:
+      credential?.kind ?? (canKeep ? "keep" : canCopy ? "copyFromAppointment" : "replace"),
+    password: credential?.kind === "replace" ? credential.password : "",
+    sourceAppointmentId:
+      credential?.kind === "copyFromAppointment"
+        ? credential.sourceAppointmentId
+        : canCopy
+          ? options.sourceAppointmentId!
+          : "",
     hasPassword: options.hasPassword,
+    source: options.source ?? "embedded",
+    characterName: options.characterName ?? null,
+    preservesSnapshot: options.preservesSnapshot ?? false,
   };
+}
+
+function accountDraftFromInput(
+  account: AppointmentAccountInput | null | undefined,
+): AppointmentAccountDraft {
+  if (!account) return emptyAccountDraft();
+  if (account.kind === "profile") return { ...profileAccountDraft(), profileId: account.profileId };
+  return embeddedAccountDraft(account.details, {
+    hasPassword: account.credential.kind !== "none",
+    source: account.kind === "snapshot" ? account.source : "embedded",
+    characterName: account.kind === "snapshot" ? (account.characterName ?? null) : null,
+    preservesSnapshot: account.kind === "snapshot",
+    credential: account.credential,
+  });
 }
 
 function timeOf(value?: string | null): string {
@@ -150,36 +189,59 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
 
   function reset(): void {
     const appointment = toValue(options.appointment);
+    const seed = toValue(options.seed);
+    const seedInput = appointment ? null : seed?.input;
     Object.assign(draft, {
-      serviceDate: appointment?.serviceDate ?? toValue(options.requestedDate),
+      serviceDate:
+        appointment?.serviceDate ?? seedInput?.serviceDate ?? toValue(options.requestedDate),
       startTime: appointment
         ? timeOf(appointment.startsAt)
-        : (toValue(options.requestedStartTime) ?? ""),
-      endTime: appointment ? timeOf(appointment.endsAt) : "",
-      contactName: appointment?.contactName ?? "",
-      content: appointment?.content ?? "",
-      mode: appointment?.mode ?? "business",
-      serviceStatus: appointment?.serviceStatus ?? "scheduled",
-      settlementStatus: appointment?.settlementStatus ?? "unsettled",
+        : (seedInput?.startTime ?? toValue(options.requestedStartTime) ?? ""),
+      endTime: appointment ? timeOf(appointment.endsAt) : (seedInput?.endTime ?? ""),
+      contactName: appointment?.contactName ?? seedInput?.contactName ?? "",
+      content: appointment?.content ?? seedInput?.content ?? "",
+      mode: appointment?.mode ?? seedInput?.mode ?? "business",
+      serviceStatus: appointment?.serviceStatus ?? seedInput?.serviceStatus ?? "scheduled",
+      settlementStatus: appointment?.settlementStatus ?? seedInput?.settlementStatus ?? "unsettled",
       account: appointment
         ? appointment.account
           ? embeddedAccountDraft(appointment.account, {
               hasPassword: Boolean(appointment.account.password),
               editing: true,
+              source: appointment.account.source,
+              characterName: appointment.account.characterName,
+              preservesSnapshot: true,
             })
           : emptyAccountDraft()
-        : profileAccountDraft(),
-      rateNote: appointment?.rateNote ?? "",
-      paymentMethod: appointment?.paymentMethod ?? "",
+        : seedInput
+          ? accountDraftFromInput(seedInput.account)
+          : profileAccountDraft(),
+      rateNote: appointment?.rateNote ?? seedInput?.rateNote ?? "",
+      paymentMethod: appointment?.paymentMethod ?? seedInput?.paymentMethod ?? "",
       amountYuan:
-        appointment?.amountMinor === null || appointment?.amountMinor === undefined
+        (appointment?.amountMinor ?? seedInput?.amountMinor) === null ||
+        (appointment?.amountMinor ?? seedInput?.amountMinor) === undefined
           ? ""
-          : String(appointment.amountMinor / 100),
-      reminderEnabled: appointment ? appointment.reminderMinutes !== null : false,
-      reminderMinutes: appointment?.reminderMinutes ?? toValue(options.defaultReminderMinutes),
-      voicePlatform: appointment ? (appointment.voicePlatform ?? "") : "yy",
-      voiceChannel: appointment?.voicePlatform === "yy" ? (appointment.voiceChannel ?? "") : "",
-      notes: appointment?.notes ?? "",
+          : String((appointment?.amountMinor ?? seedInput?.amountMinor)! / 100),
+      reminderEnabled: appointment
+        ? appointment.reminderMinutes !== null
+        : seedInput
+          ? seedInput.reminderMinutes !== null && seedInput.reminderMinutes !== undefined
+          : false,
+      reminderMinutes:
+        appointment?.reminderMinutes ??
+        seedInput?.reminderMinutes ??
+        toValue(options.defaultReminderMinutes),
+      voicePlatform: appointment
+        ? (appointment.voicePlatform ?? "")
+        : seedInput
+          ? (seedInput.voicePlatform ?? "")
+          : "yy",
+      voiceChannel:
+        (appointment?.voicePlatform ?? seedInput?.voicePlatform) === "yy"
+          ? (appointment?.voiceChannel ?? seedInput?.voiceChannel ?? "")
+          : "",
+      notes: appointment?.notes ?? seedInput?.notes ?? "",
     });
     timeModified.value = false;
     errors.value = [];
@@ -241,6 +303,9 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
         ? embeddedAccountDraft(preset.account, {
             hasPassword: Boolean(preset.account.password),
             sourceAppointmentId: preset.sourceAppointmentId,
+            source: preset.account.source,
+            characterName: preset.account.characterName,
+            preservesSnapshot: true,
           })
         : emptyAccountDraft(),
       rateNote: preset.mode === "business" ? (preset.rateNote ?? "") : "",
@@ -304,53 +369,106 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
     errors.value = nextErrors;
     if (nextErrors.length > 0) return;
 
-    const account: AppointmentInput["account"] =
-      draft.account.kind === "none"
-        ? null
-        : draft.account.kind === "profile"
-          ? { kind: "profile", profileId: draft.account.profileId }
-          : {
-              kind: "embedded",
-              details: {
-                accountName: draft.account.details.accountName.trim(),
-                specialization: draft.account.details.specialization?.trim() || null,
-                gearScore: draft.account.details.gearScore?.trim() || null,
-                server: draft.account.details.server?.trim() || null,
-              },
-              credential:
-                draft.account.credentialKind === "keep"
-                  ? { kind: "keep" }
-                  : draft.account.credentialKind === "copyFromAppointment"
-                    ? {
-                        kind: "copyFromAppointment",
-                        sourceAppointmentId: draft.account.sourceAppointmentId,
-                      }
-                    : { kind: "replace", password: draft.account.password },
-            };
+    const account = accountInputFromDraft(true);
     const statuses = appointmentStatusesFromProgress(
       draft.mode,
       progressStatus.value,
       draft.settlementStatus,
     );
 
-    options.onSave({
+    options.onSave(inputFromDraft(account, statuses));
+  }
+
+  function accountInputFromDraft(trimText: boolean): AppointmentInput["account"] {
+    const text = (value: string) => (trimText ? value.trim() : value);
+    if (draft.account.kind === "none") return null;
+    if (draft.account.kind === "profile") {
+      return { kind: "profile", profileId: draft.account.profileId };
+    }
+    const details = {
+      accountName: text(draft.account.details.accountName),
+      specialization: text(draft.account.details.specialization ?? "") || null,
+      gearScore: text(draft.account.details.gearScore ?? "") || null,
+      server: text(draft.account.details.server ?? "") || null,
+    };
+    const credential: AppointmentAccountCredential =
+      draft.account.credentialKind === "none"
+        ? { kind: "none" }
+        : draft.account.credentialKind === "keep"
+          ? { kind: "keep" }
+          : draft.account.credentialKind === "copyFromAppointment"
+            ? {
+                kind: "copyFromAppointment",
+                sourceAppointmentId: draft.account.sourceAppointmentId,
+              }
+            : { kind: "replace", password: draft.account.password };
+    return draft.account.preservesSnapshot
+      ? {
+          kind: "snapshot",
+          source: draft.account.source,
+          characterName: draft.account.source === "profile" ? draft.account.characterName : null,
+          details,
+          credential,
+        }
+      : { kind: "embedded", details, credential };
+  }
+
+  function inputFromDraft(
+    account: AppointmentInput["account"],
+    statuses: Pick<AppointmentInput, "serviceStatus" | "settlementStatus">,
+    trimText = true,
+  ): AppointmentInput {
+    const text = (value: string) => (trimText ? value.trim() : value);
+    const amountText = String(draft.amountYuan).trim();
+    const amount = amountText ? Number(amountText) : null;
+    return {
       serviceDate: draft.serviceDate,
       startTime: draft.startTime || null,
       endTime: draft.endTime || null,
-      contactName: draft.contactName.trim(),
-      content: draft.content.trim() || null,
+      contactName: text(draft.contactName),
+      content: text(draft.content) || null,
       mode: draft.mode,
       serviceStatus: statuses.serviceStatus,
       settlementStatus: statuses.settlementStatus,
       account,
-      rateNote: draft.mode === "business" ? draft.rateNote.trim() || null : null,
-      paymentMethod: draft.mode === "business" ? draft.paymentMethod.trim() || null : null,
+      rateNote: draft.mode === "business" ? text(draft.rateNote) || null : null,
+      paymentMethod: draft.mode === "business" ? text(draft.paymentMethod) || null : null,
       amountMinor: draft.mode === "business" && amount !== null ? Math.round(amount * 100) : null,
       reminderMinutes: draft.reminderEnabled ? Number(draft.reminderMinutes) : null,
       voicePlatform: draft.voicePlatform || null,
-      voiceChannel: draft.voicePlatform === "yy" ? draft.voiceChannel.trim() || null : null,
-      notes: draft.notes.trim() || null,
-    });
+      voiceChannel: draft.voicePlatform === "yy" ? text(draft.voiceChannel) || null : null,
+      notes: text(draft.notes) || null,
+    };
+  }
+
+  function duplicateAsToday(
+    serviceDate: string,
+    sourceAppointmentId: string,
+  ): AppointmentDraftSeed {
+    const account = accountInputFromDraft(false);
+    let copiedAccount = account;
+    if (account && account.kind !== "profile" && draft.account.credentialKind === "keep") {
+      copiedAccount = {
+        ...account,
+        credential: draft.account.hasPassword
+          ? { kind: "copyFromAppointment", sourceAppointmentId }
+          : { kind: "none" },
+      };
+    }
+    return {
+      sourceAppointmentId,
+      input: {
+        ...inputFromDraft(
+          copiedAccount,
+          {
+            serviceStatus: "scheduled",
+            settlementStatus: draft.mode === "business" ? "unsettled" : "not_applicable",
+          },
+          false,
+        ),
+        serviceDate,
+      },
+    };
   }
 
   watch(
@@ -358,6 +476,7 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
       [
         toValue(options.open),
         toValue(options.appointment),
+        toValue(options.seed),
         toValue(options.requestedDate),
         toValue(options.requestedStartTime),
       ] as const,
@@ -387,5 +506,6 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
     selectMode,
     setCurrentTime,
     submit,
+    duplicateAsToday,
   };
 }

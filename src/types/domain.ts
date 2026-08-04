@@ -5,6 +5,7 @@ export type AppointmentProgressStatus =
   "scheduled" | "in_progress" | "pending_settlement" | "completed" | "cancelled";
 export type ReportGranularity = "day" | "week" | "month";
 export type VoicePlatform = "yy" | "qq";
+export type AppointmentAccountSource = "profile" | "embedded";
 
 export interface AppointmentAccountDetails {
   accountName: string;
@@ -14,10 +15,13 @@ export interface AppointmentAccountDetails {
 }
 
 export interface AppointmentAccount extends AppointmentAccountDetails {
+  source: AppointmentAccountSource;
+  characterName?: string | null;
   password: string | null;
 }
 
 export type AppointmentAccountCredential =
+  | { kind: "none" }
   | { kind: "keep" }
   | { kind: "replace"; password: string }
   | { kind: "copyFromAppointment"; sourceAppointmentId: string };
@@ -26,6 +30,13 @@ export type AppointmentAccountInput =
   | { kind: "profile"; profileId: string }
   | {
       kind: "embedded";
+      details: AppointmentAccountDetails;
+      credential: AppointmentAccountCredential;
+    }
+  | {
+      kind: "snapshot";
+      source: AppointmentAccountSource;
+      characterName?: string | null;
       details: AppointmentAccountDetails;
       credential: AppointmentAccountCredential;
     };
@@ -70,6 +81,11 @@ export interface AppointmentInput {
   voicePlatform?: VoicePlatform | null;
   voiceChannel?: string | null;
   notes?: string | null;
+}
+
+export interface AppointmentDraftSeed {
+  sourceAppointmentId: string;
+  input: AppointmentInput;
 }
 
 export interface AppointmentFilters {

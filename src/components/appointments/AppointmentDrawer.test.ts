@@ -245,6 +245,92 @@ describe("AppointmentDrawer", () => {
     expect(saveButton.attributes("form")).toBe(form.attributes("id"));
   });
 
+  it("offers completion and cancellation shortcuts only while editing", async () => {
+    const createWrapper = mountDrawer();
+    expect(createWrapper.find('button[aria-label="完成预约"]').exists()).toBe(false);
+    expect(createWrapper.find('button[aria-label="取消预约"]').exists()).toBe(false);
+    createWrapper.unmount();
+
+    const editWrapper = mountDrawer(30, completedAppointment());
+    const actionButtons = editWrapper.findAll("button");
+    const completeButton = actionButtons.find(
+      (button) => button.attributes("aria-label") === "完成预约",
+    );
+    const cancelButton = actionButtons.find(
+      (button) => button.attributes("aria-label") === "取消预约",
+    );
+    expect(completeButton).toBeDefined();
+    expect(cancelButton).toBeDefined();
+    expect(actionButtons.find((button) => button.text().trim() === "关闭")).toBeDefined();
+
+    await cancelButton?.trigger("click");
+
+    expect(editWrapper.emitted("save")?.[0]?.[0]).toMatchObject({
+      serviceStatus: "cancelled",
+      settlementStatus: "unsettled",
+    });
+  });
+
+  it("copies current unsaved edits into a Beijing-today draft without saving", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-03T16:30:00Z"));
+    const wrapper = mountDrawer(30, completedAppointment());
+    await wrapper.get('input[placeholder="谁约的"]').setValue("  未保存联系人  ");
+    await wrapper.get('input[placeholder="上分、陪练、日常…"]').setValue("未保存内容");
+    await wrapper.get('textarea[placeholder="补充要求、临时约定等"]').setValue("未保存备注");
+
+    await wrapper.get('button[aria-label="复制为今日预约"]').trigger("click");
+
+    expect(wrapper.emitted("save")).toBeUndefined();
+    expect(wrapper.emitted("duplicate")?.[0]?.[0]).toEqual({
+      sourceAppointmentId: "appointment-to-settle",
+      input: expect.objectContaining({
+        serviceDate: "2026-08-04",
+        contactName: "  未保存联系人  ",
+        content: "未保存内容",
+        notes: "未保存备注",
+        serviceStatus: "scheduled",
+        settlementStatus: "unsettled",
+      }),
+    });
+  });
+
+  it("uses the fixed short footer labels in the requested order", () => {
+    const wrapper = mountDrawer(30, completedAppointment());
+    const groups = wrapper.findAll(".drawer__footer-actions");
+
+    expect(groups[0]!.findAll("button").map((button) => button.text().trim())).toEqual([
+      "删除",
+      "复制",
+      "完成",
+      "取消",
+    ]);
+    expect(groups[1]!.findAll("button").map((button) => button.text().trim())).toEqual([
+      "关闭",
+      "保存",
+    ]);
+  });
+
+  it("completes and saves an edited business appointment through the shortcut", async () => {
+    const appointment = {
+      ...completedAppointment(),
+      serviceStatus: "in_progress" as const,
+      settlementStatus: "unsettled" as const,
+    };
+    const wrapper = mountDrawer(30, appointment);
+    const completeButton = wrapper
+      .findAll("button")
+      .find((button) => button.attributes("aria-label") === "完成预约");
+
+    await completeButton?.trigger("click");
+
+    expect(wrapper.emitted("save")?.[0]?.[0]).toMatchObject({
+      serviceStatus: "completed",
+      settlementStatus: "settled",
+      amountMinor: 18_000,
+    });
+  });
+
   it("only shows the delete action while editing and emits a delete request", async () => {
     const createWrapper = mountDrawer();
     expect(createWrapper.find("button.button--danger").exists()).toBe(false);
@@ -252,7 +338,8 @@ describe("AppointmentDrawer", () => {
 
     const editWrapper = mountDrawer(30, completedAppointment());
     const deleteButton = editWrapper.get("button.button--danger");
-    expect(deleteButton.text()).toContain("删除预约");
+    expect(deleteButton.text()).toContain("删除");
+    expect(deleteButton.attributes("aria-label")).toBe("删除预约");
 
     await deleteButton.trigger("click");
 

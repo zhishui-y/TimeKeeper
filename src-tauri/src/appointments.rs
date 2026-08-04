@@ -19,11 +19,11 @@ use crate::{
     importer::LegacyAppointment,
     models::{
         Appointment, AppointmentAccount, AppointmentAccountCredentialInput,
-        AppointmentAccountDetails, AppointmentAccountInput, AppointmentConflict,
-        AppointmentDeleteResult, AppointmentDeleteSelection, AppointmentFilters, AppointmentInput,
-        AppointmentMode, AppointmentMutationResult, AppointmentPage, AppointmentProgressStatus,
-        AppointmentSelectionSnapshot, ContactPreset, ServiceStatus, SettlementStatus,
-        VoicePlatform,
+        AppointmentAccountDetails, AppointmentAccountInput, AppointmentAccountSource,
+        AppointmentConflict, AppointmentDeleteResult, AppointmentDeleteSelection,
+        AppointmentFilters, AppointmentInput, AppointmentMode, AppointmentMutationResult,
+        AppointmentPage, AppointmentProgressStatus, AppointmentSelectionSnapshot, ContactPreset,
+        ServiceStatus, SettlementStatus, VoicePlatform,
     },
     notifications::{
         NotificationState, cancel_appointment_notification, cancel_appointment_notifications,
@@ -44,6 +44,7 @@ const APPOINTMENT_WITH_CREDENTIAL_SELECT: &str =
     "SELECT a.id, a.service_date, a.starts_at, a.ends_at, a.contact_name, a.content,
             a.mode, a.service_status, a.settlement_status,
             a.account_specialization, a.account_gear_score, a.account_server, a.account_name,
+            a.account_source, a.account_character_name,
             a.voice_platform, a.voice_channel, a.rate_note, a.payment_method,
             a.amount_minor, a.reminder_minutes, a.notes, a.import_fingerprint,
             a.created_at, a.updated_at, c.password AS account_password
@@ -311,6 +312,9 @@ fn normalize_account_input(
             } => {
                 let details = normalize_account_details(details)?;
                 let credential = match credential {
+                    AppointmentAccountCredentialInput::None => {
+                        return Err("一次性账号不能使用无密码凭据状态".into());
+                    }
                     AppointmentAccountCredentialInput::Keep => {
                         AppointmentAccountCredentialInput::Keep
                     }
@@ -333,6 +337,49 @@ fn normalize_account_input(
                     }
                 };
                 Ok(AppointmentAccountInput::Embedded {
+                    details,
+                    credential,
+                })
+            }
+            AppointmentAccountInput::Snapshot {
+                source,
+                character_name,
+                details,
+                credential,
+            } => {
+                let details = normalize_account_details(details)?;
+                let character_name = match source {
+                    AppointmentAccountSource::Profile => optional_text(character_name),
+                    AppointmentAccountSource::Embedded => None,
+                };
+                let credential = match credential {
+                    AppointmentAccountCredentialInput::None => {
+                        AppointmentAccountCredentialInput::None
+                    }
+                    AppointmentAccountCredentialInput::Keep => {
+                        AppointmentAccountCredentialInput::Keep
+                    }
+                    AppointmentAccountCredentialInput::Replace { password } => {
+                        if password.is_empty() {
+                            return Err("账号密码不能为空".into());
+                        }
+                        AppointmentAccountCredentialInput::Replace { password }
+                    }
+                    AppointmentAccountCredentialInput::CopyFromAppointment {
+                        source_appointment_id,
+                    } => {
+                        let source_appointment_id = source_appointment_id.trim().to_owned();
+                        if source_appointment_id.is_empty() {
+                            return Err("密码来源预约 ID 不能为空".into());
+                        }
+                        AppointmentAccountCredentialInput::CopyFromAppointment {
+                            source_appointment_id,
+                        }
+                    }
+                };
+                Ok(AppointmentAccountInput::Snapshot {
+                    source,
+                    character_name,
                     details,
                     credential,
                 })
@@ -498,7 +545,13 @@ pub(crate) fn appointment_from_row(row: &SqliteRow) -> Result<Appointment, Strin
     let account_name: Option<String> = row.try_get("account_name").map_err(db_error)?;
     let account = account_name
         .map(|account_name| {
+            let source = row
+                .try_get::<Option<String>, _>("account_source")
+                .unwrap_or(None)
+                .unwrap_or_else(|| AppointmentAccountSource::Embedded.as_str().to_owned());
             Ok::<AppointmentAccount, String>(AppointmentAccount {
+                source: AppointmentAccountSource::from_str(&source)?,
+                character_name: row.try_get("account_character_name").unwrap_or(None),
                 specialization: row.try_get("account_specialization").map_err(db_error)?,
                 gear_score: row.try_get("account_gear_score").map_err(db_error)?,
                 server: row.try_get("account_server").map_err(db_error)?,
@@ -551,16 +604,20 @@ fn appointment_from_selected_row(row: &SqliteRow) -> Result<Appointment, String>
     let account = account_name
         .map(|account_name| {
             Ok::<AppointmentAccount, String>(AppointmentAccount {
+                source: AppointmentAccountSource::from_str(
+                    row.try_get::<&str, _>(13).map_err(db_error)?,
+                )?,
+                character_name: row.try_get(14).map_err(db_error)?,
                 specialization: row.try_get(9).map_err(db_error)?,
                 gear_score: row.try_get(10).map_err(db_error)?,
                 server: row.try_get(11).map_err(db_error)?,
                 account_name,
-                password: row.try_get(23).map_err(db_error)?,
+                password: row.try_get(25).map_err(db_error)?,
             })
         })
         .transpose()?;
     let voice_platform = row
-        .try_get::<Option<&str>, _>(13)
+        .try_get::<Option<&str>, _>(15)
         .map_err(db_error)?
         .map(VoicePlatform::from_str)
         .transpose()?;
@@ -577,24 +634,24 @@ fn appointment_from_selected_row(row: &SqliteRow) -> Result<Appointment, String>
         settlement_status,
         account,
         voice_platform,
-        voice_channel: row.try_get(14).map_err(db_error)?,
-        rate_note: row.try_get(15).map_err(db_error)?,
-        payment_method: row.try_get(16).map_err(db_error)?,
-        amount_minor: row.try_get(17).map_err(db_error)?,
-        reminder_minutes: row.try_get(18).map_err(db_error)?,
-        notes: row.try_get(19).map_err(db_error)?,
-        import_fingerprint: row.try_get(20).map_err(db_error)?,
-        created_at: row.try_get(21).map_err(db_error)?,
-        updated_at: row.try_get(22).map_err(db_error)?,
+        voice_channel: row.try_get(16).map_err(db_error)?,
+        rate_note: row.try_get(17).map_err(db_error)?,
+        payment_method: row.try_get(18).map_err(db_error)?,
+        amount_minor: row.try_get(19).map_err(db_error)?,
+        reminder_minutes: row.try_get(20).map_err(db_error)?,
+        notes: row.try_get(21).map_err(db_error)?,
+        import_fingerprint: row.try_get(22).map_err(db_error)?,
+        created_at: row.try_get(23).map_err(db_error)?,
+        updated_at: row.try_get(24).map_err(db_error)?,
     })
 }
 
 async fn load_profile_account_details(
     database: &Database,
     account_profile_id: &str,
-) -> Result<(AppointmentAccountDetails, Option<String>), String> {
+) -> Result<(AppointmentAccountDetails, Option<String>, Option<String>), String> {
     let row = sqlx::query(
-        "SELECT p.account_name, p.server, p.specialization, p.gear_score,
+        "SELECT p.account_name, p.server, p.character_name, p.specialization, p.gear_score,
                 c.password AS account_password
          FROM account_profiles p
          LEFT JOIN account_profile_credentials c ON c.profile_id = p.id
@@ -613,6 +670,7 @@ async fn load_profile_account_details(
             server: row.try_get("server").map_err(db_error)?,
             account_name: row.try_get("account_name").map_err(db_error)?,
         },
+        row.try_get("character_name").map_err(db_error)?,
         row.try_get("account_password").map_err(db_error)?,
     ))
 }
@@ -714,6 +772,8 @@ fn push_appointment_filter_clauses<'args>(
             .push(" OR lower(coalesce(a.account_name, '')) LIKE ")
             .push_bind(pattern.clone())
             .push(" OR lower(coalesce(a.account_server, '')) LIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR lower(coalesce(a.account_character_name, '')) LIKE ")
             .push_bind(pattern.clone())
             .push(" OR lower(coalesce(a.account_specialization, '')) LIKE ")
             .push_bind(pattern.clone())
@@ -1160,10 +1220,13 @@ async fn prepare_account(
             secret_action: SecretAction::None,
         }),
         Some(AppointmentAccountInput::Profile { profile_id }) => {
-            let (details, password) = load_profile_account_details(database, &profile_id).await?;
+            let (details, character_name, password) =
+                load_profile_account_details(database, &profile_id).await?;
             let details = normalize_account_details(details)?;
             Ok(PreparedAccount {
                 account: Some(AppointmentAccount {
+                    source: AppointmentAccountSource::Profile,
+                    character_name,
                     specialization: details.specialization,
                     gear_score: details.gear_score,
                     server: details.server,
@@ -1177,41 +1240,79 @@ async fn prepare_account(
             details,
             credential,
         }) => {
-            let (password, secret_action) = match credential {
-                AppointmentAccountCredentialInput::Keep => {
-                    let existing =
-                        existing.ok_or("新建预约或原预约没有账号时，临时账号必须填写密码")?;
-                    (existing.password.clone(), SecretAction::Keep)
-                }
-                AppointmentAccountCredentialInput::Replace { password } => {
-                    (Some(password.clone()), SecretAction::Set(password))
-                }
-                AppointmentAccountCredentialInput::CopyFromAppointment {
-                    source_appointment_id,
-                } => {
-                    let source = get_appointment_impl(database, &source_appointment_id).await?;
-                    let source_password = source.account.and_then(|account| account.password);
-                    if source_password.is_none() {
-                        return Err("来源预约没有可沿用的账号密码".into());
-                    }
-                    (
-                        source_password,
-                        SecretAction::CopyFromAppointment(source_appointment_id),
-                    )
-                }
-            };
-            Ok(PreparedAccount {
-                account: Some(AppointmentAccount {
-                    specialization: details.specialization,
-                    gear_score: details.gear_score,
-                    server: details.server,
-                    account_name: details.account_name,
-                    password,
-                }),
-                secret_action,
-            })
+            prepare_snapshot_account(
+                database,
+                AppointmentAccountSource::Embedded,
+                None,
+                details,
+                credential,
+                existing,
+            )
+            .await
+        }
+        Some(AppointmentAccountInput::Snapshot {
+            source,
+            character_name,
+            details,
+            credential,
+        }) => {
+            prepare_snapshot_account(
+                database,
+                source,
+                character_name,
+                details,
+                credential,
+                existing,
+            )
+            .await
         }
     }
+}
+
+async fn prepare_snapshot_account(
+    database: &Database,
+    source: AppointmentAccountSource,
+    character_name: Option<String>,
+    details: AppointmentAccountDetails,
+    credential: AppointmentAccountCredentialInput,
+    existing: Option<&AppointmentAccount>,
+) -> Result<PreparedAccount, String> {
+    let (password, secret_action) = match credential {
+        AppointmentAccountCredentialInput::None => (None, SecretAction::None),
+        AppointmentAccountCredentialInput::Keep => {
+            let existing =
+                existing.ok_or("新建预约或原预约没有账号时，账号密码不能使用保留状态")?;
+            (existing.password.clone(), SecretAction::Keep)
+        }
+        AppointmentAccountCredentialInput::Replace { password } => {
+            (Some(password.clone()), SecretAction::Set(password))
+        }
+        AppointmentAccountCredentialInput::CopyFromAppointment {
+            source_appointment_id,
+        } => {
+            let source = get_appointment_impl(database, &source_appointment_id).await?;
+            let source_password = source.account.and_then(|account| account.password);
+            if source_password.is_none() {
+                return Err("来源预约没有可沿用的账号密码".into());
+            }
+            (
+                source_password,
+                SecretAction::CopyFromAppointment(source_appointment_id),
+            )
+        }
+    };
+    Ok(PreparedAccount {
+        account: Some(AppointmentAccount {
+            source,
+            character_name,
+            specialization: details.specialization,
+            gear_score: details.gear_score,
+            server: details.server,
+            account_name: details.account_name,
+            password,
+        }),
+        secret_action,
+    })
 }
 
 async fn apply_secret_action(
@@ -1279,10 +1380,11 @@ async fn insert_normalized_appointment(
             id, service_date, starts_at, ends_at, contact_name, content, mode,
             service_status, settlement_status,
             account_specialization, account_gear_score, account_server, account_name,
+            account_source, account_character_name,
             voice_platform, voice_channel,
             rate_note, payment_method, amount_minor, reminder_minutes, notes,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&input.service_date)
@@ -1297,6 +1399,8 @@ async fn insert_normalized_appointment(
     .bind(account.and_then(|account| account.gear_score.as_deref()))
     .bind(account.and_then(|account| account.server.as_deref()))
     .bind(account.map(|account| account.account_name.as_str()))
+    .bind(account.map(|account| account.source.as_str()))
+    .bind(account.and_then(|account| account.character_name.as_deref()))
     .bind(input.voice_platform.map(VoicePlatform::as_str))
     .bind(&input.voice_channel)
     .bind(&input.rate_note)
@@ -1406,7 +1510,8 @@ pub(crate) async fn update_appointment_impl(
             service_date = ?, starts_at = ?, ends_at = ?, contact_name = ?, content = ?,
             mode = ?, service_status = ?, settlement_status = ?,
             account_specialization = ?, account_gear_score = ?, account_server = ?,
-            account_name = ?, voice_platform = ?, voice_channel = ?, rate_note = ?,
+            account_name = ?, account_source = ?, account_character_name = ?,
+            voice_platform = ?, voice_channel = ?, rate_note = ?,
             payment_method = ?, amount_minor = ?, reminder_minutes = ?, notes = ?, updated_at = ?
          WHERE id = ?",
     )
@@ -1422,6 +1527,8 @@ pub(crate) async fn update_appointment_impl(
     .bind(account.and_then(|account| account.gear_score.as_deref()))
     .bind(account.and_then(|account| account.server.as_deref()))
     .bind(account.map(|account| account.account_name.as_str()))
+    .bind(account.map(|account| account.source.as_str()))
+    .bind(account.and_then(|account| account.character_name.as_deref()))
     .bind(input.voice_platform.map(VoicePlatform::as_str))
     .bind(&input.voice_channel)
     .bind(&input.rate_note)
@@ -1960,11 +2067,12 @@ pub(crate) async fn insert_imported_appointment(
             id, service_date, starts_at, ends_at, contact_name, content, mode,
             service_status, settlement_status,
             account_specialization, account_gear_score, account_server, account_name,
+            account_source, account_character_name,
             voice_platform, voice_channel,
             rate_note, payment_method, amount_minor, reminder_minutes, notes,
             import_fingerprint, created_at, updated_at
         ) VALUES (
-            ?, ?, ?, ?, ?, ?, 'business', ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, 'business', ?, ?, ?, ?, ?, ?, 'embedded', NULL, ?, ?,
             ?, ?, ?, NULL, ?, ?, ?, ?
         )",
     )
@@ -2202,10 +2310,10 @@ mod tests {
             let database = Database::in_memory().await.unwrap();
             sqlx::query(
                 "INSERT INTO account_profiles (
-                    id, server, specialization, gear_score, account_name,
+                    id, server, character_name, specialization, gear_score, account_name,
                     needs_review, sort_order, created_at, updated_at
                  ) VALUES (
-                    'profile-1', '档案区', '输出', '9999', 'profile-account',
+                    'profile-1', '档案区', '档案角色', '输出', '9999', 'profile-account',
                     0, 0, '2026-08-03T00:00:00Z', '2026-08-03T00:00:00Z'
                  )",
             )
@@ -2235,6 +2343,9 @@ mod tests {
                     .and_then(|account| account.password.as_deref()),
                 Some("profile-password")
             );
+            let profile_snapshot = profile_appointment.account.as_ref().unwrap();
+            assert_eq!(profile_snapshot.source, AppointmentAccountSource::Profile);
+            assert_eq!(profile_snapshot.character_name.as_deref(), Some("档案角色"));
 
             sqlx::query(
                 "UPDATE account_profile_credentials SET password = 'changed-profile'
@@ -2250,6 +2361,58 @@ mod tests {
                     .account
                     .and_then(|account| account.password),
                 Some("profile-password".into())
+            );
+
+            let mut snapshot_update = business_input("2026-08-04", "08:00", "09:00");
+            snapshot_update.account = Some(AppointmentAccountInput::Snapshot {
+                source: AppointmentAccountSource::Profile,
+                character_name: Some("档案角色".into()),
+                details: AppointmentAccountDetails {
+                    specialization: Some("输出".into()),
+                    gear_score: Some("10000".into()),
+                    server: Some("档案区".into()),
+                    account_name: "profile-account".into(),
+                },
+                credential: AppointmentAccountCredentialInput::Keep,
+            });
+            let updated_profile_snapshot =
+                update_appointment_impl(&database, &profile_appointment.id, snapshot_update)
+                    .await
+                    .unwrap()
+                    .appointment;
+            let updated_profile_account = updated_profile_snapshot.account.as_ref().unwrap();
+            assert_eq!(
+                updated_profile_account.source,
+                AppointmentAccountSource::Profile
+            );
+            assert_eq!(
+                updated_profile_account.character_name.as_deref(),
+                Some("档案角色")
+            );
+            assert_eq!(
+                updated_profile_account.password.as_deref(),
+                Some("profile-password")
+            );
+
+            let mut passwordless_input = business_input("2026-08-03", "07:00", "08:00");
+            passwordless_input.account = Some(AppointmentAccountInput::Snapshot {
+                source: AppointmentAccountSource::Embedded,
+                character_name: None,
+                details: AppointmentAccountDetails {
+                    specialization: None,
+                    gear_score: None,
+                    server: None,
+                    account_name: "passwordless-account".into(),
+                },
+                credential: AppointmentAccountCredentialInput::None,
+            });
+            let passwordless = create_appointment_impl(&database, passwordless_input)
+                .await
+                .unwrap()
+                .appointment;
+            assert_eq!(
+                passwordless.account.and_then(|account| account.password),
+                None
             );
 
             let mut source_input = business_input("2026-08-03", "09:00", "10:00");
@@ -2282,6 +2445,10 @@ mod tests {
                     .and_then(|account| account.password.as_deref()),
                 Some("source-password")
             );
+            assert_eq!(
+                source.account.as_ref().map(|account| account.source),
+                Some(AppointmentAccountSource::Embedded)
+            );
 
             let mut keep_input = business_input("2026-08-04", "10:00", "11:00");
             keep_input.account = Some(embedded_account_input(
@@ -2298,7 +2465,6 @@ mod tests {
                     .and_then(|account| account.password.as_deref()),
                 Some("source-password")
             );
-
             let duplicate =
                 duplicate_appointment_impl(&database, &source.id, Some("2026-08-05".into()))
                     .await
@@ -2310,6 +2476,10 @@ mod tests {
                     .as_ref()
                     .and_then(|account| account.password.as_deref()),
                 Some("source-password")
+            );
+            assert_eq!(
+                duplicate.account.as_ref().map(|account| account.source),
+                Some(AppointmentAccountSource::Embedded)
             );
 
             delete_appointment_impl(&database, &source.id)

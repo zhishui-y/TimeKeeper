@@ -26,6 +26,11 @@
 锁定会卸载或重置显示状态。密码不得进入日志、错误、Excel 预览、备份清单或测试快照；复制命令
 在 Rust 从 SQLite 重读密码，并在 30 秒后仅当剪贴板内容仍匹配时清空。
 
+预约账号是独立历史快照。Migration `0006` 新增 `account_source` 与
+`account_character_name`：旧记录只有在规范化账号名唯一匹配一个档案时才标记为 `profile` 并
+复制当时角色名；无匹配或多重匹配均标记为 `embedded`。不保存档案外键，后续档案修改或删除不会
+改写预约。Excel 导入始终创建 `embedded` 快照。
+
 ## Upgrade from legacy Stronghold
 
 Migration `0005` 在删除 v4 密码可用标记和旧回填表前，把每个目标的准确 Stronghold 来源记录到
@@ -60,6 +65,10 @@ Vue 采用 Composition API、`<script setup lang="ts">`、Pinia 与 Vue Router�
 | Appointments workspace  | 服务端分页、筛选、跨页选择 token、批量删除与末页回退                        |
 | Accounts workspace      | 账号筛选、角色数据刷新、批量操作与密码掩码                                  |
 | Settings workspace      | Excel 预览提交、通知、角色服务器与备份                                      |
+
+预约记录表格和编辑抽屉的“复制”都只生成日期为北京时间今天的新建草稿，保留当前表单内容并重置
+进度；关闭草稿不写库，只有再次保存才调用 `create_appointment`。原生 `duplicate_appointment`
+保留供兼容调用。
 
 ## Appointment query and selection model
 
@@ -113,4 +122,4 @@ Stronghold 解锁状态。
 
 恢复同时接受 v1 与 v2。解压前校验路径、大小、哈希和清单，暂存后校验数据库、设置以及存在时的
 Stronghold 文件；应用前先创建当前版本的 v2 预恢复备份。真正替换发生在重启早期，失败使用回滚
-目录恢复原文件，不覆盖可用数据；v1 数据库随后由正常 migration 升级到 `0005`。
+目录恢复原文件，不覆盖可用数据；v1 数据库随后由正常 migration 升级到当前 `0006`。

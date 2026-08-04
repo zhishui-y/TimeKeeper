@@ -63,6 +63,11 @@ string_enum!(AppointmentProgressStatus {
     Cancelled => "cancelled",
 });
 
+string_enum!(AppointmentAccountSource {
+    Profile => "profile",
+    Embedded => "embedded",
+});
+
 string_enum!(VoicePlatform {
     Yy => "yy",
     Qq => "qq",
@@ -86,6 +91,8 @@ pub struct AppointmentAccountDetails {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppointmentAccount {
+    pub source: AppointmentAccountSource,
+    pub character_name: Option<String>,
     pub specialization: Option<String>,
     pub gear_score: Option<String>,
     pub server: Option<String>,
@@ -97,6 +104,8 @@ impl fmt::Debug for AppointmentAccount {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("AppointmentAccount")
+            .field("source", &self.source)
+            .field("character_name", &self.character_name)
             .field("specialization", &self.specialization)
             .field("gear_score", &self.gear_score)
             .field("server", &self.server)
@@ -113,6 +122,7 @@ impl fmt::Debug for AppointmentAccount {
     rename_all_fields = "camelCase"
 )]
 pub enum AppointmentAccountCredentialInput {
+    None,
     Keep,
     Replace { password: String },
     CopyFromAppointment { source_appointment_id: String },
@@ -121,6 +131,7 @@ pub enum AppointmentAccountCredentialInput {
 impl fmt::Debug for AppointmentAccountCredentialInput {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::None => formatter.write_str("None"),
             Self::Keep => formatter.write_str("Keep"),
             Self::Replace { .. } => formatter
                 .debug_struct("Replace")
@@ -147,6 +158,13 @@ pub enum AppointmentAccountInput {
         profile_id: String,
     },
     Embedded {
+        details: AppointmentAccountDetails,
+        credential: AppointmentAccountCredentialInput,
+    },
+    Snapshot {
+        source: AppointmentAccountSource,
+        #[serde(default)]
+        character_name: Option<String>,
         details: AppointmentAccountDetails,
         credential: AppointmentAccountCredentialInput,
     },
@@ -421,6 +439,8 @@ mod tests {
     #[test]
     fn serializes_dtos_as_camel_case() {
         let account = AppointmentAccount {
+            source: AppointmentAccountSource::Embedded,
+            character_name: None,
             specialization: None,
             gear_score: None,
             server: None,
@@ -430,6 +450,7 @@ mod tests {
 
         let value = serde_json::to_value(account).unwrap();
         assert_eq!(value["accountName"], "demo");
+        assert_eq!(value["source"], "embedded");
         assert_eq!(value["password"], "secret");
         assert!(value.get("account_name").is_none());
     }
@@ -478,6 +499,8 @@ mod tests {
     fn sensitive_dto_debug_output_redacts_passwords() {
         let secret = "must-not-appear-in-debug";
         let account = AppointmentAccount {
+            source: AppointmentAccountSource::Embedded,
+            character_name: None,
             specialization: None,
             gear_score: None,
             server: None,

@@ -272,6 +272,7 @@ describe("TodayWorkspace", () => {
     const target = appointment({
       id: "metadata-copy",
       account: {
+        source: "embedded",
         specialization: "莫问",
         gearScore: "794676",
         server: "梦江南",
@@ -312,6 +313,7 @@ describe("TodayWorkspace", () => {
     const target = appointment({
       id: "metadata-copy-error",
       account: {
+        source: "embedded",
         specialization: "莫问",
         gearScore: "794676",
         server: "梦江南",

@@ -24,7 +24,13 @@ const emit = defineEmits<{
     </div>
     <div class="appointment-account-summary__line appointment-account-summary__line--secondary">
       <span class="appointment-account-summary__value">{{ account.server || "—" }}</span>
+      <span aria-hidden="true">·</span>
+      <span v-if="account.source === 'profile'" class="appointment-account-summary__value">
+        {{ account.characterName || "—" }}
+      </span>
+      <span v-if="account.source === 'profile'" aria-hidden="true">·</span>
       <button
+        v-if="account.source === 'profile'"
         class="appointment-account-summary__copy"
         type="button"
         :title="`复制账号 ${account.accountName}`"
@@ -33,6 +39,17 @@ const emit = defineEmits<{
       >
         <Copy :size="13" />
       </button>
+      <button
+        v-else
+        class="appointment-account-summary__account"
+        type="button"
+        :title="`复制账号 ${account.accountName}`"
+        :aria-label="`复制账号 ${account.accountName}`"
+        @click="emit('copyAccount')"
+      >
+        {{ account.accountName }}
+      </button>
+      <span aria-hidden="true">·</span>
       <button
         class="appointment-account-summary__copy"
         type="button"
@@ -91,6 +108,27 @@ const emit = defineEmits<{
   color: var(--brand-strong);
   background: transparent;
   cursor: copy;
+}
+
+.appointment-account-summary__account {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  color: var(--brand-strong);
+  background: transparent;
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 36%, transparent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: copy;
+}
+
+.appointment-account-summary__account:hover,
+.appointment-account-summary__account:focus-visible {
+  text-decoration-color: currentColor;
+  outline: none;
 }
 
 .appointment-account-summary__copy:hover:not(:disabled),
