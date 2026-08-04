@@ -282,6 +282,7 @@ onMounted(loadColumnWidths);
       @toggle-all="toggleAll"
       @toggle-one="selection.toggleOne"
       @edit="ui.openEditAppointment"
+      @settle="ui.openSettleAppointment"
       @duplicate="duplicate"
       @copy-account="copyAccount"
       @copy-voice-channel="copyVoiceChannel"

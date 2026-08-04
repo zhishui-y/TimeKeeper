@@ -30,6 +30,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   edit: [appointment: Appointment];
+  settle: [appointment: Appointment];
   duplicate: [appointment: Appointment];
   delete: [appointment: Appointment];
   copyAccount: [appointment: Appointment];
@@ -280,7 +281,19 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
                 {{ modeLabels[appointment.mode] }}
               </span>
             </td>
-            <td><StatusBadge :progress-status="appointmentProgressStatus(appointment)" /></td>
+            <td>
+              <button
+                v-if="appointmentProgressStatus(appointment) === 'pending_settlement'"
+                class="settlement-status-button"
+                type="button"
+                title="点击填写结算金额"
+                :aria-label="`填写${appointment.contactName} 的结算金额`"
+                @click="emit('settle', appointment)"
+              >
+                <StatusBadge progress-status="pending_settlement" />
+              </button>
+              <StatusBadge v-else :progress-status="appointmentProgressStatus(appointment)" />
+            </td>
             <td class="mono-number amount-cell">
               {{ appointment.mode === "business" ? formatCurrency(appointment.amountMinor) : "—" }}
             </td>
@@ -374,6 +387,25 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
 .amount-cell {
   color: var(--ink-strong);
   font-weight: 650;
+}
+
+.settlement-status-button {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.settlement-status-button:hover {
+  filter: brightness(0.96);
+}
+
+.settlement-status-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--amber) 72%, transparent);
+  outline-offset: 2px;
 }
 
 .row-actions {

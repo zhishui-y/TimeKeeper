@@ -135,6 +135,35 @@ describe("AppointmentTable", () => {
     });
   });
 
+  it("makes only pending settlement status actionable and emits settle", async () => {
+    const pending = appointment(true, {
+      id: "appointment-pending-settlement",
+      serviceStatus: "completed",
+      settlementStatus: "unsettled",
+    });
+    const scheduled = appointment(true, { id: "appointment-scheduled" });
+    const wrapper = mount(AppointmentTable, {
+      props: {
+        appointments: [pending, scheduled],
+        selectedIds: [],
+        allSelected: false,
+        selectionIndeterminate: false,
+        selectingAll: false,
+        columnWidths: { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+      },
+    });
+
+    const settlementButton = wrapper.get('button[aria-label="填写测试联系人 的结算金额"]');
+    expect(settlementButton.text()).toBe("待结算");
+    expect(wrapper.findAll(".settlement-status-button")).toHaveLength(1);
+
+    await settlementButton.trigger("click");
+    expect(wrapper.emitted("settle")?.[0]?.[0]).toMatchObject({
+      id: "appointment-pending-settlement",
+    });
+  });
+
   it("exposes all ten resizable data columns and emits typed width actions", async () => {
     const wrapper = mount(AppointmentTable, {
       props: {

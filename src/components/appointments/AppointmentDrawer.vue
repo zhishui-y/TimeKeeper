@@ -241,7 +241,14 @@ useModalFocus({
             </section>
 
             <section class="form-section">
-              <h3>进度与账号</h3>
+              <h3>账号与进度</h3>
+              <AppointmentAccountFields
+                v-model="accountModel"
+                :accounts="accounts"
+                :accounts-loading="accountsLoading"
+                :appointment-id="appointment?.id"
+                @copy-password="emit('copyPassword', $event)"
+              />
               <div class="form-grid form-grid--status">
                 <label class="field">
                   <span class="field__label">预约进度</span>
@@ -256,13 +263,6 @@ useModalFocus({
                   </select>
                 </label>
               </div>
-              <AppointmentAccountFields
-                v-model="accountModel"
-                :accounts="accounts"
-                :accounts-loading="accountsLoading"
-                :appointment-id="appointment?.id"
-                @copy-password="emit('copyPassword', $event)"
-              />
             </section>
 
             <section v-if="draft.mode === 'business'" class="form-section form-section--billing">

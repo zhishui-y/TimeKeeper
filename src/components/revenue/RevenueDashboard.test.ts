@@ -11,6 +11,9 @@ const RevenueChartStub = defineComponent({
   name: "RevenueChart",
   props: {
     points: { type: Array, default: () => [] },
+    granularity: { type: String, required: true },
+    from: { type: String, required: true },
+    to: { type: String, required: true },
     drillable: { type: Boolean, default: false },
   },
   emits: ["periodSelect"],
@@ -81,6 +84,11 @@ describe("RevenueDashboard", () => {
     expect(pendingMetric.get("small").text()).toBe("已完成但未结算");
     expect(pendingMetric.text()).not.toContain("¥");
     expect(wrapper.text()).not.toContain("待结金额");
+    expect(wrapper.getComponent(RevenueChartStub).props()).toMatchObject({
+      granularity: "day",
+      from: "2026-07-27",
+      to: "2026-08-02",
+    });
 
     wrapper.unmount();
   });
@@ -138,6 +146,7 @@ describe("RevenueDashboard", () => {
 
     await weekButton.trigger("click");
     await flushPromises();
+    expect(wrapper.getComponent(RevenueChartStub).props("granularity")).toBe("week");
     await wrapper.get(".revenue-chart-stub").trigger("click");
     await flushPromises();
 

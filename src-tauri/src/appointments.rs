@@ -2303,6 +2303,48 @@ mod tests {
     }
 
     #[test]
+    fn zero_amount_is_valid_for_completed_and_settled_appointments() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let mut direct_input = business_input("2026-08-03", "10:00", "11:00");
+            direct_input.settlement_status = SettlementStatus::Settled;
+            direct_input.amount_minor = Some(0);
+            let direct = create_appointment_impl(&database, direct_input)
+                .await
+                .unwrap()
+                .appointment;
+            assert_eq!(direct.service_status, ServiceStatus::Completed);
+            assert_eq!(direct.settlement_status, SettlementStatus::Settled);
+            assert_eq!(direct.amount_minor, Some(0));
+
+            let mut negative_input = business_input("2026-08-03", "11:00", "12:00");
+            negative_input.amount_minor = Some(-1);
+            assert_eq!(
+                normalize_input(negative_input).unwrap_err(),
+                "金额不能为负数"
+            );
+
+            let pending =
+                create_appointment_impl(&database, business_input("2026-08-03", "12:00", "13:00"))
+                    .await
+                    .unwrap()
+                    .appointment;
+            assert_eq!(
+                settle_appointment_impl(&database, &pending.id, -1, None)
+                    .await
+                    .unwrap_err(),
+                "结算金额不能为负数"
+            );
+            let settled = settle_appointment_impl(&database, &pending.id, 0, Some("其他".into()))
+                .await
+                .unwrap();
+            assert_eq!(settled.service_status, ServiceStatus::Completed);
+            assert_eq!(settled.settlement_status, SettlementStatus::Settled);
+            assert_eq!(settled.amount_minor, Some(0));
+        });
+    }
+
+    #[test]
     fn paginates_ten_thousand_rows_with_stable_order() {
         run_async(async {
             let database = Database::in_memory().await.unwrap();

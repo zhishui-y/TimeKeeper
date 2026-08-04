@@ -195,6 +195,40 @@ describe("AppointmentDrawer", () => {
     expect(wrapper.emitted("save")).toBeUndefined();
   });
 
+  it("places account before progress and keeps progress next to billing", () => {
+    const wrapper = mountDrawer();
+    const accountFields = wrapper.get(".account-fields").element;
+    const progressSelect = wrapper.get('select[aria-label="预约进度"]').element;
+    const amountInput = wrapper.get('input[type="number"][step="0.01"]').element;
+
+    expect(wrapper.text()).toContain("账号与进度");
+    expect(accountFields.compareDocumentPosition(progressSelect)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(progressSelect.compareDocumentPosition(amountInput)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it("accepts zero as an explicit amount for a completed business appointment", async () => {
+    const wrapper = mountDrawer();
+    await wrapper.get('input[placeholder="谁约的"]').setValue("零元预约");
+    const noneButton = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("不使用账号"));
+    await noneButton?.trigger("click");
+    await wrapper.get('select[aria-label="预约进度"]').setValue("completed");
+    await wrapper.get('input[type="number"][step="0.01"]').setValue("0");
+
+    await wrapper.get('button.button--primary[type="submit"]').trigger("click");
+
+    expect(wrapper.emitted("save")?.[0]?.[0]).toMatchObject({
+      serviceStatus: "completed",
+      settlementStatus: "settled",
+      amountMinor: 0,
+    });
+  });
+
   it("focuses the amount input when opened from the settlement action", async () => {
     const wrapper = mountDrawer(30, completedAppointment(), "amount");
     await flushPromises();

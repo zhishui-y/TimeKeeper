@@ -122,6 +122,27 @@ describe("useAppointmentDraft", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it("continues to reject a negative business amount", () => {
+    const onSave = vi.fn();
+    const { draft, errors, submit } = setup({ onSave });
+    draft.contactName = "负金额预约";
+    draft.account = {
+      kind: "none",
+      profileId: "",
+      details: { accountName: "", specialization: null, gearScore: null, server: null },
+      credentialKind: "replace",
+      password: "",
+      sourceAppointmentId: "",
+      hasPassword: false,
+    };
+    draft.amountYuan = -1;
+
+    submit();
+
+    expect(errors.value).toContain("账单金额格式不正确");
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it("keeps an imported appointment without a password editable without inventing a secret", () => {
     const onSave = vi.fn();
     const appointment: Appointment = {

@@ -252,6 +252,9 @@ watch(() => [range.from, range.to, range.granularity] as const, closePeriodDetai
           role="img"
           :aria-label="chartDescription"
           :points="summary?.points ?? []"
+          :granularity="range.granularity"
+          :from="summary?.from ?? range.from"
+          :to="summary?.to ?? range.to"
           drillable
           @period-select="showPeriodDetail"
         />

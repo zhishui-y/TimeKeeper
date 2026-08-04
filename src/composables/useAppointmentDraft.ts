@@ -42,7 +42,7 @@ export interface AppointmentDraft {
   account: AppointmentAccountDraft;
   rateNote: string;
   paymentMethod: string;
-  amountYuan: string;
+  amountYuan: string | number;
   reminderEnabled: boolean;
   reminderMinutes: number;
   voicePlatform: VoicePlatform | "";
@@ -273,7 +273,8 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
     if (draft.startTime && draft.endTime && draft.startTime === draft.endTime) {
       nextErrors.push("开始时间和结束时间不能相同");
     }
-    const amount = draft.amountYuan ? Number(draft.amountYuan) : null;
+    const amountText = String(draft.amountYuan).trim();
+    const amount = amountText ? Number(amountText) : null;
     if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
       nextErrors.push("账单金额格式不正确");
     }

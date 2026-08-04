@@ -129,6 +129,23 @@ describe("AppointmentsWorkspace", () => {
     wrapper.unmount();
   });
 
+  it("opens pending settlement appointments with the amount field as initial focus", async () => {
+    const target = appointment("completed");
+    vi.spyOn(mockApi, "listAppointmentPage").mockResolvedValue(appointmentPage([target]));
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
+    const pinia = createPinia();
+    const wrapper = mount(AppointmentsWorkspace, { global: { plugins: [pinia] } });
+    await flushPromises();
+
+    await wrapper.get('button[aria-label="填写测试联系人 的结算金额"]').trigger("click");
+
+    const ui = useUiStore(pinia);
+    expect(ui.appointmentDrawerOpen).toBe(true);
+    expect(ui.activeAppointment?.id).toBe(target.id);
+    expect(ui.appointmentDrawerInitialFocus).toBe("amount");
+    wrapper.unmount();
+  });
+
   it("rolls column widths back when persistence fails", async () => {
     vi.spyOn(mockApi, "listAppointmentPage").mockResolvedValue(appointmentPage([appointment()]));
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());

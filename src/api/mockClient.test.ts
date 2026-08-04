@@ -234,6 +234,46 @@ describe("browser mock API", () => {
         amountMinor: null,
       }),
     ).rejects.toThrow("已完成预约必须填写金额");
+
+    await expect(
+      mockApi.createAppointment(businessInput("2099-08-04", "13:00", "14:00", "负金额", -1)),
+    ).rejects.toThrow("金额不能为负数");
+  });
+
+  it("accepts zero for both direct completion and the settlement command", async () => {
+    const date = "2099-12-29";
+    const direct = await mockApi.createAppointment({
+      ...businessInput(date, "10:00", "11:00", "零元直接结算", 0),
+      settlementStatus: "settled",
+    });
+    const pending = await mockApi.createAppointment({
+      ...businessInput(date, "12:00", "13:00", "零元快捷结算", 1_000),
+      serviceStatus: "completed",
+    });
+
+    try {
+      expect(direct.appointment).toMatchObject({
+        serviceStatus: "completed",
+        settlementStatus: "settled",
+        amountMinor: 0,
+      });
+      await expect(
+        mockApi.settleAppointment(pending.appointment.id, 0, "其他"),
+      ).resolves.toMatchObject({
+        serviceStatus: "completed",
+        settlementStatus: "settled",
+        amountMinor: 0,
+      });
+      await expect(mockApi.getRevenueSummary(date, date, "day")).resolves.toMatchObject({
+        settledMinor: 0,
+        pendingCount: 0,
+      });
+    } finally {
+      await mockApi.deleteAppointments({
+        kind: "explicit",
+        ids: [direct.appointment.id, pending.appointment.id],
+      });
+    }
   });
 
   it("filters appointments by unified progress across both modes", async () => {

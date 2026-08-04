@@ -6,12 +6,15 @@ import type { ECElementEvent } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import { computed, onBeforeUnmount, onMounted, shallowRef } from "vue";
 import VChart from "vue-echarts";
-import type { RevenuePoint } from "../../types/domain";
+import type { ReportGranularity, RevenuePoint } from "../../types/domain";
 
 use([BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
 
 const props = defineProps<{
   points: readonly RevenuePoint[];
+  granularity: ReportGranularity;
+  from: string;
+  to: string;
   drillable?: boolean;
 }>();
 
@@ -38,12 +41,25 @@ function handleChartClick(event: ECElementEvent): void {
 onMounted(() => reducedMotionQuery?.addEventListener("change", updateReducedMotion));
 onBeforeUnmount(() => reducedMotionQuery?.removeEventListener("change", updateReducedMotion));
 
+const spansMultipleYears = computed(() => props.from.slice(0, 4) !== props.to.slice(0, 4));
+
+function formatPeriodLabel(period: string): string {
+  const label = props.granularity === "month" ? period.slice(5, 7) : period.slice(5);
+  return spansMultipleYears.value ? `${period.slice(0, 4)}\n${label}` : label;
+}
+
 const option = computed(() => ({
   animation: !prefersReducedMotion.value,
   animationDuration: prefersReducedMotion.value ? 0 : 420,
   animationDurationUpdate: prefersReducedMotion.value ? 0 : 300,
   color: ["#24614d", "#759288"],
-  grid: { top: 46, right: 24, bottom: 36, left: 58, containLabel: false },
+  grid: {
+    top: 46,
+    right: 24,
+    bottom: spansMultipleYears.value ? 50 : 36,
+    left: 58,
+    containLabel: false,
+  },
   tooltip: {
     trigger: "axis",
     backgroundColor: "#fffdf8",
@@ -60,10 +76,16 @@ const option = computed(() => ({
   },
   xAxis: {
     type: "category",
-    data: props.points.map((point) => point.period.slice(5)),
+    data: props.points.map((point) => point.period),
     axisLine: { lineStyle: { color: "#d8ddd5" } },
     axisTick: { show: false },
-    axisLabel: { color: "#66736d", fontSize: 11 },
+    axisLabel: {
+      color: "#66736d",
+      fontSize: 11,
+      hideOverlap: true,
+      lineHeight: spansMultipleYears.value ? 14 : 12,
+      formatter: formatPeriodLabel,
+    },
   },
   yAxis: [
     {
