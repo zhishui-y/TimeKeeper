@@ -929,6 +929,9 @@ fn parse_time_range(service_date: NaiveDate, value: &str) -> Result<ParsedTimeRa
 
     let start = datetime_from_minutes(service_date, start_minutes)?;
     let end = datetime_from_minutes(service_date, absolute_end)?;
+    if end - start >= Duration::days(1) {
+        return Err(());
+    }
     let crossed = start.date_naive() != service_date || end.date_naive() != service_date;
     Ok((Some(start), Some(end), crossed))
 }
@@ -1245,6 +1248,16 @@ mod tests {
         assert!(crossed);
         assert_eq!(start.expect("start").date_naive(), date + Duration::days(1));
         assert_eq!(end.expect("end").date_naive(), date + Duration::days(1));
+
+        let (start, end, crossed) =
+            parse_time_range(date, "23:15-24:35").expect("valid cross-midnight range");
+        assert!(crossed);
+        assert_eq!(
+            end.expect("end") - start.expect("start"),
+            Duration::minutes(80)
+        );
+
+        assert!(parse_time_range(date, "00:15-24:35").is_err());
     }
 
     #[test]

@@ -1249,19 +1249,8 @@ async fn validate_v2_database_rows(connection: &mut SqliteConnection) -> Result<
             .as_deref()
             .map(|value| parse_appointment_datetime(value, "结束时间", &appointment.id))
             .transpose()?;
-        let next_service_date = service_date.checked_add_days(Days::new(1));
-        let invalid_time_range = match (starts_at, ends_at) {
-            (None, Some(_)) => true,
-            (Some(start), Some(end)) => {
-                end <= start
-                    || end - start >= chrono::Duration::days(1)
-                    || (end.date() != service_date && Some(end.date()) != next_service_date)
-            }
-            _ => false,
-        };
-        if starts_at.is_some_and(|value| value.date() != service_date)
-            || invalid_time_range
-            || appointment.id.trim().is_empty()
+        validate_appointment_time_range(&appointment.id, service_date, starts_at, ends_at)?;
+        if appointment.id.trim().is_empty()
             || appointment.contact_name.trim().is_empty()
             || match account_name.as_deref() {
                 Some(value) => value.trim().is_empty(),
@@ -1823,19 +1812,8 @@ async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(),
             .as_deref()
             .map(|value| parse_appointment_datetime(value, "结束时间", &appointment.id))
             .transpose()?;
-        let next_service_date = service_date.checked_add_days(Days::new(1));
-        let invalid_time_range = match (starts_at, ends_at) {
-            (None, Some(_)) => true,
-            (Some(start), Some(end)) => {
-                end <= start
-                    || end - start >= chrono::Duration::days(1)
-                    || (end.date() != service_date && Some(end.date()) != next_service_date)
-            }
-            _ => false,
-        };
-        if starts_at.is_some_and(|value| value.date() != service_date)
-            || invalid_time_range
-            || appointment.id.trim().is_empty()
+        validate_appointment_time_range(&appointment.id, service_date, starts_at, ends_at)?;
+        if appointment.id.trim().is_empty()
             || appointment.contact_name.trim().is_empty()
             || appointment.amount_minor.is_some_and(|value| value < 0)
             || appointment.reminder_minutes.is_some_and(|value| value < 0)
@@ -1923,6 +1901,48 @@ fn parse_appointment_datetime(
 ) -> Result<NaiveDateTime, BackupError> {
     NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
         .map_err(|_| BackupError::InvalidBackup(format!("预约 {appointment_id} 的{field}无效")))
+}
+
+fn validate_appointment_time_range(
+    appointment_id: &str,
+    service_date: NaiveDate,
+    starts_at: Option<NaiveDateTime>,
+    ends_at: Option<NaiveDateTime>,
+) -> Result<(), BackupError> {
+    let Some(start) = starts_at else {
+        return if ends_at.is_some() {
+            Err(BackupError::InvalidBackup(format!(
+                "预约 {appointment_id} 有结束时间但缺少开始时间"
+            )))
+        } else {
+            Ok(())
+        };
+    };
+    if start.date() != service_date {
+        return Err(BackupError::InvalidBackup(format!(
+            "预约 {appointment_id} 的开始时间与服务日期不一致"
+        )));
+    }
+    let Some(end) = ends_at else {
+        return Ok(());
+    };
+    if end <= start {
+        return Err(BackupError::InvalidBackup(format!(
+            "预约 {appointment_id} 的结束时间必须晚于开始时间"
+        )));
+    }
+    if end - start >= chrono::Duration::days(1) {
+        return Err(BackupError::InvalidBackup(format!(
+            "预约 {appointment_id} 的持续时间必须少于 24 小时"
+        )));
+    }
+    let next_service_date = service_date.checked_add_days(Days::new(1));
+    if end.date() != service_date && Some(end.date()) != next_service_date {
+        return Err(BackupError::InvalidBackup(format!(
+            "预约 {appointment_id} 的结束日期超出允许范围"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_rfc3339(value: &str, field: &str, record_id: &str) -> Result<(), BackupError> {
@@ -3051,7 +3071,7 @@ mod tests {
         let error = runtime()
             .block_on(state.stage_restore(&invalid_duration_backup))
             .unwrap_err();
-        assert!(error.to_string().contains("字段值"));
+        assert!(error.to_string().contains("持续时间必须少于 24 小时"));
 
         let missing_vault_backup = dir.join("missing-vault.tkbackup");
         write_test_backup_with_version(
