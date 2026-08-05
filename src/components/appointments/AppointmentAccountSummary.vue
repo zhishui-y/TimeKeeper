@@ -28,7 +28,6 @@ const emit = defineEmits<{
       <span v-if="account.source === 'profile'" class="appointment-account-summary__value">
         {{ account.characterName || "—" }}
       </span>
-      <span v-if="account.source === 'profile'" aria-hidden="true">·</span>
       <button
         v-if="account.source === 'profile'"
         class="appointment-account-summary__copy"
@@ -49,7 +48,6 @@ const emit = defineEmits<{
       >
         {{ account.accountName }}
       </button>
-      <span aria-hidden="true">·</span>
       <button
         class="appointment-account-summary__copy"
         type="button"

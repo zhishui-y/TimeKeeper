@@ -21,9 +21,7 @@ describe("AppointmentAccountSummary", () => {
       },
     });
 
-    expect(wrapper.get(".appointment-account-summary__line--secondary").text()).toBe(
-      "梦江南·清心··",
-    );
+    expect(wrapper.get(".appointment-account-summary__line--secondary").text()).toBe("梦江南·清心");
     expect(wrapper.find(".appointment-account-summary__account").exists()).toBe(false);
     expect(wrapper.findAll(".appointment-account-summary__copy")).toHaveLength(2);
 
@@ -49,7 +47,7 @@ describe("AppointmentAccountSummary", () => {
 
     expect(wrapper.get(".appointment-account-summary__line:first-child").text()).toBe("—·—");
     expect(wrapper.get(".appointment-account-summary__line--secondary").text()).toBe(
-      "—·one-time-login·",
+      "—·one-time-login",
     );
     const accountButton = wrapper.get('button[aria-label="复制账号 one-time-login"]');
     await accountButton.trigger("click");

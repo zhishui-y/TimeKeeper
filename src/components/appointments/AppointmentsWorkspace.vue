@@ -267,29 +267,35 @@ onMounted(loadColumnWidths);
       </span>
       <span v-else>取消记录默认保留，可筛选后回顾</span>
     </div>
-    <div v-if="history.loading.value" class="loading-line" />
     <div v-if="history.error.value" class="error-banner">{{ history.error.value }}</div>
-    <AppointmentTable
-      :appointments="history.items.value"
-      :column-widths="columnWidths"
-      :saving-column-widths="savingColumnWidths"
-      :selected-ids="currentPageSelectedIds"
-      :all-selected="allSelected"
-      :selection-indeterminate="selectionIndeterminate"
-      :selecting-all="selection.selectingAll.value"
-      @toggle-all="toggleAll"
-      @toggle-one="selection.toggleOne"
-      @edit="ui.openEditAppointment"
-      @settle="ui.openSettleAppointment"
-      @duplicate="duplicate"
-      @copy-account="copyAccount"
-      @copy-voice-channel="copyVoiceChannel"
-      @copy-password="copyPassword"
-      @delete="requestDelete"
-      @preview-column-width="previewColumnWidth"
-      @commit-column-width="commitColumnWidth"
-      @cancel-column-resize="cancelColumnResize"
-    />
+    <div class="appointments-workspace__table-region">
+      <div
+        v-show="history.loading.value"
+        class="loading-line appointments-workspace__loading"
+        aria-hidden="true"
+      />
+      <AppointmentTable
+        :appointments="history.items.value"
+        :column-widths="columnWidths"
+        :saving-column-widths="savingColumnWidths"
+        :selected-ids="currentPageSelectedIds"
+        :all-selected="allSelected"
+        :selection-indeterminate="selectionIndeterminate"
+        :selecting-all="selection.selectingAll.value"
+        @toggle-all="toggleAll"
+        @toggle-one="selection.toggleOne"
+        @edit="ui.openEditAppointment"
+        @settle="ui.openSettleAppointment"
+        @duplicate="duplicate"
+        @copy-account="copyAccount"
+        @copy-voice-channel="copyVoiceChannel"
+        @copy-password="copyPassword"
+        @delete="requestDelete"
+        @preview-column-width="previewColumnWidth"
+        @commit-column-width="commitColumnWidth"
+        @cancel-column-resize="cancelColumnResize"
+      />
+    </div>
     <AppointmentPagination
       :page="history.page.value"
       :page-size="history.pageSize.value"
@@ -323,6 +329,21 @@ onMounted(loadColumnWidths);
   border-radius: var(--radius-lg, 14px);
   background: color-mix(in srgb, var(--surface) 92%, transparent);
   box-shadow: var(--shadow-xs, 0 3px 14px rgba(31, 49, 42, 0.04));
+}
+
+.appointments-workspace__table-region {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.appointments-workspace__loading {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  right: 0;
+  left: 0;
 }
 
 .result-line {

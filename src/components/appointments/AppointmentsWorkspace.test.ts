@@ -68,6 +68,14 @@ function appointmentPage(items: Appointment[]) {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 function buttonByText(text: string): HTMLButtonElement {
   const button = Array.from(document.body.querySelectorAll("button")).find(
     (candidate) => candidate.textContent?.trim() === text,
@@ -336,6 +344,57 @@ describe("AppointmentsWorkspace", () => {
     await flushPromises();
     expect(list).toHaveBeenLastCalledWith({ mode: "business" }, 1, 100);
     expect(wrapper.text()).not.toContain("1 条已选中");
+    wrapper.unmount();
+  });
+
+  it("overlays the loading indicator without replacing or shifting the table during pagination", async () => {
+    const firstPageAppointment = appointment();
+    const secondPageAppointment = {
+      ...appointment(),
+      id: "appointment-page-2",
+      contactName: "第二页联系人",
+    };
+    const pendingSecondPage = deferred<ReturnType<typeof appointmentPage>>();
+    vi.spyOn(mockApi, "listAppointmentPage")
+      .mockResolvedValueOnce({
+        items: [firstPageAppointment],
+        totalCount: 200,
+        page: 1,
+        pageSize: 100,
+        totalPages: 2,
+      })
+      .mockReturnValueOnce(pendingSecondPage.promise);
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
+
+    const wrapper = mount(AppointmentsWorkspace, {
+      global: { plugins: [createPinia(), router] },
+    });
+    await flushPromises();
+
+    const tableRegion = wrapper.get(".appointments-workspace__table-region");
+    const tableElement = tableRegion.get(".appointment-table").element;
+    const loadingIndicator = tableRegion.get(".appointments-workspace__loading");
+    expect(loadingIndicator.attributes("style")).toContain("display: none");
+
+    await wrapper.get('button[aria-label="下一页"]').trigger("click");
+    await wrapper.vm.$nextTick();
+
+    expect(loadingIndicator.attributes("style") ?? "").not.toContain("display: none");
+    expect(tableRegion.get(".appointment-table").element).toBe(tableElement);
+    expect(tableRegion.text()).toContain(firstPageAppointment.contactName);
+
+    pendingSecondPage.resolve({
+      items: [secondPageAppointment],
+      totalCount: 200,
+      page: 2,
+      pageSize: 100,
+      totalPages: 2,
+    });
+    await flushPromises();
+
+    expect(loadingIndicator.attributes("style")).toContain("display: none");
+    expect(tableRegion.get(".appointment-table").element).toBe(tableElement);
+    expect(tableRegion.text()).toContain(secondPageAppointment.contactName);
     wrapper.unmount();
   });
 
