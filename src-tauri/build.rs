@@ -48,12 +48,10 @@ fn configure_windows_libsodium_linking() {
 
     let debug = env::var("DEBUG").as_deref() == Ok("true");
     let configuration = if debug { "Debug" } else { "Release" };
-    let static_crt = if debug { "LIBCMTD" } else { "LIBCMT" };
-
-    // libsodium-sys-stable bundles a /MT(d) static archive while Rust's MSVC
-    // target uses the dynamic CRT. Resolve all native CRT references through
-    // Rust's selected runtime instead of linking two incompatible CRT copies.
-    println!("cargo:rustc-link-arg=/NODEFAULTLIB:{static_crt}");
+    // Current MSVC import libraries depend on symbols supplied by LIBCMT(D),
+    // even when Rust selects the dynamic CRT. Do not globally exclude that
+    // library: doing so breaks both the desktop executable and generated DLLs
+    // with unresolved security-cookie and TLS runtime symbols.
 
     // The desktop executable links the Rust rlib directly; no Windows consumer
     // imports the generated cdylib or test binaries. Avoid unused import-library
