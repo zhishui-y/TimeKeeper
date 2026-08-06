@@ -841,6 +841,11 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
   background: var(--surface-soft);
 }
 
+.account-table tbody tr.needs-review:hover,
+.account-table tbody tr.needs-review:hover td:last-child {
+  background: color-mix(in srgb, var(--amber-soft) 46%, var(--surface));
+}
+
 .account-table tbody tr {
   transition:
     background-color 140ms ease,

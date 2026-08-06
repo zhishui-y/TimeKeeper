@@ -19,6 +19,62 @@ async function readMoneyMinor(metric: Locator): Promise<number> {
   return Math.round(Number(normalized || "0") * 100);
 }
 
+async function readAccountToolbarGeometry(page: Page): Promise<{
+  searchX: number;
+  searchWidth: number;
+  contactWidth: number;
+  serverWidth: number;
+  resetX: number;
+  resetWidth: number;
+  actionsX: number;
+  actionsWidth: number;
+  hasOverflow: boolean;
+}> {
+  return page.locator(".account-toolbar").evaluate((toolbar) => {
+    const search = toolbar.querySelector<HTMLElement>(".account-toolbar__search")!;
+    const contact = toolbar.querySelector<HTMLElement>(".account-toolbar__select--contact")!;
+    const server = toolbar.querySelector<HTMLElement>(".account-toolbar__select--server")!;
+    const reset = toolbar.querySelector<HTMLElement>(".account-toolbar__reset")!;
+    const actions = toolbar.querySelector<HTMLElement>(".account-toolbar__actions")!;
+    const searchBox = search.getBoundingClientRect();
+    const contactBox = contact.getBoundingClientRect();
+    const serverBox = server.getBoundingClientRect();
+    const resetBox = reset.getBoundingClientRect();
+    const actionsBox = actions.getBoundingClientRect();
+    return {
+      searchX: searchBox.x,
+      searchWidth: searchBox.width,
+      contactWidth: contactBox.width,
+      serverWidth: serverBox.width,
+      resetX: resetBox.x,
+      resetWidth: resetBox.width,
+      actionsX: actionsBox.x,
+      actionsWidth: actionsBox.width,
+      hasOverflow: toolbar.scrollWidth > toolbar.clientWidth,
+    };
+  });
+}
+
+function expectStableToolbarGeometry(
+  before: Awaited<ReturnType<typeof readAccountToolbarGeometry>>,
+  after: Awaited<ReturnType<typeof readAccountToolbarGeometry>>,
+): void {
+  for (const key of [
+    "searchX",
+    "searchWidth",
+    "contactWidth",
+    "serverWidth",
+    "resetX",
+    "resetWidth",
+    "actionsX",
+    "actionsWidth",
+  ] as const) {
+    expect(Math.abs(before[key] - after[key]), `${key} changed`).toBeLessThanOrEqual(1);
+  }
+  expect(before.hasOverflow).toBe(false);
+  expect(after.hasOverflow).toBe(false);
+}
+
 async function createBusinessAppointment(
   page: Page,
   contactName: string,
@@ -68,12 +124,12 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
     await test.step("按账号查询并只筛选暂不可用档案", async () => {
       const search = page.getByPlaceholder("搜索联系人、区服、角色或账号");
       await search.fill(accountName);
-      await page.getByTitle("查询账号").click();
       await expect(accountRow(page, accountName)).toHaveCount(1);
 
       await search.fill("");
       await page.getByLabel("暂不可用", { exact: true }).check();
-      await expect(accountRow(page, accountName)).toBeVisible();
+      const reviewRow = accountRow(page, accountName);
+      await expect(reviewRow).toBeVisible();
       await expect(accountRow(page, "nanzhi_0217")).toHaveCount(0);
     });
 
@@ -122,6 +178,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       const drawer = page.getByRole("dialog", { name: "新建预约" });
       await drawer.getByLabel("日期 *").fill(templateDate);
       await drawer.getByLabel("开始时间", { exact: true }).fill("18:30");
+      await expect(page.getByTitle("查询账号")).toHaveCount(0);
       await drawer.getByLabel("结束时间（可留空）").fill("20:00");
       await drawer.getByLabel("联系人").fill(contactName);
       await drawer.getByLabel("预约内容").fill("模板恢复验收");
@@ -130,6 +187,18 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       await drawer.getByLabel("装分").fill("20万");
       await drawer.getByLabel("区服").fill("梦江南");
       await drawer.getByLabel("账号 *").fill("matrix_one_off");
+
+      const stickyCell = reviewRow.locator("td").last();
+      const backgroundBeforeHover = await Promise.all([
+        reviewRow.evaluate((element) => getComputedStyle(element).backgroundColor),
+        stickyCell.evaluate((element) => getComputedStyle(element).backgroundColor),
+      ]);
+      await reviewRow.hover();
+      const backgroundAfterHover = await Promise.all([
+        reviewRow.evaluate((element) => getComputedStyle(element).backgroundColor),
+        stickyCell.evaluate((element) => getComputedStyle(element).backgroundColor),
+      ]);
+      expect(backgroundAfterHover).toEqual(backgroundBeforeHover);
       await drawer.getByLabel("密码 *").fill("Matrix#Voice2026");
       await drawer.getByLabel("语音平台").selectOption("yy");
       await drawer.getByLabel("YY频道号码").fill("12345678");
@@ -146,6 +215,45 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       });
       await expect(todayCopy).toBeEnabled();
       await todayCopy.click();
+  test("账号筛选前后工具栏保持固定布局", async ({ page }) => {
+    await page.getByRole("link", { name: "账号档案" }).click();
+    await expect(page.getByRole("heading", { name: "账号档案", level: 1 })).toBeVisible();
+    await expect(page.locator(".accounts-workspace .loading-line")).toHaveCount(0);
+
+    const resetButton = page.getByRole("button", { name: "重置筛选和排序" });
+    const contactFilter = page.getByLabel("按联系人筛选账号");
+    await expect(resetButton).toBeDisabled();
+    await expect(resetButton).toHaveCSS("width", "34px");
+    const before = await readAccountToolbarGeometry(page);
+    expect(before.searchWidth).toBeGreaterThanOrEqual(219);
+    expect(before.searchWidth).toBeLessThanOrEqual(221);
+    expect(before.contactWidth).toBe(140);
+    expect(before.serverWidth).toBe(130);
+
+    const contact = await contactFilter
+      .locator('option:not([value=""])')
+      .first()
+      .getAttribute("value");
+    expect(contact).toBeTruthy();
+    await contactFilter.selectOption(contact!);
+    const serverFilter = page.getByLabel("按服务器筛选账号");
+    const server = await serverFilter
+      .locator('option:not([value=""])')
+      .first()
+      .getAttribute("value");
+    expect(server).toBeTruthy();
+    await serverFilter.selectOption(server!);
+    await expect(resetButton).toBeEnabled();
+    const filtered = await readAccountToolbarGeometry(page);
+    expectStableToolbarGeometry(before, filtered);
+
+    await resetButton.click();
+    await expect(contactFilter).toHaveValue("");
+    await expect(resetButton).toBeDisabled();
+    const reset = await readAccountToolbarGeometry(page);
+    expectStableToolbarGeometry(before, reset);
+  });
+
       await expect(page.getByRole("status")).toContainText("账号密码已复制");
       await todayRow.getByRole("button", { name: "编辑预约" }).click();
       const editDrawer = page.getByRole("dialog", { name: "编辑预约" });

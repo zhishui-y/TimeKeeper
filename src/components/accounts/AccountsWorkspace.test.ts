@@ -156,6 +156,49 @@ describe("AccountsWorkspace batch delete feedback", () => {
 
   it("persists drag order and copies the selected account name", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
+  it("searches on every query change and keeps only the newest response", async () => {
+    const firstSearch = deferred<AccountProfile[]>();
+    const secondSearch = deferred<AccountProfile[]>();
+    const listAccountProfiles = vi
+      .spyOn(mockApi, "listAccountProfiles")
+      .mockResolvedValueOnce(profiles)
+      .mockReturnValueOnce(firstSearch.promise)
+      .mockReturnValueOnce(secondSearch.promise)
+      .mockResolvedValueOnce(profiles);
+
+    const wrapper = mount(AccountsWorkspace, {
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+
+    await wrapper.get('input[aria-label="选择账号 账号一"]').setValue(true);
+    expect(wrapper.get(".account-summary").text()).toContain("1 个已选中");
+
+    const search = wrapper.get('input[aria-label="搜索账号"]');
+    await search.setValue("角");
+    expect(listAccountProfiles).toHaveBeenLastCalledWith("角", undefined);
+    expect(wrapper.get(".account-summary").text()).not.toContain("1 个已选中");
+
+    await search.setValue("角色二");
+    expect(listAccountProfiles).toHaveBeenLastCalledWith("角色二", undefined);
+
+    secondSearch.resolve([profiles[1]!]);
+    await flushPromises();
+    expect(wrapper.findAll(".data-table tbody tr")).toHaveLength(1);
+    expect(wrapper.get(".data-table tbody tr").text()).toContain("角色二");
+
+    firstSearch.resolve([profiles[0]!]);
+    await flushPromises();
+    expect(wrapper.findAll(".data-table tbody tr")).toHaveLength(1);
+    expect(wrapper.get(".data-table tbody tr").text()).toContain("角色二");
+
+    await search.setValue("");
+    await flushPromises();
+    expect(listAccountProfiles).toHaveBeenLastCalledWith("", undefined);
+    expect(wrapper.findAll(".data-table tbody tr")).toHaveLength(2);
+    wrapper.unmount();
+  });
+
     const reorder = vi.spyOn(mockApi, "reorderAccountProfiles").mockResolvedValue();
     const copyAccountName = vi.spyOn(mockApi, "copyAccountName").mockResolvedValue();
     const copyAccountCharacterName = vi

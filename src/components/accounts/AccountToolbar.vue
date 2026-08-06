@@ -30,7 +30,7 @@ const emit = defineEmits<{
 
 <template>
   <section class="account-toolbar" aria-label="账号工具栏">
-    <form class="account-toolbar__filters" @submit.prevent="emit('search')">
+    <div class="account-toolbar__filters" role="search">
       <label class="account-toolbar__search">
         <Search :size="15" aria-hidden="true" />
         <input
@@ -40,10 +40,6 @@ const emit = defineEmits<{
           aria-label="搜索账号"
         />
       </label>
-      <button class="button button--compact account-toolbar__query" type="submit" title="查询账号">
-        <Search :size="14" aria-hidden="true" />
-        <span class="account-toolbar__action-label">查询</span>
-      </button>
       <label class="account-toolbar__review">
         <input v-model="needsReviewOnly" type="checkbox" @change="emit('search')" />
         <span>暂不可用</span>
@@ -51,7 +47,7 @@ const emit = defineEmits<{
 
       <select
         v-model="contactName"
-        class="select account-toolbar__select"
+        class="select account-toolbar__select account-toolbar__select--contact"
         aria-label="按联系人筛选账号"
         title="按联系人筛选账号"
       >
@@ -62,7 +58,7 @@ const emit = defineEmits<{
       </select>
       <select
         v-model="server"
-        class="select account-toolbar__select"
+        class="select account-toolbar__select account-toolbar__select--server"
         aria-label="按服务器筛选账号"
         title="按服务器筛选账号"
       >
@@ -81,16 +77,16 @@ const emit = defineEmits<{
         </option>
       </select>
       <button
-        v-if="canResetView"
         class="button button--ghost button--compact account-toolbar__reset"
         type="button"
+        :disabled="!canResetView"
         title="重置筛选和排序"
         aria-label="重置筛选和排序"
         @click="emit('resetView')"
       >
         <RotateCcw :size="14" aria-hidden="true" />
       </button>
-    </form>
+    </div>
 
     <div class="account-toolbar__actions">
       <button
@@ -188,7 +184,7 @@ const emit = defineEmits<{
   position: relative;
   display: flex;
   min-width: 138px;
-  flex: 1 1 184px;
+  flex: 0 1 220px;
   align-items: center;
 }
 
@@ -221,7 +217,7 @@ const emit = defineEmits<{
 }
 
 .account-toolbar__select {
-  width: clamp(82px, 8vw, 110px);
+  width: var(--account-toolbar-select-width, clamp(82px, 8vw, 110px));
   height: 34px;
   padding-inline: 8px 22px;
   font-size: 11px;
@@ -229,11 +225,18 @@ const emit = defineEmits<{
 
 .account-toolbar .button {
   min-height: 34px;
+
+.account-toolbar__select--contact {
+  --account-toolbar-select-width: 140px;
+}
+
+.account-toolbar__select--server {
+  --account-toolbar-select-width: 130px;
+}
   padding-inline: 9px;
   font-size: 11px;
 }
 
-.account-toolbar__query,
 .account-toolbar__reset {
   flex: 0 0 auto;
 }
@@ -244,6 +247,11 @@ const emit = defineEmits<{
 
 .account-toolbar__spinner {
   animation: account-toolbar-spin 900ms linear infinite;
+}
+
+.account-toolbar__reset {
+  width: 34px;
+  padding-inline: 0;
 }
 
 @keyframes account-toolbar-spin {
@@ -258,12 +266,8 @@ const emit = defineEmits<{
     gap: 5px;
   }
 
-  .account-toolbar__search {
-    flex-basis: 150px;
-  }
-
   .account-toolbar__select {
-    width: 86px;
+    width: var(--account-toolbar-select-width, 86px);
   }
 
   .account-toolbar .button {
@@ -279,6 +283,17 @@ const emit = defineEmits<{
   .account-toolbar .button {
     width: 34px;
     padding-inline: 0;
+@container (max-width: 1160px) {
+  .account-toolbar__actions .account-toolbar__action-label {
+    display: none;
+  }
+
+  .account-toolbar__actions .button {
+    width: 34px;
+    padding-inline: 0;
+  }
+}
+
   }
 }
 

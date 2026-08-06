@@ -481,6 +481,10 @@ watch(
   },
 );
 
+watch(query, () => {
+  void search();
+});
+
 watch(
   () => [accountFilters.contactName, accountFilters.server, accountFilters.specialization],
   () => {
