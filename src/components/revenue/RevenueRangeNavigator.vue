@@ -132,7 +132,7 @@ const displayRangeLabel = computed(() => {
   align-items: center;
   gap: 8px;
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .range-navigator__label {
@@ -159,7 +159,7 @@ const displayRangeLabel = computed(() => {
   border-radius: 7px;
   color: var(--ink-muted);
   background: transparent;
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
   cursor: pointer;
   transition:
@@ -214,7 +214,7 @@ const displayRangeLabel = computed(() => {
 .range-navigator__actual {
   min-width: 154px;
   color: var(--ink-strong);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   text-align: center;
   white-space: nowrap;
 }
@@ -226,7 +226,7 @@ const displayRangeLabel = computed(() => {
   border-radius: 8px;
   color: var(--brand-strong);
   background: var(--brand-soft);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
   cursor: pointer;
   white-space: nowrap;
@@ -243,7 +243,7 @@ const displayRangeLabel = computed(() => {
 
 .range-navigator__all > strong {
   color: var(--ink-strong);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .range-navigator__custom {
@@ -260,7 +260,7 @@ const displayRangeLabel = computed(() => {
 .range-navigator__date {
   width: 137px;
   height: 32px;
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .range-navigator__date[aria-invalid="true"] {
@@ -274,7 +274,7 @@ const displayRangeLabel = computed(() => {
   left: 0;
   overflow: hidden;
   color: var(--danger);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   line-height: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -61,7 +61,7 @@ const lastItem = computed(() => Math.min(props.page * props.pageSize, props.tota
   gap: 12px;
   padding: 2px 4px 0;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .appointment-pagination__actions {
@@ -73,7 +73,7 @@ const lastItem = computed(() => Math.min(props.page * props.pageSize, props.tota
 .appointment-pagination__page {
   min-width: 82px;
   color: var(--ink);
-  font-family: "Bahnschrift", var(--font-sans);
+  font-family: var(--app-font-family), "Bahnschrift", var(--font-sans);
   text-align: center;
 }
 

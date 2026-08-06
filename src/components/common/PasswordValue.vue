@@ -79,8 +79,8 @@ watch(
   min-width: 48px;
   max-width: 150px;
   overflow: hidden;
-  font-family: "Bahnschrift", var(--font-sans);
-  font-size: 11px;
+  font-family: var(--app-font-family), "Bahnschrift", var(--font-sans);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   letter-spacing: 0.04em;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -123,7 +123,7 @@ watch(
 .password-value.is-compact .password-value__text {
   min-width: 43px;
   max-width: 110px;
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .password-value.is-compact .password-value__action {

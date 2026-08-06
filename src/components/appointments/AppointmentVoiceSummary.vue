@@ -43,7 +43,7 @@ const validYyChannel = computed(() => {
   align-items: center;
   gap: 4px;
   color: var(--ink-strong);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
 }
 
@@ -73,6 +73,6 @@ const validYyChannel = computed(() => {
 
 .appointment-voice-summary__empty {
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 </style>

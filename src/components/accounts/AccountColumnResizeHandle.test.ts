@@ -22,30 +22,32 @@ describe("AccountColumnResizeHandle", () => {
 
     dispatchPointerEvent(handle.element, "pointerdown", 100, 1);
     dispatchPointerEvent(handle.element, "pointermove", -100, 1);
-    expect(wrapper.emitted("preview")).toEqual([["contactName", 48]]);
+    dispatchPointerEvent(handle.element, "pointermove", 130, 1);
+    expect(wrapper.emitted("preview")).toBeUndefined();
     expect(wrapper.emitted("commit")).toBeUndefined();
 
-    dispatchPointerEvent(handle.element, "pointerup", -100, 1);
-    expect(wrapper.emitted("commit")).toEqual([["contactName", 48]]);
+    dispatchPointerEvent(handle.element, "pointerup", 130, 1);
+    expect(wrapper.emitted("preview")).toEqual([["contactName", 120]]);
+    expect(wrapper.emitted("commit")).toEqual([["contactName", 120]]);
   });
 
   it("cancels an active drag with Escape and supports keyboard resizing", async () => {
     const wrapper = mount(AccountColumnResizeHandle, {
-      props: { columnKey: "weekly", label: "本周", width: 160, disabled: false },
+      props: { columnKey: "weeklyWins", label: "本周胜场", width: 96, disabled: false },
     });
     const handle = wrapper.get("button");
 
     dispatchPointerEvent(handle.element, "pointerdown", 100, 2);
     dispatchPointerEvent(handle.element, "pointermove", 140, 2);
     await handle.trigger("keydown", { key: "Escape" });
-    expect(wrapper.emitted("cancel")).toEqual([["weekly", 160]]);
+    expect(wrapper.emitted("cancel")).toEqual([["weeklyWins", 96]]);
 
     await handle.trigger("keydown", { key: "ArrowRight" });
-    await wrapper.setProps({ width: 168 });
+    await wrapper.setProps({ width: 96 });
     await handle.trigger("keydown", { key: "ArrowLeft", shiftKey: true });
     expect(wrapper.emitted("commit")).toEqual([
-      ["weekly", 168],
-      ["weekly", 144],
+      ["weeklyWins", 104],
+      ["weeklyWins", 72],
     ]);
   });
 

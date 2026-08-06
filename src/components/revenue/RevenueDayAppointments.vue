@@ -87,12 +87,12 @@ const visibleAppointments = computed(() =>
   margin-top: 1px;
   color: var(--ink-strong);
   font-family: var(--font-serif, "Noto Serif SC", serif);
-  font-size: 14px;
+  font-size: calc(14px + var(--app-font-size-offset, 0px));
 }
 
 .day-appointments > header > span {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .day-appointments__list {
@@ -116,7 +116,7 @@ const visibleAppointments = computed(() =>
 
 .day-appointment__time {
   color: var(--ink-strong);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 700;
 }
 
@@ -139,17 +139,17 @@ const visibleAppointments = computed(() =>
 
 .day-appointment__main strong {
   color: var(--ink-strong);
-  font-size: 13px;
+  font-size: calc(13px + var(--app-font-size-offset, 0px));
 }
 
 .day-appointment__main span {
   color: var(--ink);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .day-appointment__main small {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .day-appointment__status,
@@ -163,17 +163,17 @@ const visibleAppointments = computed(() =>
 
 .day-appointment__billing > strong {
   color: var(--ink-strong);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .day-appointment__billing > span {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .day-appointment__mode {
   color: var(--brand-strong);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 700;
 }
 
@@ -182,7 +182,7 @@ const visibleAppointments = computed(() =>
   min-height: 180px;
   place-items: center;
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 @media (max-width: 680px) {

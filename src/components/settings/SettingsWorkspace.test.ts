@@ -44,6 +44,27 @@ describe("SettingsWorkspace operation progress", () => {
     vi.restoreAllMocks();
   });
 
+  it("scrolls settings categories without changing the hash route", async () => {
+    const scrollTo = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: scrollTo,
+    });
+    window.location.hash = "#/settings";
+    const wrapper = mount(SettingsWorkspace, {
+      attachTo: document.body,
+      global: { plugins: [createPinia()] },
+    });
+    await flushPromises();
+
+    await wrapper.get('button[aria-controls="access"]').trigger("click");
+
+    expect(window.location.hash).toBe("#/settings");
+    expect(scrollTo).toHaveBeenCalledOnce();
+    expect(document.activeElement?.id).toBe("access");
+    wrapper.unmount();
+  });
+
   it("shows an accessible progress state while generating an import preview", async () => {
     const pendingPreview = deferred<ExcelImportPreview>();
     vi.spyOn(mockApi, "selectExcelFile").mockResolvedValue(preview.sourcePath);
@@ -239,23 +260,30 @@ describe("SettingsWorkspace operation progress", () => {
     wrapper.unmount();
   });
 
-  it("loads, validates, and saves the role data server URL through unified settings", async () => {
+  it("loads, validates, and saves the role data server URL and API key", async () => {
     const previous = await mockApi.getSettings();
     const updateSettings = vi.spyOn(mockApi, "updateSettings").mockImplementation(async (next) => ({
       ...next,
       accountRoleDataServerUrl: next.accountRoleDataServerUrl.trim(),
+      accountRoleDataApiKey: next.accountRoleDataApiKey.trim(),
     }));
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(previous);
 
     const wrapper = mount(SettingsWorkspace, { global: { plugins: [createPinia()] } });
     await flushPromises();
     const input = wrapper.get('input[aria-label="角色数据服务器基础 URL"]');
+    const apiKeyInput = wrapper.get('input[aria-label="角色数据 API 密钥"]');
+    expect(apiKeyInput.attributes("type")).toBe("password");
     await input.setValue("https://example.test/jx3/");
+    await apiKeyInput.setValue("  excel-secret  ");
     await buttonWithText(wrapper, "保存设置").trigger("click");
     await flushPromises();
 
     expect(updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ accountRoleDataServerUrl: "https://example.test/jx3/" }),
+      expect.objectContaining({
+        accountRoleDataServerUrl: "https://example.test/jx3/",
+        accountRoleDataApiKey: "  excel-secret  ",
+      }),
     );
     await input.setValue("https://user:password@example.test/jx3/");
     expect(wrapper.get('[role="alert"]').text()).toContain("不能包含用户名或密码");

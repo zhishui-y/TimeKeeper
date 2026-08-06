@@ -200,7 +200,7 @@ const emit = defineEmits<{
   width: 100%;
   height: 34px;
   padding-left: 31px;
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .account-toolbar__review {
@@ -209,7 +209,7 @@ const emit = defineEmits<{
   align-items: center;
   gap: 5px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .account-toolbar__review input {
@@ -220,11 +220,8 @@ const emit = defineEmits<{
   width: var(--account-toolbar-select-width, clamp(82px, 8vw, 110px));
   height: 34px;
   padding-inline: 8px 22px;
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
-
-.account-toolbar .button {
-  min-height: 34px;
 
 .account-toolbar__select--contact {
   --account-toolbar-select-width: 140px;
@@ -233,12 +230,20 @@ const emit = defineEmits<{
 .account-toolbar__select--server {
   --account-toolbar-select-width: 130px;
 }
+
+.account-toolbar .button {
+  min-height: 34px;
   padding-inline: 9px;
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .account-toolbar__reset {
   flex: 0 0 auto;
+}
+
+.account-toolbar__reset {
+  width: 34px;
+  padding-inline: 0;
 }
 
 .account-toolbar__action {
@@ -247,11 +252,6 @@ const emit = defineEmits<{
 
 .account-toolbar__spinner {
   animation: account-toolbar-spin 900ms linear infinite;
-}
-
-.account-toolbar__reset {
-  width: 34px;
-  padding-inline: 0;
 }
 
 @keyframes account-toolbar-spin {
@@ -275,14 +275,6 @@ const emit = defineEmits<{
   }
 }
 
-@container (max-width: 920px) {
-  .account-toolbar__action-label {
-    display: none;
-  }
-
-  .account-toolbar .button {
-    width: 34px;
-    padding-inline: 0;
 @container (max-width: 1160px) {
   .account-toolbar__actions .account-toolbar__action-label {
     display: none;
@@ -294,6 +286,14 @@ const emit = defineEmits<{
   }
 }
 
+@container (max-width: 920px) {
+  .account-toolbar__action-label {
+    display: none;
+  }
+
+  .account-toolbar .button {
+    width: 34px;
+    padding-inline: 0;
   }
 }
 

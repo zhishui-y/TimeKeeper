@@ -25,7 +25,7 @@ const label = computed(() => appointmentProgressStatusLabels[props.progressStatu
   border-radius: 999px;
   color: var(--ink-muted);
   background: var(--surface-soft);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 680;
   letter-spacing: 0.01em;
   white-space: nowrap;

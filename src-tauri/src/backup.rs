@@ -19,7 +19,7 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 use crate::{
     accounts::profile_from_row,
-    app_access::AppAccessState,
+    app_access::{AppAccessState, is_supported_access_verifier},
     appointments::appointment_from_row,
     db::MIGRATOR,
     models::{AppointmentMode, SettlementStatus, VoicePlatform},
@@ -62,7 +62,7 @@ struct RequiredColumn {
     primary_key: i64,
 }
 
-const ACCOUNT_PROFILE_COLUMNS: [RequiredColumn; 17] = [
+const LEGACY_ACCOUNT_PROFILE_COLUMNS: [RequiredColumn; 17] = [
     required_column("id", "TEXT", true, None, 1),
     required_column("contact_name", "TEXT", false, None, 0),
     required_column("server", "TEXT", false, None, 0),
@@ -512,7 +512,7 @@ impl BackupState {
             .data_dir
             .join(format!(".restore-stage-{}", uuid::Uuid::now_v7().simple()));
         fs::create_dir_all(&staging_dir)?;
-        let manifest = match extract_and_validate(&backup_path, &staging_dir) {
+        let mut manifest = match extract_and_validate(&backup_path, &staging_dir) {
             Ok(manifest) => manifest,
             Err(error) => {
                 let _ = fs::remove_dir_all(&staging_dir);
@@ -522,6 +522,9 @@ impl BackupState {
         if let Err(error) = validate_staged_contents(staging_dir.clone(), manifest.clone()).await {
             let _ = fs::remove_dir_all(&staging_dir);
             return Err(error);
+        }
+        if manifest.format_version == BACKUP_FORMAT_VERSION {
+            refresh_staged_database_manifest(&staging_dir, &mut manifest)?;
         }
 
         if let Err(error) = self
@@ -964,6 +967,9 @@ async fn validate_staged_contents(
     manifest: BackupManifest,
 ) -> Result<(), BackupError> {
     let database_path = staging_dir.join(DATABASE_ARCHIVE_NAME);
+    if manifest.format_version == BACKUP_FORMAT_VERSION {
+        upgrade_staged_v2_database(database_path.clone()).await?;
+    }
     validate_staged_database(database_path.clone(), manifest.format_version).await?;
     validate_staged_settings(&staging_dir.join(SETTINGS_ARCHIVE_NAME))?;
     let has_legacy_vault = manifest
@@ -983,6 +989,90 @@ async fn validate_staged_contents(
             &staging_dir.join(SALT_ARCHIVE_NAME),
         )
         .map_err(|error| BackupError::InvalidBackup(error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn refresh_staged_database_manifest(
+    staging_dir: &Path,
+    manifest: &mut BackupManifest,
+) -> Result<(), BackupError> {
+    let path = staging_dir.join(DATABASE_ARCHIVE_NAME);
+    let size_bytes = fs::metadata(&path)?.len();
+    let sha256 = hash_file(&path)?;
+    let entry = manifest
+        .files
+        .iter_mut()
+        .find(|entry| entry.name == DATABASE_ARCHIVE_NAME)
+        .ok_or_else(|| BackupError::InvalidBackup("v2 备份缺少数据库清单项".into()))?;
+    entry.size_bytes = size_bytes;
+    entry.sha256 = sha256;
+    Ok(())
+}
+
+async fn upgrade_staged_v2_database(path: PathBuf) -> Result<(), BackupError> {
+    let options = SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(false)
+        .foreign_keys(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .map_err(|error| BackupError::InvalidBackup(format!("打开 v2 暂存数据库失败：{error}")))?;
+    let migration_columns = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM pragma_table_info('_sqlx_migrations') ORDER BY cid",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    if !["version", "success", "checksum"]
+        .iter()
+        .all(|column| migration_columns.iter().any(|actual| actual == column))
+    {
+        pool.close().await;
+        return Ok(());
+    }
+    let prefix_result = validate_trusted_migration_prefix(&pool).await;
+    if let Err(error) = prefix_result {
+        pool.close().await;
+        return Err(error);
+    }
+    let migration_result = MIGRATOR.run(&pool).await.map_err(|error| {
+        BackupError::InvalidBackup(format!("在暂存数据库副本上补齐 migration 失败：{error}"))
+    });
+    pool.close().await;
+    migration_result
+}
+
+async fn validate_trusted_migration_prefix(pool: &sqlx::SqlitePool) -> Result<(), BackupError> {
+    let rows =
+        sqlx::query("SELECT version, success, checksum FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(pool)
+            .await
+            .map_err(|error| {
+                BackupError::InvalidBackup(format!(
+                    "读取 v2 暂存数据库 migration 前缀失败：{error}"
+                ))
+            })?;
+    let migrations = MIGRATOR.iter().collect::<Vec<_>>();
+    if rows.len() < 5 || rows.len() > migrations.len() {
+        return Err(BackupError::InvalidBackup(
+            "v2 备份必须从 0001 开始且至少包含到 0005 的可信 migration 前缀".into(),
+        ));
+    }
+    for (row, migration) in rows.iter().zip(migrations.iter()) {
+        let version: i64 = row.try_get("version").map_err(database_schema_error)?;
+        let success: bool = row.try_get("success").map_err(database_schema_error)?;
+        let checksum: Vec<u8> = row.try_get("checksum").map_err(database_schema_error)?;
+        if version != migration.version
+            || !success
+            || checksum.as_slice() != migration.checksum.as_ref()
+        {
+            return Err(BackupError::InvalidBackup(format!(
+                "v2 备份的 migration {version} 不是从 0001 开始的可信连续前缀"
+            )));
+        }
     }
     Ok(())
 }
@@ -1076,7 +1166,12 @@ async fn validate_database_contract(
         )));
     }
 
-    validate_table_columns(connection, "account_profiles", &ACCOUNT_PROFILE_COLUMNS).await?;
+    validate_table_columns(
+        connection,
+        "account_profiles",
+        &LEGACY_ACCOUNT_PROFILE_COLUMNS,
+    )
+    .await?;
     validate_table_columns(
         connection,
         "appointment_password_backfill",
@@ -1141,7 +1236,7 @@ async fn validate_v2_database_contract(
     expected_pool.close().await;
     if actual_schema != expected_schema {
         return Err(BackupError::InvalidBackup(
-            "数据库结构与当前 TimeKeeper migration 0006 不一致".into(),
+            "数据库结构与当前 TimeKeeper migration 不一致".into(),
         ));
     }
 
@@ -1158,7 +1253,10 @@ async fn validate_v2_database_rows(connection: &mut SqliteConnection) -> Result<
         let profile = profile_from_row(row).map_err(|error| {
             BackupError::InvalidBackup(format!("账号档案记录无法读取：{error}"))
         })?;
-        if profile.id.trim().is_empty() || profile.account_name.trim().is_empty() {
+        if profile.id.trim().is_empty()
+            || profile.account_name.trim().is_empty()
+            || profile.weekly_wins.is_some_and(|value| value < 0)
+        {
             return Err(BackupError::InvalidBackup(
                 "账号档案包含空标识或空账号名".into(),
             ));
@@ -1185,12 +1283,46 @@ async fn validate_v2_database_rows(connection: &mut SqliteConnection) -> Result<
             .try_get("password_verifier")
             .map_err(database_schema_error)?;
         let updated_at: String = row.try_get("updated_at").map_err(database_schema_error)?;
-        if id != 1 || !verifier.starts_with("$argon2id$") {
+        if id != 1 || !is_supported_access_verifier(&verifier) {
             return Err(BackupError::InvalidBackup(
                 "入口密码 verifier 格式无效".into(),
             ));
         }
         validate_rfc3339(&updated_at, "入口密码更新时间", "app_access")?;
+    }
+
+    let recovery_rows = sqlx::query(
+        "SELECT id, question, answer_verifier, updated_at
+         FROM app_access_recovery ORDER BY id",
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(|error| BackupError::InvalidBackup(format!("读取恢复问题状态失败：{error}")))?;
+    if recovery_rows.len() > 1 {
+        return Err(BackupError::InvalidBackup("恢复问题状态不是单例".into()));
+    }
+    if recovery_rows.len() == 1 && access_rows.is_empty() {
+        return Err(BackupError::InvalidBackup(
+            "恢复问题存在但入口密码状态缺失".into(),
+        ));
+    }
+    for row in &recovery_rows {
+        let id: i64 = row.try_get("id").map_err(database_schema_error)?;
+        let question: String = row.try_get("question").map_err(database_schema_error)?;
+        let verifier: String = row
+            .try_get("answer_verifier")
+            .map_err(database_schema_error)?;
+        let updated_at: String = row.try_get("updated_at").map_err(database_schema_error)?;
+        let question_length = question.trim().chars().count();
+        if id != 1
+            || !(2..=100).contains(&question_length)
+            || !is_supported_access_verifier(&verifier)
+        {
+            return Err(BackupError::InvalidBackup(
+                "恢复问题记录的字段或 Argon2 verifier 无效".into(),
+            ));
+        }
+        validate_rfc3339(&updated_at, "恢复问题更新时间", "app_access_recovery")?;
     }
 
     let orphaned_migrations = sqlx::query_scalar::<_, i64>(
@@ -1723,10 +1855,11 @@ fn normalize_schema_sql(sql: &str) -> String {
 }
 
 async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(), BackupError> {
-    let profile_rows = sqlx::query("SELECT * FROM account_profiles ORDER BY id")
-        .fetch_all(&mut *connection)
-        .await
-        .map_err(|error| BackupError::InvalidBackup(format!("读取账号档案失败：{error}")))?;
+    let profile_rows =
+        sqlx::query("SELECT *, NULL AS weekly_wins FROM account_profiles ORDER BY id")
+            .fetch_all(&mut *connection)
+            .await
+            .map_err(|error| BackupError::InvalidBackup(format!("读取账号档案失败：{error}")))?;
     for row in &profile_rows {
         let profile = profile_from_row(row).map_err(|error| {
             BackupError::InvalidBackup(format!("账号档案记录无法读取：{error}"))
@@ -2093,10 +2226,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        accounts::{
-            create_account_profile_impl, get_account_profile_impl,
-            update_account_profile_usage_impl,
-        },
+        accounts::{create_account_profile_impl, get_account_profile_impl},
         appointments::{
             create_appointment_impl, delete_appointment_impl, duplicate_appointment_impl,
             get_appointment_impl, insert_imported_appointment, set_appointment_service_status_impl,
@@ -2734,7 +2864,7 @@ mod tests {
             .fetch_one(upgraded.pool())
             .await
             .unwrap();
-            assert_eq!(latest_version, 6);
+            assert_eq!(latest_version, 8);
             assert_eq!(queued, 1);
             upgraded.pool().close().await;
         });
@@ -2752,6 +2882,55 @@ mod tests {
     }
 
     #[test]
+    fn v2_restore_upgrades_trusted_0005_and_0006_prefixes_in_staging_copy() {
+        for latest_version in [5_i64, 6_i64] {
+            let dir = test_dir(&format!("v2-prefix-{latest_version}"));
+            fs::create_dir_all(&dir).unwrap();
+            let database = dir.join("timekeeper.db");
+            create_timekeeper_database(&database);
+            let settings = serde_json::to_vec_pretty(&AppSettings::default()).unwrap();
+            fs::write(dir.join(SETTINGS_ARCHIVE_NAME), &settings).unwrap();
+
+            let source = dir.join(format!("source-{latest_version}.sqlite3"));
+            create_legacy_database(&source, latest_version);
+            let source_bytes = fs::read(&source).unwrap();
+            let backup_path = dir.join(format!("prefix-{latest_version}.tkbackup"));
+            write_test_backup(
+                &backup_path,
+                &[
+                    (DATABASE_ARCHIVE_NAME, source_bytes.as_slice()),
+                    (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
+                ],
+            );
+            let state = BackupState::new(&dir, &database).unwrap();
+            runtime()
+                .block_on(state.stage_restore(&backup_path))
+                .unwrap();
+            assert!(state.apply_pending_restore().unwrap());
+
+            runtime().block_on(async {
+                let upgraded = Database::initialize(&database).await.unwrap();
+                let latest =
+                    sqlx::query_scalar::<_, i64>("SELECT MAX(version) FROM _sqlx_migrations")
+                        .fetch_one(upgraded.pool())
+                        .await
+                        .unwrap();
+                assert_eq!(latest, 8);
+                let columns = sqlx::query_scalar::<_, String>(
+                    "SELECT name FROM pragma_table_info('account_profiles') ORDER BY cid",
+                )
+                .fetch_all(upgraded.pool())
+                .await
+                .unwrap();
+                assert!(columns.iter().any(|name| name == "weekly_wins"));
+                assert!(!columns.iter().any(|name| name == "usage_info"));
+                upgraded.pool().close().await;
+            });
+            remove_test_dir_after_sqlite_shutdown(dir);
+        }
+    }
+
+    #[test]
     fn v2_restore_restores_the_backed_up_app_access_verifier() {
         let dir = test_dir("v2-access-verifier");
         fs::create_dir_all(&dir).unwrap();
@@ -2761,6 +2940,9 @@ mod tests {
         drop(settings);
         let backed_up_verifier = test_app_access_verifier(b"backup verifier before restore", 7);
         let changed_verifier = test_app_access_verifier(b"backup verifier after restore", 9);
+        let backed_up_answer_verifier =
+            test_app_access_verifier(b"backup answer before restore", 11);
+        let changed_answer_verifier = test_app_access_verifier(b"backup answer after restore", 13);
         runtime().block_on(async {
             let database = Database::initialize(&database).await.unwrap();
             sqlx::query(
@@ -2768,6 +2950,16 @@ mod tests {
                  VALUES (1, ?, ?)",
             )
             .bind(&backed_up_verifier)
+            .bind(Utc::now().to_rfc3339())
+            .execute(database.pool())
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO app_access_recovery (id, question, answer_verifier, updated_at)
+                 VALUES (1, ?, ?, ?)",
+            )
+            .bind("备份时的问题")
+            .bind(&backed_up_answer_verifier)
             .bind(Utc::now().to_rfc3339())
             .execute(database.pool())
             .await
@@ -2791,6 +2983,16 @@ mod tests {
                 .execute(database.pool())
                 .await
                 .unwrap();
+            sqlx::query(
+                "UPDATE app_access_recovery
+                 SET question = ?, answer_verifier = ?, updated_at = ? WHERE id = 1",
+            )
+            .bind("恢复前改过的问题")
+            .bind(&changed_answer_verifier)
+            .bind(Utc::now().to_rfc3339())
+            .execute(database.pool())
+            .await
+            .unwrap();
             database.pool().close().await;
         });
         runtime()
@@ -2809,6 +3011,15 @@ mod tests {
             .unwrap();
             assert_eq!(verifier, backed_up_verifier);
             assert_ne!(verifier, changed_verifier);
+            let recovery = sqlx::query_as::<_, (String, String)>(
+                "SELECT question, answer_verifier FROM app_access_recovery WHERE id = 1",
+            )
+            .fetch_one(restored.pool())
+            .await
+            .unwrap();
+            assert_eq!(recovery.0, "备份时的问题");
+            assert_eq!(recovery.1, backed_up_answer_verifier);
+            assert_ne!(recovery.1, changed_answer_verifier);
             restored.pool().close().await;
         });
         remove_test_dir_after_sqlite_shutdown(dir);
@@ -2961,6 +3172,41 @@ mod tests {
             .block_on(state.stage_restore(&wrong_schema_backup))
             .unwrap_err();
         assert!(error.to_string().contains("结构"), "{error}");
+
+        let unsafe_verifier_database = dir.join("unsafe-verifier.sqlite3");
+        create_timekeeper_database(&unsafe_verifier_database);
+        runtime().block_on(async {
+            let unsafe_database = Database::initialize(&unsafe_verifier_database)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO app_access (id, password_verifier, updated_at) VALUES (1, ?, ?)",
+            )
+            .bind("$argon2id$v=19$m=999999999,t=99,p=1$c2FsdA$aGFzaA")
+            .bind(Utc::now().to_rfc3339())
+            .execute(unsafe_database.pool())
+            .await
+            .unwrap();
+            sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .execute(unsafe_database.pool())
+                .await
+                .unwrap();
+            unsafe_database.pool().close().await;
+        });
+        let unsafe_verifier_backup = dir.join("unsafe-verifier.tkbackup");
+        let unsafe_verifier_bytes = fs::read(&unsafe_verifier_database).unwrap();
+        write_test_backup(
+            &unsafe_verifier_backup,
+            &[
+                (DATABASE_ARCHIVE_NAME, unsafe_verifier_bytes.as_slice()),
+                (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
+            ],
+        );
+        let error = runtime()
+            .block_on(state.stage_restore(&unsafe_verifier_backup))
+            .unwrap_err();
+        assert!(error.to_string().contains("verifier"), "{error}");
+        assert_eq!(pre_restore_backup_count(&state), 0);
 
         let same_named_wrong_schema_database = dir.join("same-named-wrong-schema.sqlite3");
         create_same_named_wrong_schema_database(&same_named_wrong_schema_database);
@@ -3177,7 +3423,7 @@ mod tests {
         let (backup, target_id, profile_id) = runtime.block_on(async {
             let settings = SettingsState::load(&dir).unwrap();
             let custom_widths = AccountTableColumnWidths {
-                weekly: 224,
+                weekly_wins: 120,
                 notes: 208,
                 ..AccountTableColumnWidths::default()
             };
@@ -3193,9 +3439,6 @@ mod tests {
             };
             settings
                 .update_appointment_table_column_widths(custom_appointment_widths)
-                .unwrap();
-            settings
-                .record_account_usage_week_start(NaiveDate::from_ymd_opt(2026, 7, 13).unwrap())
                 .unwrap();
             let vault = VaultState::new(&dir).unwrap();
             assert!(vault.initialize(password.into()).unwrap().unlocked);
@@ -3225,13 +3468,11 @@ mod tests {
             )
             .await
             .unwrap();
-            let profile = update_account_profile_usage_impl(
-                &database,
-                &profile.id,
-                Some("备份时正在使用".into()),
-            )
-            .await
-            .unwrap();
+            sqlx::query("UPDATE account_profiles SET weekly_wins = 8 WHERE id = ?")
+                .bind(&profile.id)
+                .execute(database.pool())
+                .await
+                .unwrap();
             let mut existing = business_input("2026-07-13", "19:00", "21:00", 0);
             existing.mode = AppointmentMode::Entertainment;
             existing.settlement_status = SettlementStatus::NotApplicable;
@@ -3333,10 +3574,7 @@ mod tests {
             let restored_profile = get_account_profile_impl(&restored_database, &profile_id)
                 .await
                 .unwrap();
-            assert_eq!(
-                restored_profile.usage_info.as_deref(),
-                Some("备份时正在使用")
-            );
+            assert_eq!(restored_profile.weekly_wins, Some(8));
 
             let restored_vault = VaultState::new(&dir).unwrap();
             assert!(!restored_vault.status().unwrap().unlocked);
@@ -3346,7 +3584,10 @@ mod tests {
                 "changed-secret"
             );
             let restored_settings = SettingsState::load(&dir).unwrap().snapshot().unwrap();
-            assert_eq!(restored_settings.account_table_column_widths.weekly, 224);
+            assert_eq!(
+                restored_settings.account_table_column_widths.weekly_wins,
+                120
+            );
             assert_eq!(restored_settings.account_table_column_widths.notes, 208);
             assert_eq!(
                 restored_settings.appointment_table_column_widths.content,
@@ -3358,10 +3599,6 @@ mod tests {
             );
             assert_eq!(restored_settings.appointment_table_column_widths.voice, 144);
             assert_eq!(restored_settings.appointment_table_column_widths.notes, 196);
-            assert_eq!(
-                restored_settings.last_account_usage_week_start.as_deref(),
-                Some("2026-07-13")
-            );
             restored_database.pool().close().await;
         });
         assert!(!state.pending_dir.exists());

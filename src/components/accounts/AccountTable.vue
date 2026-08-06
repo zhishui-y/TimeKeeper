@@ -44,11 +44,8 @@ const props = withDefaults(
     sortDirection: SortDirection;
     reorderEnabled: boolean;
     reorderDisabledReason: string;
-    usageDrafts: Readonly<Record<string, string>>;
-    savingUsageIds: ReadonlySet<string>;
     columnWidths: AccountTableColumnWidths;
     savingColumnWidths: boolean;
-    clearingWeekly: boolean;
     roleRefreshBusy?: boolean;
     refreshingIds?: ReadonlySet<string>;
   }>(),
@@ -66,9 +63,6 @@ const emit = defineEmits<{
   copyCharacterName: [profile: AccountProfile];
   delete: [profile: AccountProfile];
   refreshRoleData: [profile: AccountProfile];
-  updateUsageDraft: [profileId: string, value: string];
-  saveUsage: [profile: AccountProfile, value: string];
-  cancelUsage: [profile: AccountProfile];
   previewColumnWidth: [columnKey: AccountTableColumnKey, width: number];
   commitColumnWidth: [columnKey: AccountTableColumnKey, width: number];
   cancelColumnResize: [columnKey: AccountTableColumnKey, width: number];
@@ -156,15 +150,6 @@ function finishDrag(): void {
   dropTarget.value = null;
 }
 
-function inputValue(event: unknown): string {
-  return (event as { target?: { value?: string } } | null)?.target?.value ?? "";
-}
-
-function cancelUsage(profile: AccountProfile, event: unknown): void {
-  emit("cancelUsage", profile);
-  (event as { target?: { blur?: () => void } } | null)?.target?.blur?.();
-}
-
 function previewColumnWidth(columnKey: AccountTableColumnKey, width: number): void {
   emit("previewColumnWidth", columnKey, width);
 }
@@ -194,7 +179,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
           <col :style="{ width: `${columnWidths.currentScore}px` }" />
           <col :style="{ width: `${columnWidths.highestScore}px` }" />
           <col :style="{ width: `${columnWidths.scoreUpdatedAt}px` }" />
-          <col :style="{ width: `${columnWidths.weekly}px` }" />
+          <col :style="{ width: `${columnWidths.weeklyWins}px` }" />
           <col :style="{ width: `${columnWidths.notes}px` }" />
           <col style="width: 108px" />
         </colgroup>
@@ -418,11 +403,11 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
               />
             </th>
             <th class="resizable-header">
-              本周
+              本周胜场
               <AccountColumnResizeHandle
-                column-key="weekly"
-                label="本周"
-                :width="columnWidths.weekly"
+                column-key="weeklyWins"
+                label="本周胜场"
+                :width="columnWidths.weeklyWins"
                 :disabled="savingColumnWidths"
                 @preview="previewColumnWidth"
                 @commit="commitColumnWidth"
@@ -455,9 +440,6 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
               draggedId,
               dropTarget?.id,
               dropTarget?.placement,
-              usageDrafts[profile.id],
-              savingUsageIds.has(profile.id),
-              clearingWeekly,
               roleRefreshBusy,
               refreshingIds.has(profile.id),
             ]"
@@ -546,21 +528,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
             <td class="muted">
               {{ profile.scoreUpdatedAt ? formatShortDate(profile.scoreUpdatedAt) : "—" }}
             </td>
-            <td class="usage-cell">
-              <input
-                class="usage-input"
-                type="text"
-                :value="usageDrafts[profile.id] ?? ''"
-                :disabled="savingUsageIds.has(profile.id) || clearingWeekly"
-                :aria-busy="savingUsageIds.has(profile.id) || clearingWeekly"
-                :aria-label="`编辑本周 ${profile.accountName}`"
-                :title="usageDrafts[profile.id] || undefined"
-                @input="emit('updateUsageDraft', profile.id, inputValue($event))"
-                @keydown.enter.prevent="emit('saveUsage', profile, usageDrafts[profile.id] ?? '')"
-                @keydown.esc.prevent="cancelUsage(profile, $event)"
-                @blur="emit('saveUsage', profile, usageDrafts[profile.id] ?? '')"
-              />
-            </td>
+            <td class="mono-number score-cell">{{ profile.weeklyWins ?? "—" }}</td>
             <td
               class="notes-cell truncate"
               :class="{ muted: !profile.notes }"
@@ -726,7 +694,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
 .contact-cell strong {
   display: block;
   color: var(--ink-strong);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 700;
 }
 
@@ -759,39 +727,6 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
   width: 28px;
   height: 28px;
   margin-inline: auto;
-}
-
-.usage-cell {
-  padding-inline: 6px;
-}
-
-.usage-input {
-  width: 100%;
-  height: 28px;
-  padding: 0 7px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: var(--ink);
-  background: transparent;
-  font: inherit;
-  text-overflow: ellipsis;
-}
-
-.usage-input:hover:not(:disabled) {
-  border-color: var(--line);
-  background: var(--surface);
-}
-
-.usage-input:focus {
-  border-color: var(--brand-border);
-  outline: 2px solid color-mix(in srgb, var(--brand) 18%, transparent);
-  outline-offset: 1px;
-  background: var(--surface);
-}
-
-.usage-input:disabled {
-  cursor: wait;
-  opacity: 0.58;
 }
 
 .notes-cell {

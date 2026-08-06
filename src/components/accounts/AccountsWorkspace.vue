@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { Eraser, LoaderCircle } from "@lucide/vue";
-import { computed, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
+import { computed, onMounted, reactive, ref, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAccounts } from "../../composables/useAccounts";
 import { useAccountRoleDataRefresh } from "../../composables/useAccountRoleDataRefresh";
@@ -48,9 +47,6 @@ const savingOrder = shallowRef(false);
 const drawerOpen = shallowRef(false);
 const activeProfile = shallowRef<AccountProfile | null>(null);
 const savingAccount = shallowRef(false);
-const usageDrafts = reactive<Record<string, string>>({});
-const dirtyUsageIds = new Set<string>();
-const savingUsageIds = shallowRef<ReadonlySet<string>>(new Set());
 const columnWidths = shallowRef<AccountTableColumnWidths>(
   cloneAccountTableColumnWidths(DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS),
 );
@@ -58,8 +54,6 @@ const persistedColumnWidths = shallowRef<AccountTableColumnWidths>(
   cloneAccountTableColumnWidths(DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS),
 );
 const savingColumnWidths = shallowRef(false);
-const clearingWeekly = shallowRef(false);
-const syncingWeekly = shallowRef(false);
 const selectedIds = ref<string[]>([]);
 const selectedCount = computed(() => selectedIds.value.length);
 const roleDataRefreshReturnFocus = shallowRef<{ focus(): void } | null>(null);
@@ -68,8 +62,6 @@ const batchDeleteFeedback = shallowRef<{
   message: string;
   tone: "neutral" | "success" | "warning" | "danger";
 } | null>(null);
-let weeklySyncTimer: ReturnType<typeof globalThis.setInterval> | undefined;
-let weeklySyncErrorReported = false;
 const contactOptions = computed(() => uniqueAccountValues(items.value, "contactName"));
 const serverOptions = computed(() => uniqueAccountValues(items.value, "server"));
 const specializationOptions = computed(() => uniqueAccountValues(items.value, "specialization"));
@@ -195,55 +187,6 @@ function commitColumnWidth(columnKey: AccountTableColumnKey, width: number): voi
   void persistColumnWidths(next);
 }
 
-async function syncWeeklyUsage({ reload = true }: { reload?: boolean } = {}): Promise<void> {
-  if (syncingWeekly.value || clearingWeekly.value) return;
-  syncingWeekly.value = true;
-  try {
-    const result = await api.syncAccountProfileUsageWeek();
-    weeklySyncErrorReported = false;
-    if (result.clearedCount > 0) {
-      if (reload) await load(query.value, needsReviewOnly.value ? true : undefined);
-      ui.markAccountsChanged();
-      ui.notify(`新的一周已开始，已清空 ${result.clearedCount} 个账号的本周内容`, "success");
-    }
-  } catch (cause) {
-    if (!weeklySyncErrorReported) {
-      ui.notify(`自动清空本周失败：${errorMessage(cause)}`, "danger");
-      weeklySyncErrorReported = true;
-    }
-  } finally {
-    syncingWeekly.value = false;
-  }
-}
-
-async function clearWeeklyUsage(): Promise<void> {
-  if (clearingWeekly.value || syncingWeekly.value || savingUsageIds.value.size > 0) return;
-  if (
-    !globalThis.confirm(
-      "确定清空全部账号的本周内容吗？此操作无法撤销，未保存的本周输入也会被丢弃。",
-    )
-  ) {
-    return;
-  }
-
-  clearingWeekly.value = true;
-  try {
-    const clearedCount = await api.clearAccountProfileUsage();
-    dirtyUsageIds.clear();
-    for (const profileId of Object.keys(usageDrafts)) usageDrafts[profileId] = "";
-    await load(query.value, needsReviewOnly.value ? true : undefined);
-    ui.markAccountsChanged();
-    ui.notify(
-      clearedCount > 0 ? `已清空 ${clearedCount} 个账号的本周内容` : "全部账号的本周内容已为空",
-      "success",
-    );
-  } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
-  } finally {
-    clearingWeekly.value = false;
-  }
-}
-
 function changeSort(nextSortKey: AccountProfileSortKey): void {
   if (sortKey.value === nextSortKey) {
     sortDirection.value = sortDirection.value === "asc" ? "desc" : "asc";
@@ -305,53 +248,6 @@ async function copyCharacterName(profile: AccountProfile): Promise<void> {
     ui.notify("角色名已复制", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
-  }
-}
-
-function updateUsageDraft(profileId: string, value: string): void {
-  usageDrafts[profileId] = value;
-  const profile = items.value.find((item) => item.id === profileId);
-  if (value === (profile?.usageInfo ?? "")) {
-    dirtyUsageIds.delete(profileId);
-  } else {
-    dirtyUsageIds.add(profileId);
-  }
-}
-
-function cancelUsage(profile: AccountProfile): void {
-  usageDrafts[profile.id] = profile.usageInfo ?? "";
-  dirtyUsageIds.delete(profile.id);
-}
-
-function setUsageSaving(profileId: string, saving: boolean): void {
-  const next = new Set(savingUsageIds.value);
-  if (saving) next.add(profileId);
-  else next.delete(profileId);
-  savingUsageIds.value = next;
-}
-
-async function saveUsage(profile: AccountProfile, draft: string): Promise<void> {
-  if (savingUsageIds.value.has(profile.id)) return;
-  const usageInfo = draft.trim() || null;
-  if (usageInfo === (profile.usageInfo ?? null)) {
-    cancelUsage(profile);
-    return;
-  }
-
-  setUsageSaving(profile.id, true);
-  try {
-    const updated = await api.updateAccountProfileUsage(profile.id, usageInfo);
-    usageDrafts[profile.id] = updated.usageInfo ?? "";
-    dirtyUsageIds.delete(profile.id);
-    await load(query.value, needsReviewOnly.value ? true : undefined);
-    ui.markAccountsChanged();
-    ui.notify("本周已保存", "success");
-  } catch (cause) {
-    usageDrafts[profile.id] = profile.usageInfo ?? "";
-    dirtyUsageIds.delete(profile.id);
-    ui.notify(errorMessage(cause), "danger");
-  } finally {
-    setUsageSaving(profile.id, false);
   }
 }
 
@@ -438,17 +334,11 @@ async function removeBatch(): Promise<void> {
 
 async function initializeWorkspace(): Promise<void> {
   await loadColumnWidths();
-  await syncWeeklyUsage({ reload: false });
   await load();
 }
 
 onMounted(() => {
   void initializeWorkspace();
-  weeklySyncTimer = globalThis.setInterval(() => void syncWeeklyUsage(), 60_000);
-});
-
-onUnmounted(() => {
-  if (weeklySyncTimer !== undefined) globalThis.clearInterval(weeklySyncTimer);
 });
 
 watch(
@@ -490,25 +380,6 @@ watch(
   () => {
     selectedIds.value = [];
   },
-);
-
-watch(
-  items,
-  (profiles) => {
-    const profileIds = new Set(profiles.map((profile) => profile.id));
-    for (const profile of profiles) {
-      if (!dirtyUsageIds.has(profile.id) && !savingUsageIds.value.has(profile.id)) {
-        usageDrafts[profile.id] = profile.usageInfo ?? "";
-      }
-    }
-    for (const profileId of Object.keys(usageDrafts)) {
-      if (!profileIds.has(profileId)) {
-        delete usageDrafts[profileId];
-        dirtyUsageIds.delete(profileId);
-      }
-    }
-  },
-  { immediate: true },
 );
 
 watch(
@@ -558,21 +429,6 @@ watch(
       >
         {{ batchDeleteFeedback.message }}
       </span>
-      <div class="account-summary__actions">
-        <button
-          class="button button--ghost button--compact account-summary__clear"
-          type="button"
-          :disabled="clearingWeekly || syncingWeekly || savingUsageIds.size > 0"
-          :aria-busy="clearingWeekly"
-          title="清空全部账号的本周内容"
-          @pointerdown.prevent
-          @click="clearWeeklyUsage"
-        >
-          <LoaderCircle v-if="clearingWeekly" class="account-actions__spinner" :size="13" />
-          <Eraser v-else :size="13" />
-          {{ clearingWeekly ? "正在清空…" : "清空本周" }}
-        </button>
-      </div>
     </div>
     <div v-if="loading" class="loading-line" />
     <div v-if="error" class="error-banner">{{ error }}</div>
@@ -588,11 +444,8 @@ watch(
       :sort-direction="sortDirection"
       :reorder-enabled="manualReorderEnabled"
       :reorder-disabled-reason="reorderDisabledReason"
-      :usage-drafts="usageDrafts"
-      :saving-usage-ids="savingUsageIds"
       :column-widths="columnWidths"
       :saving-column-widths="savingColumnWidths"
-      :clearing-weekly="clearingWeekly"
       :role-refresh-busy="roleDataRefresh.busy.value"
       :refreshing-ids="roleDataRefresh.targetIds.value"
       v-model:selected-ids="selectedIds"
@@ -601,9 +454,6 @@ watch(
       @copy-account="copyAccount"
       @copy-character-name="copyCharacterName"
       @refresh-role-data="refreshSingleRoleData"
-      @update-usage-draft="updateUsageDraft"
-      @save-usage="saveUsage"
-      @cancel-usage="cancelUsage"
       @preview-column-width="previewColumnWidth"
       @commit-column-width="commitColumnWidth"
       @cancel-column-resize="cancelColumnResize"
@@ -623,12 +473,17 @@ watch(
 
 <style scoped>
 .accounts-workspace {
+  position: relative;
   height: 100%;
   gap: 12px;
 }
 
-.account-actions__spinner {
-  animation: account-action-spin 900ms linear infinite;
+.accounts-workspace > .loading-line {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  right: 4px;
+  left: 0;
 }
 
 .account-summary {
@@ -638,30 +493,12 @@ watch(
   align-items: center;
   gap: 14px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .account-summary__feedback {
   color: var(--brand-strong);
   font-weight: 650;
-}
-
-.account-summary__actions {
-  display: flex;
-  margin-left: auto;
-  align-items: center;
-  gap: 6px;
-}
-
-.account-summary__actions .button {
-  min-height: 28px;
-  padding-inline: 9px;
-  font-size: 10px;
-}
-
-.account-summary__clear:hover:not(:disabled) {
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
 }
 
 .account-summary__feedback.is-success {
@@ -674,11 +511,5 @@ watch(
 
 .account-summary__feedback.is-danger {
   color: var(--danger);
-}
-
-@keyframes account-action-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 </style>

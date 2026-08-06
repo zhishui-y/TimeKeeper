@@ -75,7 +75,7 @@ describe("AppointmentDrawer", () => {
       currentScore: 2100,
       highestScore: 2300,
       scoreUpdatedAt: "2026-07-28",
-      usageInfo: null,
+      weeklyWins: null,
       notes: null,
       needsReview: false,
       createdAt: "2026-07-28T00:00:00Z",

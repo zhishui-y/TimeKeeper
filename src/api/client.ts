@@ -3,9 +3,9 @@ import type {
   AccountProfile,
   AccountRoleDataRefreshResult,
   AccountTableColumnWidths,
-  AccountUsageWeekSyncResult,
   AppAccessStatus,
   AppSettings,
+  AppearanceSettings,
   Appointment,
   AppointmentDeleteResult,
   AppointmentMutationResult,
@@ -57,11 +57,6 @@ const nativeApi: ApiClient = {
   createAccountProfile: (input) => invoke<AccountProfile>("create_account_profile", { input }),
   updateAccountProfile: (id, input) =>
     invoke<AccountProfile>("update_account_profile", { id, input }),
-  updateAccountProfileUsage: (id, usageInfo) =>
-    invoke<AccountProfile>("update_account_profile_usage", { id, usageInfo }),
-  clearAccountProfileUsage: () => invoke<number>("clear_account_profile_usage"),
-  syncAccountProfileUsageWeek: () =>
-    invoke<AccountUsageWeekSyncResult>("sync_account_profile_usage_week"),
   deleteAccountProfile: (id) => invoke<void>("delete_account_profile", { id }),
   deleteAccountProfiles: (ids) => invoke<number>("delete_account_profiles", { ids }),
   reorderAccountProfiles: (ids) => invoke<void>("reorder_account_profiles", { ids }),
@@ -71,15 +66,22 @@ const nativeApi: ApiClient = {
     invoke<AccountRoleDataRefreshResult>("refresh_account_profile_role_data", { ids }),
 
   appAccessStatus: () => invoke<AppAccessStatus>("app_access_status"),
-  initializeAppAccess: (password) => invoke<AppAccessStatus>("initialize_app_access", { password }),
+  initializeAppAccess: (password, recovery) =>
+    invoke<AppAccessStatus>("initialize_app_access", { password, recovery }),
   unlockAppAccess: (password) => invoke<AppAccessStatus>("unlock_app_access", { password }),
   lockAppAccess: () => invoke<AppAccessStatus>("lock_app_access"),
   changeAppAccessPassword: (currentPassword, newPassword) =>
     invoke<AppAccessStatus>("change_app_access_password", { currentPassword, newPassword }),
-  resetAppAccessPassword: (newPassword, confirmationText) =>
-    invoke<AppAccessStatus>("reset_app_access_password", { newPassword, confirmationText }),
-  migrateLegacyCredentials: (password) =>
-    invoke<LegacyCredentialMigrationResult>("migrate_legacy_credentials", { password }),
+  resetAppAccessPassword: (newPassword, confirmationText, recoveryProof) =>
+    invoke<AppAccessStatus>("reset_app_access_password", {
+      newPassword,
+      confirmationText,
+      recoveryProof,
+    }),
+  setAppAccessRecovery: (currentPassword, recovery) =>
+    invoke<AppAccessStatus>("set_app_access_recovery", { currentPassword, recovery }),
+  migrateLegacyCredentials: (password, recovery) =>
+    invoke<LegacyCredentialMigrationResult>("migrate_legacy_credentials", { password, recovery }),
   copyAccountPassword: (id) => invoke<void>("copy_account_password", { id }),
 
   getDashboardSummary: (date) => invoke<DashboardSummary>("get_dashboard_summary", { date }),
@@ -92,6 +94,7 @@ const nativeApi: ApiClient = {
   createBackup: (destination) => invoke<BackupResult>("create_backup", { destination }),
   restoreBackup: (path) => invoke<void>("restore_backup", { path }),
   getSettings: () => invoke<AppSettings>("get_settings"),
+  getAppAppearance: () => invoke<AppearanceSettings>("get_app_appearance"),
   updateSettings: (settings) => invoke<AppSettings>("update_settings", { settings }),
   updateAccountTableColumnWidths: (widths) =>
     invoke<AccountTableColumnWidths>("update_account_table_column_widths", { widths }),

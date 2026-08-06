@@ -100,6 +100,61 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
     await expect(page.getByRole("heading", { name: "今日工作台" })).toBeVisible();
   });
 
+  test("外观分类支持字号联动、缺失字体回退和锁屏解锁", async ({ page }) => {
+    await page.goto("/#/settings");
+    await expect(page.getByRole("heading", { name: "数据与设置", level: 1 })).toBeVisible();
+    await expect(page.locator(".settings-workspace .loading-line")).toHaveCount(0);
+    await expect(page.getByRole("navigation", { name: "设置分类" })).toContainText(
+      /外观\s+入口安全\s+提醒\s+角色数据\s+Excel\s+备份/,
+    );
+    await expect(page.locator(".sidebar")).toHaveCSS("width", "96px");
+
+    const fontInput = page.getByLabel("已安装的单一系统字体名");
+    await fontInput.fill("TimeKeeper Missing Font 019fd0e6");
+    await expect(page.locator(".appearance-panel__warning")).toContainText("已暂时回退");
+    await expect(page.locator("html")).toHaveAttribute("data-font-fallback", "true");
+
+    const sizeInput = page.getByLabel("基础字号");
+    await sizeInput.fill("18");
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          getComputedStyle(document.documentElement).getPropertyValue("--app-base-font-size"),
+        ),
+      )
+      .toBe("18px");
+    await expect(page.getByRole("link", { name: "今日" })).toHaveCSS("font-size", "15px");
+    await expect(page.getByRole("button", { name: "保存设置", exact: true })).toHaveCSS(
+      "font-size",
+      "16px",
+    );
+
+    await page.getByRole("button", { name: "入口安全", exact: true }).click();
+    await expect(page).toHaveURL(/#\/settings$/);
+    await expect(page.locator("#access")).toBeFocused();
+
+    await page.getByRole("button", { name: "立即锁定", exact: true }).click();
+    let accessGate = page.getByRole("dialog", { name: "解锁时约管家" });
+    await expect(accessGate).toBeVisible();
+    await accessGate.getByRole("button", { name: "忘记入口密码", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "重置入口密码" })).toBeVisible();
+    await page.getByRole("button", { name: "返回密码输入", exact: true }).click();
+    accessGate = page.getByRole("dialog", { name: "解锁时约管家" });
+    await expect(accessGate).toBeVisible();
+    await accessGate.getByLabel("入口密码", { exact: true }).fill("demo");
+    await accessGate.getByRole("button", { name: "进入", exact: true }).click();
+    await expect(accessGate).toBeHidden();
+
+    await page.getByRole("button", { name: "撤销外观预览", exact: true }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          getComputedStyle(document.documentElement).getPropertyValue("--app-base-font-size"),
+        ),
+      )
+      .toBe("15px");
+  });
+
   test("新建暂不可用账号后可查询筛选且新预约可从档案复制", async ({ page }) => {
     const contactName = "矩阵待完善联系人";
     const accountName = "feature_matrix_review";
@@ -123,6 +178,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
 
     await test.step("按账号查询并只筛选暂不可用档案", async () => {
       const search = page.getByPlaceholder("搜索联系人、区服、角色或账号");
+      await expect(page.getByTitle("查询账号")).toHaveCount(0);
       await search.fill(accountName);
       await expect(accountRow(page, accountName)).toHaveCount(1);
 
@@ -131,6 +187,18 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       const reviewRow = accountRow(page, accountName);
       await expect(reviewRow).toBeVisible();
       await expect(accountRow(page, "nanzhi_0217")).toHaveCount(0);
+
+      const stickyCell = reviewRow.locator("td").last();
+      const backgroundBeforeHover = await Promise.all([
+        reviewRow.evaluate((element) => getComputedStyle(element).backgroundColor),
+        stickyCell.evaluate((element) => getComputedStyle(element).backgroundColor),
+      ]);
+      await reviewRow.hover();
+      const backgroundAfterHover = await Promise.all([
+        reviewRow.evaluate((element) => getComputedStyle(element).backgroundColor),
+        stickyCell.evaluate((element) => getComputedStyle(element).backgroundColor),
+      ]);
+      expect(backgroundAfterHover).toEqual(backgroundBeforeHover);
     });
 
     await test.step("不刷新页面打开全局预约并看到新账号", async () => {
@@ -147,74 +215,6 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
     });
   });
 
-  test("保存默认提醒60分钟后新建预约仍默认关闭，勾选后使用该值", async ({ page }) => {
-    await page.getByRole("link", { name: "数据与设置" }).click();
-
-    await test.step("修改并保存默认提醒", async () => {
-      await page.getByLabel("默认提前提醒").fill("60");
-      await page.getByRole("button", { name: "保存设置" }).click();
-      await expect(page.getByRole("status")).toContainText("设置已保存");
-    });
-
-    await test.step("新建预约默认关闭提醒但保留最新分钟数", async () => {
-      await page.getByRole("button", { name: "新建预约", exact: true }).click();
-      const drawer = page.getByRole("dialog", { name: /新建预约|编辑预约/ });
-      const reminderToggle = drawer.getByLabel("开启提醒");
-      const reminderMinutes = drawer.getByLabel("提前提醒分钟数");
-      await expect(reminderToggle).not.toBeChecked();
-      await expect(reminderMinutes).toBeDisabled();
-      await expect(reminderMinutes).toHaveValue("60");
-      await reminderToggle.check();
-      await expect(reminderMinutes).toBeEnabled();
-    });
-  });
-
-  test("联系人模板可恢复一次性账号与语音，并保持新预约日期", async ({ page }) => {
-    const contactName = "矩阵联系人模板";
-    const templateDate = today;
-
-    await test.step("保存带一次性账号和YY语音的预约", async () => {
-      await page.getByRole("button", { name: "新建预约", exact: true }).click();
-      const drawer = page.getByRole("dialog", { name: "新建预约" });
-      await drawer.getByLabel("日期 *").fill(templateDate);
-      await drawer.getByLabel("开始时间", { exact: true }).fill("18:30");
-      await expect(page.getByTitle("查询账号")).toHaveCount(0);
-      await drawer.getByLabel("结束时间（可留空）").fill("20:00");
-      await drawer.getByLabel("联系人").fill(contactName);
-      await drawer.getByLabel("预约内容").fill("模板恢复验收");
-      await drawer.getByRole("button", { name: "一次性账号" }).click();
-      await drawer.getByLabel("职业").fill("冰心诀");
-      await drawer.getByLabel("装分").fill("20万");
-      await drawer.getByLabel("区服").fill("梦江南");
-      await drawer.getByLabel("账号 *").fill("matrix_one_off");
-
-      const stickyCell = reviewRow.locator("td").last();
-      const backgroundBeforeHover = await Promise.all([
-        reviewRow.evaluate((element) => getComputedStyle(element).backgroundColor),
-        stickyCell.evaluate((element) => getComputedStyle(element).backgroundColor),
-      ]);
-      await reviewRow.hover();
-      const backgroundAfterHover = await Promise.all([
-        reviewRow.evaluate((element) => getComputedStyle(element).backgroundColor),
-        stickyCell.evaluate((element) => getComputedStyle(element).backgroundColor),
-      ]);
-      expect(backgroundAfterHover).toEqual(backgroundBeforeHover);
-      await drawer.getByLabel("密码 *").fill("Matrix#Voice2026");
-      await drawer.getByLabel("语音平台").selectOption("yy");
-      await drawer.getByLabel("YY频道号码").fill("12345678");
-      await drawer.getByLabel("备注").scrollIntoViewIfNeeded();
-      await expect(drawer.getByRole("button", { name: "保存预约" })).toBeVisible();
-      await drawer.getByRole("button", { name: "保存预约" }).click();
-      await expect(drawer).toBeHidden();
-    });
-
-    await test.step("今日、编辑抽屉和历史记录均提供密码复制入口", async () => {
-      const todayRow = page.locator("article.appointment-row").filter({ hasText: contactName });
-      const todayCopy = todayRow.getByRole("button", {
-        name: `复制${contactName} 的预约密码`,
-      });
-      await expect(todayCopy).toBeEnabled();
-      await todayCopy.click();
   test("账号筛选前后工具栏保持固定布局", async ({ page }) => {
     await page.getByRole("link", { name: "账号档案" }).click();
     await expect(page.getByRole("heading", { name: "账号档案", level: 1 })).toBeVisible();
@@ -254,6 +254,86 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
     expectStableToolbarGeometry(before, reset);
   });
 
+  test("配置掩码 API 密钥后刷新并只读展示本周胜场", async ({ page }) => {
+    await page.getByRole("link", { name: "数据与设置" }).click();
+    await page.getByRole("button", { name: "角色数据", exact: true }).click();
+    const apiKeyInput = page.getByLabel("角色数据 API 密钥");
+    await expect(apiKeyInput).toHaveAttribute("type", "password");
+    await apiKeyInput.fill("feature-matrix-api-key");
+    await page.getByRole("button", { name: "保存设置", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("设置已保存");
+
+    await page.getByRole("link", { name: "账号档案" }).click();
+    await expect(page.getByRole("columnheader", { name: /本周胜场/ })).toBeVisible();
+    await expect(page.getByText("清空本周", { exact: true })).toHaveCount(0);
+    const refreshedWeeklyWinsCell = accountRow(page, "nanzhi_0217").locator("td").nth(11);
+    await expect(refreshedWeeklyWinsCell.locator("input, textarea")).toHaveCount(0);
+    await expect(refreshedWeeklyWinsCell).toHaveText("5");
+
+    await page.getByRole("button", { name: "更新当前列表" }).click();
+    const resultDialog = page.getByRole("dialog", { name: "角色数据更新完成" });
+    await expect(resultDialog).toBeVisible();
+    await expect(resultDialog).toContainText("更新");
+    await resultDialog.getByRole("button", { name: "知道了" }).click();
+    await expect(refreshedWeeklyWinsCell).toHaveText(/^\d+$/);
+    await expect(refreshedWeeklyWinsCell).not.toHaveText("5");
+  });
+
+  test("保存默认提醒60分钟后新建预约仍默认关闭，勾选后使用该值", async ({ page }) => {
+    await page.getByRole("link", { name: "数据与设置" }).click();
+
+    await test.step("修改并保存默认提醒", async () => {
+      await page.getByLabel("默认提前提醒").fill("60");
+      await page.getByRole("button", { name: "保存设置" }).click();
+      await expect(page.getByRole("status")).toContainText("设置已保存");
+    });
+
+    await test.step("新建预约默认关闭提醒但保留最新分钟数", async () => {
+      await page.getByRole("button", { name: "新建预约", exact: true }).click();
+      const drawer = page.getByRole("dialog", { name: /新建预约|编辑预约/ });
+      const reminderToggle = drawer.getByLabel("开启提醒");
+      const reminderMinutes = drawer.getByLabel("提前提醒分钟数");
+      await expect(reminderToggle).not.toBeChecked();
+      await expect(reminderMinutes).toBeDisabled();
+      await expect(reminderMinutes).toHaveValue("60");
+      await reminderToggle.check();
+      await expect(reminderMinutes).toBeEnabled();
+    });
+  });
+
+  test("联系人模板可恢复一次性账号与语音，并保持新预约日期", async ({ page }) => {
+    const contactName = "矩阵联系人模板";
+    const templateDate = today;
+
+    await test.step("保存带一次性账号和YY语音的预约", async () => {
+      await page.getByRole("button", { name: "新建预约", exact: true }).click();
+      const drawer = page.getByRole("dialog", { name: "新建预约" });
+      await drawer.getByLabel("日期 *").fill(templateDate);
+      await drawer.getByLabel("开始时间", { exact: true }).fill("18:30");
+      await drawer.getByLabel("结束时间（可留空）").fill("20:00");
+      await drawer.getByLabel("联系人").fill(contactName);
+      await drawer.getByLabel("预约内容").fill("模板恢复验收");
+      await drawer.getByRole("button", { name: "一次性账号" }).click();
+      await drawer.getByLabel("职业").fill("冰心诀");
+      await drawer.getByLabel("装分").fill("20万");
+      await drawer.getByLabel("区服").fill("梦江南");
+      await drawer.getByLabel("账号 *").fill("matrix_one_off");
+      await drawer.getByLabel("密码 *").fill("Matrix#Voice2026");
+      await drawer.getByLabel("语音平台").selectOption("yy");
+      await drawer.getByLabel("YY频道号码").fill("12345678");
+      await drawer.getByLabel("备注").scrollIntoViewIfNeeded();
+      await expect(drawer.getByRole("button", { name: "保存预约" })).toBeVisible();
+      await drawer.getByRole("button", { name: "保存预约" }).click();
+      await expect(drawer).toBeHidden();
+    });
+
+    await test.step("今日、编辑抽屉和历史记录均提供密码复制入口", async () => {
+      const todayRow = page.locator("article.appointment-row").filter({ hasText: contactName });
+      const todayCopy = todayRow.getByRole("button", {
+        name: `复制${contactName} 的预约密码`,
+      });
+      await expect(todayCopy).toBeEnabled();
+      await todayCopy.click();
       await expect(page.getByRole("status")).toContainText("账号密码已复制");
       await todayRow.getByRole("button", { name: "编辑预约" }).click();
       const editDrawer = page.getByRole("dialog", { name: "编辑预约" });
@@ -400,8 +480,8 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
 
     await test.step("复制预约并把副本编辑成可区分的数据", async () => {
       await appointmentRow(page, originalContact).getByRole("button", { name: "复制预约" }).click();
-      const drawer = page.getByRole("dialog", { name: "编辑预约" });
-      await expect(drawer.getByRole("heading", { name: "编辑预约" })).toBeVisible();
+      const drawer = page.getByRole("dialog", { name: "新建预约" });
+      await expect(drawer.getByRole("heading", { name: "新建预约" })).toBeVisible();
       await drawer.getByLabel("联系人", { exact: true }).fill(copiedContact);
       await drawer.getByLabel("预约内容").fill("复制后的安全测试数据");
       await drawer.getByRole("button", { name: "保存预约" }).click();

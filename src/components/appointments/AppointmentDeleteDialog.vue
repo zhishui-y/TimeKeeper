@@ -151,7 +151,7 @@ useModalFocus({
 .appointment-delete-dialog__header h2 {
   margin: 0;
   color: var(--ink-strong);
-  font-size: 16px;
+  font-size: calc(16px + var(--app-font-size-offset, 0px));
 }
 
 .appointment-delete-dialog__body {
@@ -162,13 +162,13 @@ useModalFocus({
 
 .appointment-delete-dialog__body strong {
   color: var(--ink-strong);
-  font-size: 13px;
+  font-size: calc(13px + var(--app-font-size-offset, 0px));
 }
 
 .appointment-delete-dialog__body p {
   margin: 0;
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   line-height: 1.65;
 }
 

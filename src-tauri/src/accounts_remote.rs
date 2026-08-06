@@ -89,6 +89,7 @@ struct AccountRoleDataUpdate {
     current_score: i64,
     highest_score: Option<i64>,
     score_updated_at: String,
+    weekly_wins: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,8 +103,13 @@ pub async fn prepare_account_role_data_refresh(
     pool: &SqlitePool,
     client: &Client,
     base_url: &str,
+    api_key: &str,
     ids: Vec<String>,
 ) -> Result<PreparedAccountRoleDataRefresh, String> {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return Err("请先配置角色数据 API 密钥".into());
+    }
     let ids = normalize_ids(ids)?;
     let mut slots = vec![None; ids.len()];
     let mut targets = Vec::new();
@@ -156,11 +162,9 @@ pub async fn prepare_account_role_data_refresh(
         });
     }
 
-    let fetched = stream::iter(
-        targets
-            .into_iter()
-            .map(|target| async move { fetch_account_role_data(client, base_url, target).await }),
-    )
+    let fetched = stream::iter(targets.into_iter().map(|target| async move {
+        fetch_account_role_data(client, base_url, api_key, target).await
+    }))
     .buffer_unordered(MAX_CONCURRENT_REQUESTS)
     .collect::<Vec<_>>()
     .await;
@@ -202,7 +206,9 @@ pub async fn commit_account_role_data_refresh(
                         WHEN highest_score IS NULL OR highest_score < ? THEN ?
                         ELSE highest_score
                     END,
-                    score_updated_at = ?, updated_at = ?
+                    score_updated_at = ?,
+                    weekly_wins = CASE WHEN ? IS NULL THEN weekly_wins ELSE ? END,
+                    updated_at = ?
                  WHERE id = ?",
             )
             .bind(update.gear_score)
@@ -211,6 +217,8 @@ pub async fn commit_account_role_data_refresh(
             .bind(update.highest_score)
             .bind(update.highest_score)
             .bind(update.score_updated_at)
+            .bind(update.weekly_wins)
+            .bind(update.weekly_wins)
             .bind(&updated_at)
             .bind(&update.account_id)
             .execute(&mut *transaction)
@@ -229,6 +237,7 @@ pub async fn commit_account_role_data_refresh(
 async fn fetch_account_role_data(
     client: &Client,
     base_url: &str,
+    api_key: &str,
     target: AccountRoleDataTarget,
 ) -> AccountRoleDataFetchOutcome {
     let failed = |message: &str| AccountRoleDataFetchOutcome {
@@ -241,7 +250,12 @@ async fn fetch_account_role_data(
         update: None,
     };
 
-    let url = match build_account_role_data_url(base_url, &target.server, &target.character_name) {
+    let url = match build_account_role_data_url(
+        base_url,
+        api_key,
+        &target.server,
+        &target.character_name,
+    ) {
         Ok(url) => url,
         Err(message) => return failed(&message),
     };
@@ -251,6 +265,12 @@ async fn fetch_account_role_data(
         Err(error) if error.is_connect() => return failed("无法连接角色数据服务器"),
         Err(_) => return failed("请求角色数据失败"),
     };
+    if response.status() == StatusCode::UNAUTHORIZED {
+        return failed("角色数据 API 密钥无效");
+    }
+    if response.status() == StatusCode::SERVICE_UNAVAILABLE {
+        return failed("角色数据服务不可用或服务端未配置 API 密钥");
+    }
     if response.status() != StatusCode::OK {
         return failed(&format!("服务器返回 HTTP {}", response.status().as_u16()));
     }
@@ -277,6 +297,7 @@ async fn fetch_account_role_data(
         current_score,
         highest_score,
         score_updated_at,
+        weekly_wins,
     } = payload
     else {
         return AccountRoleDataFetchOutcome {
@@ -303,6 +324,7 @@ async fn fetch_account_role_data(
             current_score,
             highest_score,
             score_updated_at,
+            weekly_wins,
         }),
     }
 }
@@ -315,6 +337,7 @@ enum ParsedAccountRoleData {
         current_score: i64,
         highest_score: Option<i64>,
         score_updated_at: String,
+        weekly_wins: Option<i64>,
     },
 }
 
@@ -354,12 +377,17 @@ fn parse_account_role_data_response(bytes: &[u8]) -> Result<ParsedAccountRoleDat
             .and_then(Value::as_str)
             .ok_or_else(|| "服务器响应缺少有效的 time 字段".to_string())?,
     )?;
+    let weekly_wins = object
+        .get("week_win")
+        .filter(|value| !value.is_null())
+        .and_then(|value| parse_non_negative_integer(value, "week_win").ok());
 
     Ok(ParsedAccountRoleData::Updated {
         gear_score,
         current_score,
         highest_score,
         score_updated_at,
+        weekly_wins,
     })
 }
 
@@ -414,6 +442,7 @@ pub(crate) fn validate_account_role_data_server_url(value: &str) -> Result<(), S
 
 fn build_account_role_data_url(
     base_url: &str,
+    api_key: &str,
     server: &str,
     character_name: &str,
 ) -> Result<Url, String> {
@@ -427,6 +456,7 @@ fn build_account_role_data_url(
     segments.push(character_name);
     segments.push("");
     drop(segments);
+    url.query_pairs_mut().append_pair("api_key", api_key);
     Ok(url)
 }
 
@@ -595,13 +625,14 @@ mod tests {
     fn validates_and_encodes_role_data_urls() {
         let url = build_account_role_data_url(
             "https://zhishui.cc/api/jx3/excel/",
+            "api secret/?",
             "梦江南",
             "角色 名/测试",
         )
         .unwrap();
         assert_eq!(
             url.as_str(),
-            "https://zhishui.cc/api/jx3/excel/%E6%A2%A6%E6%B1%9F%E5%8D%97/%E8%A7%92%E8%89%B2%20%E5%90%8D%2F%E6%B5%8B%E8%AF%95/"
+            "https://zhishui.cc/api/jx3/excel/%E6%A2%A6%E6%B1%9F%E5%8D%97/%E8%A7%92%E8%89%B2%20%E5%90%8D%2F%E6%B5%8B%E8%AF%95/?api_key=api+secret%2F%3F"
         );
         assert!(validate_account_role_data_server_url("file:///tmp/data").is_err());
         assert!(validate_account_role_data_server_url("https://user:pass@example.com/").is_err());
@@ -620,7 +651,7 @@ mod tests {
     #[test]
     fn parses_success_no_record_and_flexible_numbers() {
         let parsed = parse_account_role_data_response(
-            br#"{"ok":true,"time":"2026-08-02T20:30:00Z","equip":825153,"score":"2874","total_score":"2934"}"#,
+            br#"{"ok":true,"time":"2026-08-02T20:30:00Z","equip":825153,"score":"2874","total_score":"2934","week_win":6}"#,
         )
         .unwrap();
         assert_eq!(
@@ -630,6 +661,7 @@ mod tests {
                 current_score: 2874,
                 highest_score: Some(2934),
                 score_updated_at: "2026-08-03".into(),
+                weekly_wins: Some(6),
             }
         );
         assert_eq!(
@@ -653,12 +685,53 @@ mod tests {
     }
 
     #[test]
+    fn missing_or_invalid_week_win_keeps_the_legacy_response_compatible() {
+        for body in [
+            br#"{"ok":true,"time":"2026-08-02","equip":100,"score":1,"total_score":2}"#.as_slice(),
+            br#"{"ok":true,"time":"2026-08-02","equip":100,"score":1,"total_score":2,"week_win":"invalid"}"#.as_slice(),
+        ] {
+            let ParsedAccountRoleData::Updated { weekly_wins, .. } =
+                parse_account_role_data_response(body).unwrap()
+            else {
+                panic!("expected an updated response");
+            };
+            assert_eq!(weekly_wins, None);
+        }
+    }
+
+    #[test]
     fn operation_lock_rejects_overlapping_refreshes() {
         let state = AccountRoleDataRefreshState::new().unwrap();
         let guard = state.try_start().unwrap();
         assert!(state.try_start().is_err());
         drop(guard);
         assert!(state.try_start().is_ok());
+    }
+
+    #[test]
+    fn empty_api_key_is_rejected_before_any_network_request() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            insert_account(
+                &database,
+                "account-without-key",
+                Some("测试服"),
+                Some("测试角色"),
+                100,
+            )
+            .await;
+            let client = Client::builder().no_proxy().build().unwrap();
+            let error = prepare_account_role_data_refresh(
+                database.pool(),
+                &client,
+                "http://127.0.0.1:9/",
+                "   ",
+                vec!["account-without-key".into()],
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error, "请先配置角色数据 API 密钥");
+        });
     }
 
     #[test]
@@ -675,13 +748,18 @@ mod tests {
                 ids.len(),
                 Duration::from_millis(80),
                 200,
-                r#"{"ok":true,"time":"2026-08-02","equip":"200","score":"250","total_score":"300"}"#,
+                r#"{"ok":true,"time":"2026-08-02","equip":"200","score":"250","total_score":"300","week_win":4}"#,
             );
             let client = Client::builder().no_proxy().build().unwrap();
-            let prepared =
-                prepare_account_role_data_refresh(database.pool(), &client, &base_url, ids.clone())
-                    .await
-                    .unwrap();
+            let prepared = prepare_account_role_data_refresh(
+                database.pool(),
+                &client,
+                &base_url,
+                "test-api-key",
+                ids.clone(),
+            )
+            .await
+            .unwrap();
             server.join().unwrap();
 
             assert_eq!(maximum.load(Ordering::SeqCst), MAX_CONCURRENT_REQUESTS);
@@ -713,12 +791,28 @@ mod tests {
             };
 
             let (base_url, _, server) =
-                spawn_http_server(1, Duration::ZERO, 503, r#"{"secret":"do-not-return"}"#);
+                spawn_http_server(1, Duration::ZERO, 401, r#"{"ok":false}"#);
             let client = Client::builder().no_proxy().build().unwrap();
-            let outcome = fetch_account_role_data(&client, &base_url, target(1)).await;
+            let outcome =
+                fetch_account_role_data(&client, &base_url, "invalid-key", target(0)).await;
             server.join().unwrap();
             assert_eq!(outcome.item.status, AccountRoleDataRefreshStatus::Failed);
-            assert_eq!(outcome.item.message.as_deref(), Some("服务器返回 HTTP 503"));
+            assert_eq!(
+                outcome.item.message.as_deref(),
+                Some("角色数据 API 密钥无效")
+            );
+
+            let (base_url, _, server) =
+                spawn_http_server(1, Duration::ZERO, 503, r#"{"secret":"do-not-return"}"#);
+            let client = Client::builder().no_proxy().build().unwrap();
+            let outcome =
+                fetch_account_role_data(&client, &base_url, "test-api-key", target(1)).await;
+            server.join().unwrap();
+            assert_eq!(outcome.item.status, AccountRoleDataRefreshStatus::Failed);
+            assert_eq!(
+                outcome.item.message.as_deref(),
+                Some("角色数据服务不可用或服务端未配置 API 密钥")
+            );
 
             let (base_url, _, server) =
                 spawn_http_server(1, Duration::from_millis(120), 200, r#"{"ok":false}"#);
@@ -727,7 +821,8 @@ mod tests {
                 .timeout(Duration::from_millis(30))
                 .build()
                 .unwrap();
-            let outcome = fetch_account_role_data(&client, &base_url, target(2)).await;
+            let outcome =
+                fetch_account_role_data(&client, &base_url, "test-api-key", target(2)).await;
             server.join().unwrap();
             assert_eq!(outcome.item.status, AccountRoleDataRefreshStatus::Failed);
             assert_eq!(outcome.item.message.as_deref(), Some("请求角色数据超时"));
@@ -745,6 +840,7 @@ mod tests {
                 database.pool(),
                 &client,
                 "http://127.0.0.1:9/",
+                "test-api-key",
                 vec!["missing-server".into(), "missing-character".into()],
             )
             .await
@@ -801,6 +897,7 @@ mod tests {
                     current_score: 250,
                     highest_score: Some(280),
                     score_updated_at: "2026-08-03".into(),
+                    weekly_wins: Some(7),
                 }],
             };
             let result = commit_account_role_data_refresh(database.pool(), prepared)
@@ -817,9 +914,37 @@ mod tests {
             assert_eq!(row.get::<i64, _>("current_score"), 250);
             assert_eq!(row.get::<i64, _>("highest_score"), 300);
             assert_eq!(row.get::<String, _>("score_updated_at"), "2026-08-03");
+            assert_eq!(row.get::<i64, _>("weekly_wins"), 7);
             assert_eq!(row.get::<String, _>("contact_name"), "联系人");
             assert_eq!(row.get::<String, _>("notes"), "原备注");
             assert_eq!(row.get::<i64, _>("needs_review"), 1);
+
+            let prepared_without_weekly_wins = PreparedAccountRoleDataRefresh {
+                items: vec![AccountRoleDataRefreshItem {
+                    account_id: "account-1".into(),
+                    status: AccountRoleDataRefreshStatus::Updated,
+                    message: None,
+                }],
+                updates: vec![AccountRoleDataUpdate {
+                    account_id: "account-1".into(),
+                    gear_score: "210".into(),
+                    current_score: 260,
+                    highest_score: Some(290),
+                    score_updated_at: "2026-08-04".into(),
+                    weekly_wins: None,
+                }],
+            };
+            commit_account_role_data_refresh(database.pool(), prepared_without_weekly_wins)
+                .await
+                .unwrap();
+            let row = sqlx::query("SELECT * FROM account_profiles WHERE id = ?")
+                .bind("account-1")
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+            assert_eq!(row.get::<String, _>("gear_score"), "210");
+            assert_eq!(row.get::<i64, _>("current_score"), 260);
+            assert_eq!(row.get::<i64, _>("weekly_wins"), 7);
         });
     }
 
@@ -848,6 +973,7 @@ mod tests {
                         current_score: 999,
                         highest_score: Some(999),
                         score_updated_at: "2026-08-03".into(),
+                        weekly_wins: Some(9),
                     },
                     AccountRoleDataUpdate {
                         account_id: "missing-account".into(),
@@ -855,6 +981,7 @@ mod tests {
                         current_score: 999,
                         highest_score: Some(999),
                         score_updated_at: "2026-08-03".into(),
+                        weekly_wins: Some(9),
                     },
                 ],
             };

@@ -303,8 +303,17 @@ watch(
 
 <style scoped>
 .revenue-dashboard {
+  position: relative;
   height: 100%;
   gap: 14px;
+}
+
+.revenue-dashboard > .loading-line {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  right: 4px;
+  left: 0;
 }
 
 .revenue-toolbar {
@@ -348,19 +357,19 @@ watch(
 
 .revenue-metric span {
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .revenue-metric strong {
   margin-top: 2px;
   color: var(--ink-strong);
-  font-size: 22px;
+  font-size: calc(22px + var(--app-font-size-offset, 0px));
 }
 
 .revenue-metric small {
   margin-top: 2px;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .revenue-metric--primary {
@@ -426,7 +435,7 @@ watch(
 .panel-header h2 {
   margin-top: 1px;
   color: var(--ink-strong);
-  font-size: 14px;
+  font-size: calc(14px + var(--app-font-size-offset, 0px));
 }
 
 .panel-header__title {
@@ -438,7 +447,7 @@ watch(
 .chart-drill-hint {
   overflow: hidden;
   color: var(--gold-strong);
-  font-size: 9px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -461,7 +470,7 @@ watch(
 .trend-grouping > span,
 .panel-header__range {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   white-space: nowrap;
 }
 
@@ -476,7 +485,7 @@ watch(
   height: 24px;
   padding: 0;
   border-radius: 7px;
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .payment-list {
@@ -498,12 +507,12 @@ watch(
 
 .payment-row__label strong {
   color: var(--ink-strong);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .payment-row__label span {
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .payment-row__track {
@@ -532,7 +541,7 @@ watch(
   display: grid;
   place-items: center;
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 @media (max-width: 1180px) {
@@ -553,7 +562,7 @@ watch(
   }
 
   .revenue-metric strong {
-    font-size: 19px;
+    font-size: calc(19px + var(--app-font-size-offset, 0px));
   }
 
   .revenue-body {

@@ -47,7 +47,7 @@ const icon = computed(() => {
   color: var(--ink);
   background: rgba(255, 253, 248, 0.96);
   box-shadow: var(--shadow);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   line-height: 1.5;
   backdrop-filter: blur(14px);
 }

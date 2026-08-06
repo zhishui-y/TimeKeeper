@@ -115,13 +115,13 @@ function submit(): void {
 
 .access-password-form__heading strong {
   color: var(--ink-strong);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .access-password-form__heading span,
 .access-password-form__footer {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .access-password-form__fields {

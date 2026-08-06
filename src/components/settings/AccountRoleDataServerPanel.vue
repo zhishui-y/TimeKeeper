@@ -2,7 +2,8 @@
 import { computed } from "vue";
 import { validateAccountRoleDataServerUrl } from "../../utils/accountRoleData";
 
-const serverUrl = defineModel<string>({ required: true });
+const serverUrl = defineModel<string>("serverUrl", { required: true });
+const apiKey = defineModel<string>("apiKey", { required: true });
 const validationError = computed(() => validateAccountRoleDataServerUrl(serverUrl.value));
 </script>
 
@@ -21,9 +22,20 @@ const validationError = computed(() => validateAccountRoleDataServerUrl(serverUr
         :aria-invalid="Boolean(validationError)"
       />
     </label>
+    <label class="field">
+      <span class="field__label">API 密钥</span>
+      <input
+        v-model="apiKey"
+        class="input mono-number"
+        type="password"
+        autocomplete="off"
+        spellcheck="false"
+        aria-label="角色数据 API 密钥"
+      />
+    </label>
     <p v-if="validationError" class="server-url-error" role="alert">{{ validationError }}</p>
     <p v-else class="settings-note">
-      更新时只会追加编码后的服务器和角色名路径；不支持认证信息、查询参数或片段。
+      更新时追加编码后的服务器、角色名和 API 密钥；密钥保存在本机设置并随完整备份保存。
     </p>
   </div>
 </template>
@@ -31,6 +43,6 @@ const validationError = computed(() => validateAccountRoleDataServerUrl(serverUr
 <style scoped>
 .server-url-error {
   color: var(--danger);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 </style>

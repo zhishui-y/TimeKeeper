@@ -353,7 +353,7 @@ onMounted(loadColumnWidths);
   justify-content: space-between;
   padding: 0 4px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .result-line span:first-child {

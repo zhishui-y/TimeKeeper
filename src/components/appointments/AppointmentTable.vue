@@ -357,7 +357,7 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
 .notes-cell {
   display: block;
   color: var(--ink-strong);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 700;
 }
 
@@ -366,7 +366,7 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
   align-items: center;
   gap: 4px;
   color: var(--brand-strong);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 700;
 }
 

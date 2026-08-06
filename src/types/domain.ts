@@ -144,7 +144,7 @@ export interface AccountProfile {
   currentScore?: number | null;
   highestScore?: number | null;
   scoreUpdatedAt?: string | null;
-  usageInfo?: string | null;
+  weeklyWins?: number | null;
   notes?: string | null;
   needsReview: boolean;
   importFingerprint?: string | null;
@@ -230,7 +230,17 @@ export interface AppAccessStatus {
   initialized: boolean;
   unlocked: boolean;
   legacyMigrationPendingCount: number;
+  recoveryQuestion: string | null;
 }
+
+export interface AppAccessRecoverySetup {
+  question: string;
+  answer: string;
+}
+
+export type AppAccessRecoveryProof =
+  | { kind: "answer"; answer: string }
+  | { kind: "legacyEnrollment"; recovery: AppAccessRecoverySetup };
 
 export interface LegacyCredentialMigrationResult {
   migratedCount: number;
@@ -271,7 +281,7 @@ export interface AccountTableColumnWidths {
   currentScore: number;
   highestScore: number;
   scoreUpdatedAt: number;
-  weekly: number;
+  weeklyWins: number;
   notes: number;
 }
 
@@ -286,11 +296,6 @@ export interface AppointmentTableColumnWidths {
   serviceStatus: number;
   amount: number;
   notes: number;
-}
-
-export interface AccountUsageWeekSyncResult {
-  weekStart: string;
-  clearedCount: number;
 }
 
 export type AccountRoleDataRefreshStatus = "updated" | "noRecord" | "skipped" | "failed";
@@ -310,14 +315,19 @@ export interface AccountRoleDataRefreshResult {
   items: readonly AccountRoleDataRefreshItem[];
 }
 
-export interface AppSettings {
+export interface AppearanceSettings {
+  fontFamily: string;
+  baseFontSize: number;
+}
+
+export interface AppSettings extends AppearanceSettings {
   defaultReminderMinutes: number;
   backupRetention: number;
   lastAutomaticBackupDate?: string | null;
   accountTableColumnWidths: AccountTableColumnWidths;
   appointmentTableColumnWidths: AppointmentTableColumnWidths;
-  lastAccountUsageWeekStart?: string | null;
   accountRoleDataServerUrl: string;
+  accountRoleDataApiKey: string;
 }
 
 export interface BackupResult {

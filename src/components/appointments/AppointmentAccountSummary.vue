@@ -76,14 +76,14 @@ const emit = defineEmits<{
   align-items: center;
   gap: 5px;
   color: var(--ink-strong);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
 }
 
 .appointment-account-summary__line--secondary,
 .appointment-account-summary__empty {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 500;
 }
 

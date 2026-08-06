@@ -4,6 +4,7 @@ import { shallowRef } from "vue";
 import { useAppAccessStore } from "../../stores/appAccess";
 import { useUiStore } from "../../stores/ui";
 import AppAccessPasswordChangeForm from "./AppAccessPasswordChangeForm.vue";
+import AppAccessRecoverySettingsForm from "./AppAccessRecoverySettingsForm.vue";
 
 const access = useAppAccessStore();
 const ui = useUiStore();
@@ -27,6 +28,15 @@ async function migrateLegacyCredentials(): Promise<void> {
 
 async function lockApplication(): Promise<void> {
   await access.lock();
+}
+
+async function setRecovery(
+  currentPassword: string,
+  question: string,
+  answer: string,
+): Promise<void> {
+  const result = await access.setRecovery(currentPassword, { question, answer });
+  if (result) ui.notify("恢复问题已保存", "success");
 }
 </script>
 
@@ -72,6 +82,13 @@ async function lockApplication(): Promise<void> {
       :error="access.error"
       @submit="changePassword"
     />
+
+    <AppAccessRecoverySettingsForm
+      :current-question="access.recoveryQuestion"
+      :loading="access.loading"
+      :error="access.error"
+      @submit="setRecovery"
+    />
   </div>
 </template>
 
@@ -104,12 +121,12 @@ async function lockApplication(): Promise<void> {
 
 .access-settings strong {
   color: var(--ink-strong);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .access-settings span {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   line-height: 1.45;
 }
 

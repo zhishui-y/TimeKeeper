@@ -1,12 +1,18 @@
 import { defineStore } from "pinia";
 import { computed, shallowRef } from "vue";
 import { api, errorMessage } from "../api/client";
-import type { AppAccessStatus, LegacyCredentialMigrationResult } from "../types/domain";
+import type {
+  AppAccessRecoveryProof,
+  AppAccessRecoverySetup,
+  AppAccessStatus,
+  LegacyCredentialMigrationResult,
+} from "../types/domain";
 
 const emptyStatus: AppAccessStatus = {
   initialized: false,
   unlocked: false,
   legacyMigrationPendingCount: 0,
+  recoveryQuestion: null,
 };
 
 export const useAppAccessStore = defineStore("appAccess", () => {
@@ -19,6 +25,7 @@ export const useAppAccessStore = defineStore("appAccess", () => {
   const initialized = computed(() => status.value.initialized);
   const unlocked = computed(() => status.value.unlocked);
   const legacyMigrationPendingCount = computed(() => status.value.legacyMigrationPendingCount);
+  const recoveryQuestion = computed(() => status.value.recoveryQuestion);
 
   function applyStatus(next: AppAccessStatus): AppAccessStatus {
     status.value = next;
@@ -66,22 +73,31 @@ export const useAppAccessStore = defineStore("appAccess", () => {
     return request;
   }
 
-  const initialize = (password: string) => runStatusAction(() => api.initializeAppAccess(password));
+  const initialize = (password: string, recovery: AppAccessRecoverySetup) =>
+    runStatusAction(() => api.initializeAppAccess(password, recovery));
   const unlock = (password: string) => runStatusAction(() => api.unlockAppAccess(password));
   const lock = () => runStatusAction(() => api.lockAppAccess());
   const changePassword = (currentPassword: string, newPassword: string) =>
     runStatusAction(() => api.changeAppAccessPassword(currentPassword, newPassword));
-  const resetPassword = (newPassword: string, confirmationText: string) =>
-    runStatusAction(() => api.resetAppAccessPassword(newPassword, confirmationText));
+  const resetPassword = (
+    newPassword: string,
+    confirmationText: string,
+    recoveryProof: AppAccessRecoveryProof,
+  ) =>
+    runStatusAction(() => api.resetAppAccessPassword(newPassword, confirmationText, recoveryProof));
+
+  const setRecovery = (currentPassword: string, recovery: AppAccessRecoverySetup) =>
+    runStatusAction(() => api.setAppAccessRecovery(currentPassword, recovery));
 
   async function migrateLegacyCredentials(
     password: string,
+    recovery?: AppAccessRecoverySetup,
   ): Promise<LegacyCredentialMigrationResult | null> {
     if (loading.value) return null;
     loading.value = true;
     error.value = null;
     try {
-      const result = await api.migrateLegacyCredentials(password);
+      const result = await api.migrateLegacyCredentials(password, recovery);
       applyStatus(await api.appAccessStatus());
       return result;
     } catch (cause) {
@@ -100,12 +116,14 @@ export const useAppAccessStore = defineStore("appAccess", () => {
     initialized,
     unlocked,
     legacyMigrationPendingCount,
+    recoveryQuestion,
     bootstrap,
     initialize,
     unlock,
     lock,
     changePassword,
     resetPassword,
+    setRecovery,
     migrateLegacyCredentials,
     clearError,
   };

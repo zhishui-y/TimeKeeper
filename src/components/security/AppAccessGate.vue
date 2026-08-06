@@ -6,8 +6,11 @@ import { useUiStore } from "../../stores/ui";
 import {
   MIN_MASTER_PASSWORD_CHARACTERS,
   RECOMMENDED_MASTER_PASSWORD_CHARACTERS,
+  isRecoveryTextValid,
   isMasterPasswordLongEnough,
 } from "../../utils/security";
+import AppAccessRecoveryProofForm from "./AppAccessRecoveryProofForm.vue";
+import AppAccessRecoverySetupForm from "./AppAccessRecoverySetupForm.vue";
 
 type GateMode = "access" | "reset";
 
@@ -17,20 +20,38 @@ const mode = shallowRef<GateMode>("access");
 const password = shallowRef("");
 const confirmation = shallowRef("");
 const resetConfirmationText = shallowRef("");
+const recoveryQuestion = shallowRef("");
+const recoveryAnswer = shallowRef("");
+const recoveryAnswerConfirmation = shallowRef("");
+const legacyRecoveryQuestion = shallowRef("");
+const legacyRecoveryAnswer = shallowRef("");
+const legacyRecoveryConfirmation = shallowRef("");
 const localError = shallowRef("");
 const migrationMessage = shallowRef("");
 
 const hasLegacyCredentials = computed(() => access.legacyMigrationPendingCount > 0);
 const isLegacyUpgrade = computed(() => !access.initialized && hasLegacyCredentials.value);
 const isCreating = computed(() => !access.initialized && !hasLegacyCredentials.value);
+const needsRecoveryEnrollment = computed(
+  () => mode.value === "access" && access.unlocked && !access.recoveryQuestion,
+);
+const needsRecoverySetup = computed(
+  () =>
+    mode.value === "access" &&
+    (isCreating.value || isLegacyUpgrade.value || needsRecoveryEnrollment.value),
+);
 const title = computed(() => {
   if (mode.value === "reset") return "重置入口密码";
+  if (needsRecoveryEnrollment.value) return "补设恢复问题";
   if (isLegacyUpgrade.value) return "升级本地密码数据";
   return isCreating.value ? "创建入口密码" : "解锁时约管家";
 });
 const description = computed(() => {
   if (mode.value === "reset") {
     return "重置只替换应用入口密码，不会删除预约、账号或已保存的业务密码。";
+  }
+  if (needsRecoveryEnrollment.value) {
+    return "为继续进入应用，请用当前入口密码补设恢复问题和答案。";
   }
   if (isLegacyUpgrade.value) {
     return `检测到 ${access.legacyMigrationPendingCount} 条旧密码，请输入原主密码完成一次性迁移。`;
@@ -50,6 +71,12 @@ function resetForm(): void {
   password.value = "";
   confirmation.value = "";
   resetConfirmationText.value = "";
+  recoveryQuestion.value = "";
+  recoveryAnswer.value = "";
+  recoveryAnswerConfirmation.value = "";
+  legacyRecoveryQuestion.value = "";
+  legacyRecoveryAnswer.value = "";
+  legacyRecoveryConfirmation.value = "";
   clearMessages();
 }
 
@@ -70,6 +97,31 @@ function validateNewPassword(): boolean {
   return true;
 }
 
+function validateRecoverySetup(
+  question: string,
+  answer: string,
+  confirmationText: string,
+): boolean {
+  if (!isRecoveryTextValid(question.trim())) {
+    localError.value = "恢复问题需要2–100个字符";
+    return false;
+  }
+  const normalizedAnswer = answer.trim().replace(/\s+/gu, " ");
+  if (!isRecoveryTextValid(normalizedAnswer)) {
+    localError.value = "恢复答案规范化后需要2–100个字符";
+    return false;
+  }
+  if (normalizeAnswerForComparison(answer) !== normalizeAnswerForComparison(confirmationText)) {
+    localError.value = "两次输入的恢复答案不一致";
+    return false;
+  }
+  return true;
+}
+
+function normalizeAnswerForComparison(value: string): string {
+  return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase();
+}
+
 async function submit(): Promise<void> {
   if (access.loading) return;
   clearMessages();
@@ -80,7 +132,34 @@ async function submit(): Promise<void> {
       localError.value = "请输入“重置”确认操作";
       return;
     }
-    const result = await access.resetPassword(password.value, resetConfirmationText.value);
+    const recoveryProof = access.recoveryQuestion
+      ? { kind: "answer" as const, answer: recoveryAnswer.value }
+      : {
+          kind: "legacyEnrollment" as const,
+          recovery: {
+            question: legacyRecoveryQuestion.value,
+            answer: legacyRecoveryAnswer.value,
+          },
+        };
+    if (access.recoveryQuestion) {
+      if (!isRecoveryTextValid(recoveryAnswer.value.trim())) {
+        localError.value = "请输入恢复答案";
+        return;
+      }
+    } else if (
+      !validateRecoverySetup(
+        legacyRecoveryQuestion.value,
+        legacyRecoveryAnswer.value,
+        legacyRecoveryConfirmation.value,
+      )
+    ) {
+      return;
+    }
+    const result = await access.resetPassword(
+      password.value,
+      resetConfirmationText.value,
+      recoveryProof,
+    );
     if (result) resetForm();
     return;
   }
@@ -90,16 +169,68 @@ async function submit(): Promise<void> {
     return;
   }
   if (isLegacyUpgrade.value) {
-    const result = await access.migrateLegacyCredentials(password.value);
+    if (
+      !validateRecoverySetup(
+        recoveryQuestion.value,
+        recoveryAnswer.value,
+        recoveryAnswerConfirmation.value,
+      )
+    ) {
+      return;
+    }
+    const result = await access.migrateLegacyCredentials(password.value, {
+      question: recoveryQuestion.value.trim(),
+      answer: recoveryAnswer.value,
+    });
     if (!result) return;
     migrationMessage.value = `已迁移 ${result.migratedCount} 条，缺失 ${result.missingCount} 条，仍待迁移 ${result.pendingCount} 条。`;
     ui.notify(migrationMessage.value, result.pendingCount > 0 ? "warning" : "success");
     password.value = "";
     return;
   }
+  if (needsRecoveryEnrollment.value) {
+    if (!password.value) {
+      localError.value = "请输入当前入口密码";
+      return;
+    }
+    if (
+      !validateRecoverySetup(
+        recoveryQuestion.value,
+        recoveryAnswer.value,
+        recoveryAnswerConfirmation.value,
+      )
+    ) {
+      return;
+    }
+    if (
+      await access.setRecovery(password.value, {
+        question: recoveryQuestion.value.trim(),
+        answer: recoveryAnswer.value,
+      })
+    ) {
+      resetForm();
+    }
+    return;
+  }
   if (isCreating.value) {
     if (!validateNewPassword()) return;
-    if (await access.initialize(password.value)) resetForm();
+    if (
+      !validateRecoverySetup(
+        recoveryQuestion.value,
+        recoveryAnswer.value,
+        recoveryAnswerConfirmation.value,
+      )
+    ) {
+      return;
+    }
+    if (
+      await access.initialize(password.value, {
+        question: recoveryQuestion.value.trim(),
+        answer: recoveryAnswer.value,
+      })
+    ) {
+      resetForm();
+    }
     return;
   }
   if (await access.unlock(password.value)) resetForm();
@@ -136,12 +267,24 @@ watch(
         <p>{{ description }}</p>
         <form class="access-gate__form" @submit.prevent="submit">
           <label>
-            <span>{{ isLegacyUpgrade && mode === "access" ? "原主密码" : "入口密码" }}</span>
+            <span>{{
+              isLegacyUpgrade && mode === "access"
+                ? "原主密码"
+                : needsRecoveryEnrollment
+                  ? "当前入口密码"
+                  : "入口密码"
+            }}</span>
             <div class="access-gate__input">
               <KeyRound :size="16" />
               <input
                 v-model="password"
-                :aria-label="isLegacyUpgrade && mode === 'access' ? '原主密码' : '入口密码'"
+                :aria-label="
+                  isLegacyUpgrade && mode === 'access'
+                    ? '原主密码'
+                    : needsRecoveryEnrollment
+                      ? '当前入口密码'
+                      : '入口密码'
+                "
                 type="password"
                 :autocomplete="isCreating || mode === 'reset' ? 'new-password' : 'current-password'"
                 autofocus
@@ -185,6 +328,31 @@ watch(
               />
             </div>
           </label>
+          <AppAccessRecoverySetupForm
+            v-if="needsRecoverySetup"
+            :question="recoveryQuestion"
+            :answer="recoveryAnswer"
+            :confirmation="recoveryAnswerConfirmation"
+            :loading="access.loading"
+            @update:question="recoveryQuestion = $event"
+            @update:answer="recoveryAnswer = $event"
+            @update:confirmation="recoveryAnswerConfirmation = $event"
+            @input="clearMessages"
+          />
+          <AppAccessRecoveryProofForm
+            v-if="mode === 'reset'"
+            :question="access.recoveryQuestion"
+            :answer="recoveryAnswer"
+            :legacy-question="legacyRecoveryQuestion"
+            :legacy-answer="legacyRecoveryAnswer"
+            :legacy-confirmation="legacyRecoveryConfirmation"
+            :loading="access.loading"
+            @update:answer="recoveryAnswer = $event"
+            @update:legacy-question="legacyRecoveryQuestion = $event"
+            @update:legacy-answer="legacyRecoveryAnswer = $event"
+            @update:legacy-confirmation="legacyRecoveryConfirmation = $event"
+            @input="clearMessages"
+          />
           <span v-if="localError || access.error" class="access-gate__error" role="alert">
             {{ localError || access.error }}
           </span>
@@ -239,10 +407,14 @@ watch(
   position: fixed;
   z-index: 1000;
   inset: 0;
-  display: grid;
-  min-width: 520px;
-  place-items: center;
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 82px 24px 22px;
   color: var(--ink);
   background:
     radial-gradient(circle at 16% 12%, rgba(255, 253, 248, 0.95), transparent 32%),
@@ -259,7 +431,7 @@ watch(
   gap: 11px;
   color: var(--ink-strong);
   font-family: var(--font-serif);
-  font-size: 16px;
+  font-size: calc(16px + var(--app-font-size-offset, 0px));
   font-weight: 700;
 }
 
@@ -273,13 +445,14 @@ watch(
   background: var(--accent);
   box-shadow: 0 9px 22px rgba(128, 55, 40, 0.2);
   font-family: var(--font-serif);
-  font-size: 20px;
+  font-size: calc(20px + var(--app-font-size-offset, 0px));
 }
 
 .access-gate__dialog {
   display: flex;
-  width: 430px;
-  min-height: 390px;
+  width: min(430px, calc(100vw - 48px));
+  min-height: 0;
+  flex: 0 0 auto;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -305,14 +478,14 @@ watch(
 .access-gate__dialog h1 {
   color: var(--ink-strong);
   font-family: var(--font-serif);
-  font-size: 24px;
+  font-size: calc(24px + var(--app-font-size-offset, 0px));
 }
 
 .access-gate__dialog > p {
   max-width: 320px;
   margin: 10px 0 24px;
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   line-height: 1.65;
   text-align: center;
 }
@@ -324,12 +497,45 @@ watch(
   gap: 12px;
 }
 
+.access-gate__form :deep(.recovery-fields) {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.access-gate__form :deep(.recovery-fields label) {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--ink-muted);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+  font-weight: 620;
+}
+
+.access-gate__form :deep(.recovery-fields input),
+.access-gate__form :deep(.access-gate__plain-input),
+.access-gate__form :deep(.access-gate__recovery-question) {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  color: var(--ink-strong);
+  background: #fffefa;
+}
+
+.access-gate__recovery-question {
+  color: var(--brand-strong);
+  background: var(--brand-soft);
+  line-height: 1.45;
+}
+
 .access-gate__form label {
   display: flex;
   flex-direction: column;
   gap: 6px;
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 620;
 }
 
@@ -364,7 +570,7 @@ watch(
 .access-gate__success {
   padding: 8px 10px;
   border-radius: 9px;
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   line-height: 1.45;
 }
 
@@ -389,7 +595,7 @@ watch(
   color: var(--brand-strong);
   background: transparent;
   cursor: pointer;
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .access-gate__link:disabled {
@@ -416,11 +622,11 @@ watch(
 }
 
 .access-gate__note {
-  position: absolute;
-  bottom: 26px;
+  flex: 0 0 auto;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   letter-spacing: 0.12em;
+  pointer-events: none;
 }
 
 @keyframes access-loading {
@@ -430,9 +636,24 @@ watch(
 }
 
 @media (max-height: 760px) {
+  .access-gate {
+    justify-content: flex-start;
+    gap: 10px;
+    padding-top: 68px;
+  }
+
   .access-gate__dialog {
-    min-height: 350px;
-    padding-block: 30px;
+    padding: 24px 38px;
+  }
+
+  .access-gate__icon {
+    width: 46px;
+    height: 46px;
+    margin-bottom: 12px;
+  }
+
+  .access-gate__dialog > p {
+    margin: 7px 0 16px;
   }
 }
 </style>

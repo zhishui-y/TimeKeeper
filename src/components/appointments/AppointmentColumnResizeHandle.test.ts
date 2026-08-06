@@ -22,11 +22,13 @@ describe("AppointmentColumnResizeHandle", () => {
 
     dispatchPointerEvent(handle.element, "pointerdown", 100, 1);
     dispatchPointerEvent(handle.element, "pointermove", -100, 1);
-    expect(wrapper.emitted("preview")).toEqual([["content", 48]]);
+    dispatchPointerEvent(handle.element, "pointermove", 130, 1);
+    expect(wrapper.emitted("preview")).toBeUndefined();
     expect(wrapper.emitted("commit")).toBeUndefined();
 
-    dispatchPointerEvent(handle.element, "pointerup", -100, 1);
-    expect(wrapper.emitted("commit")).toEqual([["content", 48]]);
+    dispatchPointerEvent(handle.element, "pointerup", 130, 1);
+    expect(wrapper.emitted("preview")).toEqual([["content", 170]]);
+    expect(wrapper.emitted("commit")).toEqual([["content", 170]]);
   });
 
   it("supports Escape cancellation and keyboard resizing", async () => {

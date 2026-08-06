@@ -94,13 +94,13 @@ onBeforeUnmount(() => {
 
 .operation-progress__copy strong {
   color: var(--ink-strong);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .operation-progress__copy span {
   overflow: hidden;
   color: var(--ink-muted);
-  font-size: 10.5px;
+  font-size: calc(10.5px + var(--app-font-size-offset, 0px));
   line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -111,8 +111,8 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 4px;
   color: var(--ink-muted);
-  font-family: "Bahnschrift", var(--font-sans);
-  font-size: 10px;
+  font-family: var(--app-font-family), "Bahnschrift", var(--font-sans);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }

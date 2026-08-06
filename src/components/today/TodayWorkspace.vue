@@ -361,7 +361,7 @@ onUnmounted(() => {
   overflow: hidden;
   color: var(--ink-strong);
   font-family: var(--font-serif, "STSong", "SimSun", serif);
-  font-size: 22px;
+  font-size: calc(22px + var(--app-font-size-offset, 0px));
   font-weight: 700;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -371,7 +371,7 @@ onUnmounted(() => {
 .today-lead__date p {
   margin-top: 7px;
   color: var(--ink-muted);
-  font-size: 13px;
+  font-size: calc(13px + var(--app-font-size-offset, 0px));
   line-height: 1.45;
 }
 
@@ -415,14 +415,14 @@ onUnmounted(() => {
 
 .metric span {
   color: var(--ink);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 620;
 }
 
 .metric strong {
   overflow: hidden;
   color: var(--ink-strong);
-  font-size: 17px;
+  font-size: calc(17px + var(--app-font-size-offset, 0px));
   line-height: 1.15;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -431,7 +431,7 @@ onUnmounted(() => {
 .metric small {
   overflow: hidden;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -478,7 +478,7 @@ onUnmounted(() => {
   }
 
   .today-lead__date h2 {
-    font-size: 19px;
+    font-size: calc(19px + var(--app-font-size-offset, 0px));
   }
 
   .metric {
@@ -494,7 +494,7 @@ onUnmounted(() => {
   }
 
   .metric strong {
-    font-size: 16px;
+    font-size: calc(16px + var(--app-font-size-offset, 0px));
   }
 }
 
@@ -525,11 +525,11 @@ onUnmounted(() => {
   }
 
   .today-lead__date h2 {
-    font-size: 18px;
+    font-size: calc(18px + var(--app-font-size-offset, 0px));
   }
 
   .today-lead__date p {
-    font-size: 12px;
+    font-size: calc(12px + var(--app-font-size-offset, 0px));
   }
 
   .metric-grid {
@@ -551,11 +551,11 @@ onUnmounted(() => {
 
   .metric span,
   .metric small {
-    font-size: 11px;
+    font-size: calc(12px + var(--app-font-size-offset, 0px));
   }
 
   .metric strong {
-    font-size: 15px;
+    font-size: calc(15px + var(--app-font-size-offset, 0px));
   }
 }
 </style>

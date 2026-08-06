@@ -255,7 +255,7 @@ function chooseNewPassword(): void {
   border-radius: var(--radius-sm, 8px);
   color: var(--ink-muted);
   background: var(--surface);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
   cursor: pointer;
 }
@@ -281,7 +281,7 @@ function chooseNewPassword(): void {
 .credential-note {
   margin: 0;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   line-height: 1.5;
 }
 
@@ -313,7 +313,7 @@ function chooseNewPassword(): void {
   border: 0;
   color: var(--brand-strong);
   background: transparent;
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
   cursor: pointer;
 }

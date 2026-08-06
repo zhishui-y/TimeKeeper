@@ -157,12 +157,12 @@ function select(preset: ContactPreset): void {
 
 .contact-preset strong {
   color: var(--ink-strong);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .contact-preset small {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .contact-preset__meta {
@@ -171,7 +171,7 @@ function select(preset: ContactPreset): void {
   align-items: center;
   gap: 4px;
   color: var(--brand-strong);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .contact-preset__meta small {
@@ -183,7 +183,7 @@ function select(preset: ContactPreset): void {
   margin: 0;
   padding: 12px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   text-align: center;
 }
 

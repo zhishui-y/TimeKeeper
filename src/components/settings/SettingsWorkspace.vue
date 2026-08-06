@@ -10,9 +10,11 @@ import {
   ServerCog,
   ShieldCheck,
   Upload,
+  Palette,
 } from "@lucide/vue";
-import { computed, onMounted, reactive, shallowRef, watch } from "vue";
+import { computed, onMounted, reactive, shallowRef, useTemplateRef, watch } from "vue";
 import { api, errorMessage, isTauri } from "../../api/client";
+import { useAppAppearance } from "../../composables/useAppAppearance";
 import { useAppAccessStore } from "../../stores/appAccess";
 import { useUiStore } from "../../stores/ui";
 import type {
@@ -34,20 +36,25 @@ import AccountRoleDataServerPanel from "./AccountRoleDataServerPanel.vue";
 import OperationProgress from "./OperationProgress.vue";
 import ExcelImportScopeSelector from "./ExcelImportScopeSelector.vue";
 import AppAccessSettingsPanel from "./AppAccessSettingsPanel.vue";
+import AppearanceSettingsPanel from "./AppearanceSettingsPanel.vue";
 
 type ImportOperation = "preview" | "commit";
 type BackupOperation = "export" | "restore";
+type HtmlElement = InstanceType<typeof globalThis.HTMLElement>;
 
 const ui = useUiStore();
 const access = useAppAccessStore();
+const appearance = useAppAppearance();
 const settings = reactive<AppSettings>({
+  fontFamily: "Microsoft YaHei UI",
+  baseFontSize: 15,
   defaultReminderMinutes: 30,
   backupRetention: 30,
   lastAutomaticBackupDate: null,
   accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
   appointmentTableColumnWidths: { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS },
-  lastAccountUsageWeekStart: null,
   accountRoleDataServerUrl: DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
+  accountRoleDataApiKey: "",
 });
 const loadingSettings = shallowRef(false);
 const importPath = shallowRef("");
@@ -59,6 +66,7 @@ const importOperation = shallowRef<ImportOperation | null>(null);
 const backupOperation = shallowRef<BackupOperation | null>(null);
 const lastBackup = shallowRef<BackupResult | null>(null);
 const notificationPermission = shallowRef<AppNotificationPermission>("default");
+const settingsGrid = useTemplateRef<HtmlElement>("settingsGrid");
 
 const importBusy = computed(() => importOperation.value !== null);
 const hasImportSelection = computed(() => importSelection.appointments || importSelection.accounts);
@@ -112,6 +120,7 @@ async function loadSettings(): Promise<void> {
   loadingSettings.value = true;
   try {
     Object.assign(settings, await api.getSettings());
+    appearance.preview(settings);
     ui.setAppointmentDefaultReminderMinutes(settings.defaultReminderMinutes);
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
@@ -120,14 +129,38 @@ async function loadSettings(): Promise<void> {
   }
 }
 
+function scrollToSettingsSection(sectionId: string): void {
+  const grid = settingsGrid.value;
+  const section = grid?.querySelector<HtmlElement>(`#${sectionId}`);
+  if (!grid || !section) return;
+  const prefersReducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  grid.scrollTo({
+    top: section.offsetTop - grid.offsetTop + grid.scrollTop,
+    behavior: prefersReducedMotion ? "auto" : "smooth",
+  });
+  section.focus({ preventScroll: true });
+}
+
 async function saveSettings(): Promise<void> {
   try {
-    Object.assign(settings, await api.updateSettings({ ...settings }));
+    Object.assign(settings, await appearance.persist({ ...settings }));
     ui.setAppointmentDefaultReminderMinutes(settings.defaultReminderMinutes);
     ui.notify("设置已保存", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
   }
+}
+
+function updateAppearance(value: { fontFamily: string; baseFontSize: number }): void {
+  settings.fontFamily = value.fontFamily;
+  settings.baseFontSize = value.baseFontSize;
+  appearance.preview(value);
+}
+
+function rollbackAppearance(): void {
+  const restored = appearance.rollback();
+  settings.fontFamily = restored.fontFamily;
+  settings.baseFontSize = restored.baseFontSize;
 }
 
 async function chooseExcel(): Promise<void> {
@@ -247,8 +280,53 @@ onMounted(() => {
 <template>
   <div class="settings-workspace page-stack">
     <div v-if="loadingSettings" class="loading-line" />
-    <div class="settings-grid">
-      <section class="settings-section settings-section--import">
+    <nav class="settings-nav" aria-label="设置分类">
+      <button
+        type="button"
+        aria-controls="appearance"
+        @click="scrollToSettingsSection('appearance')"
+      >
+        <Palette :size="15" />外观
+      </button>
+      <button type="button" aria-controls="access" @click="scrollToSettingsSection('access')">
+        <ShieldCheck :size="15" />入口安全
+      </button>
+      <button
+        type="button"
+        aria-controls="notifications"
+        @click="scrollToSettingsSection('notifications')"
+      >
+        <BellRing :size="15" />提醒
+      </button>
+      <button type="button" aria-controls="role-data" @click="scrollToSettingsSection('role-data')">
+        <ServerCog :size="15" />角色数据
+      </button>
+      <button type="button" aria-controls="excel" @click="scrollToSettingsSection('excel')">
+        <FileSpreadsheet :size="15" />Excel
+      </button>
+      <button type="button" aria-controls="backup" @click="scrollToSettingsSection('backup')">
+        <DatabaseBackup :size="15" />备份
+      </button>
+    </nav>
+    <div ref="settingsGrid" class="settings-grid">
+      <section id="appearance" class="settings-section settings-section--appearance" tabindex="-1">
+        <header class="settings-section__header">
+          <div class="settings-section__icon"><Palette :size="19" /></div>
+          <div>
+            <h2>外观与字体</h2>
+            <p>字体和字号覆盖锁屏、导航、表格与日历；只使用本机已安装字体。</p>
+          </div>
+        </header>
+        <div class="settings-section__body">
+          <AppearanceSettingsPanel
+            :model-value="{ fontFamily: settings.fontFamily, baseFontSize: settings.baseFontSize }"
+            :fallback-message="appearance.fallbackMessage.value"
+            @update="updateAppearance"
+          />
+        </div>
+      </section>
+
+      <section id="excel" class="settings-section settings-section--import" tabindex="-1">
         <header class="settings-section__header">
           <div class="settings-section__icon"><FileSpreadsheet :size="19" /></div>
           <div>
@@ -372,7 +450,11 @@ onMounted(() => {
         </div>
       </section>
 
-      <section class="settings-section settings-section--notifications">
+      <section
+        id="notifications"
+        class="settings-section settings-section--notifications"
+        tabindex="-1"
+      >
         <header class="settings-section__header">
           <div class="settings-section__icon"><BellRing :size="19" /></div>
           <div>
@@ -405,7 +487,7 @@ onMounted(() => {
         </div>
       </section>
 
-      <section class="settings-section settings-section--access">
+      <section id="access" class="settings-section settings-section--access" tabindex="-1">
         <header class="settings-section__header">
           <div class="settings-section__icon"><ShieldCheck :size="19" /></div>
           <div>
@@ -418,20 +500,23 @@ onMounted(() => {
         </div>
       </section>
 
-      <section class="settings-section settings-section--role-data">
+      <section id="role-data" class="settings-section settings-section--role-data" tabindex="-1">
         <header class="settings-section__header">
           <div class="settings-section__icon"><ServerCog :size="19" /></div>
           <div>
             <h2>角色数据服务器</h2>
-            <p>为账号档案更新装分、当前分、最高分和服务端日期。</p>
+            <p>为账号档案更新装分、当前分、最高分、本周胜场和服务端日期。</p>
           </div>
         </header>
         <div class="settings-section__body">
-          <AccountRoleDataServerPanel v-model="settings.accountRoleDataServerUrl" />
+          <AccountRoleDataServerPanel
+            v-model:server-url="settings.accountRoleDataServerUrl"
+            v-model:api-key="settings.accountRoleDataApiKey"
+          />
         </div>
       </section>
 
-      <section class="settings-section settings-section--backup">
+      <section id="backup" class="settings-section settings-section--backup" tabindex="-1">
         <header class="settings-section__header">
           <div class="settings-section__icon"><DatabaseBackup :size="19" /></div>
           <div>
@@ -482,6 +567,13 @@ onMounted(() => {
     <footer class="settings-footer">
       <span>数据仅保存在本机；当前设置修改后需手动保存。</span>
       <button
+        class="button button--ghost button--compact"
+        type="button"
+        @click="rollbackAppearance"
+      >
+        撤销外观预览
+      </button>
+      <button
         class="button button--primary"
         type="button"
         :disabled="Boolean(serverUrlError) || loadingSettings"
@@ -499,8 +591,41 @@ onMounted(() => {
   display: grid;
   height: 100%;
   min-height: 0;
-  grid-template-rows: minmax(0, 1fr) 56px;
+  grid-template-rows: max-content minmax(0, 1fr) 56px;
   gap: 14px;
+}
+
+.settings-nav {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px 1px 0;
+  scrollbar-gutter: stable;
+}
+
+.settings-nav button {
+  display: inline-flex;
+  min-height: 32px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-muted);
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.settings-nav button:hover,
+.settings-nav button:focus-visible {
+  border-color: var(--brand-border);
+  color: var(--brand-strong);
+  background: var(--brand-soft);
 }
 
 .settings-workspace > .loading-line {
@@ -515,7 +640,7 @@ onMounted(() => {
   display: grid;
   min-height: 0;
   grid-template-columns: minmax(0, 1.3fr) minmax(330px, 0.8fr);
-  grid-template-rows: max-content max-content max-content;
+  grid-template-rows: max-content max-content max-content max-content max-content;
   align-content: start;
   align-items: start;
   gap: 14px;
@@ -533,28 +658,33 @@ onMounted(() => {
 
 .settings-section--import {
   grid-column: 1;
-  grid-row: 1 / 3;
+  grid-row: 2 / 4;
   align-self: start;
+}
+
+.settings-section--appearance {
+  grid-column: 1 / -1;
+  grid-row: 1;
 }
 
 .settings-section--backup {
   grid-column: 2;
-  grid-row: 1;
+  grid-row: 2;
 }
 
 .settings-section--notifications {
   grid-column: 2;
-  grid-row: 2;
+  grid-row: 3;
 }
 
 .settings-section--access {
   grid-column: 1 / -1;
-  grid-row: 4;
+  grid-row: 5;
 }
 
 .settings-section--role-data {
   grid-column: 2;
-  grid-row: 3;
+  grid-row: 4;
 }
 
 .settings-section__header {
@@ -589,14 +719,14 @@ onMounted(() => {
 
 .settings-section__header h2 {
   color: var(--ink-strong);
-  font-size: 15px;
+  font-size: calc(15px + var(--app-font-size-offset, 0px));
   letter-spacing: 0.025em;
 }
 
 .settings-section__header p {
   margin-top: 3px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   line-height: 1.45;
 }
 
@@ -625,7 +755,7 @@ onMounted(() => {
   border-radius: var(--radius-sm, 9px);
   color: var(--ink-muted);
   background: var(--surface-soft);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .import-actions {
@@ -642,7 +772,7 @@ onMounted(() => {
   border-radius: var(--radius-sm, 9px);
   color: #805c1e;
   background: #fff8e9;
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .import-year {
@@ -665,12 +795,12 @@ onMounted(() => {
 
 .import-preview__title strong {
   color: var(--ink-strong);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .import-preview__title span {
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .preview-stats {
@@ -691,13 +821,13 @@ onMounted(() => {
   border-radius: var(--radius-sm, 9px);
   color: var(--ink-muted);
   background: #fff;
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .preview-stats strong {
   color: var(--ink-strong);
-  font-family: "Bahnschrift", sans-serif;
-  font-size: 14px;
+  font-family: var(--app-font-family), "Bahnschrift", sans-serif;
+  font-size: calc(14px + var(--app-font-size-offset, 0px));
 }
 
 .preview-stats .is-excluded {
@@ -709,7 +839,7 @@ onMounted(() => {
   margin: 0 0 12px;
   padding-left: 18px;
   color: #7b5d2c;
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   line-height: 1.7;
 }
 
@@ -732,11 +862,11 @@ onMounted(() => {
 }
 
 .import-result strong {
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .import-result span {
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   line-height: 1.5;
 }
 
@@ -749,7 +879,7 @@ onMounted(() => {
   align-items: center;
   gap: 7px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .unit-input .input {
@@ -769,7 +899,7 @@ onMounted(() => {
   align-items: center;
   gap: 6px;
   color: var(--amber);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
 }
 
@@ -805,14 +935,14 @@ onMounted(() => {
 .backup-result strong {
   min-width: 0;
   color: var(--ink);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .backup-result span,
 .settings-note {
   flex: 0 0 auto;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .settings-footer {
@@ -831,7 +961,7 @@ onMounted(() => {
 
 .settings-footer span {
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 @media (max-width: 1180px) {

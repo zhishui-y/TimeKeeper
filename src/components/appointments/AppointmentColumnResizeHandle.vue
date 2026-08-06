@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { shallowRef } from "vue";
+import { useAnimationFrameBatch } from "../../composables/useAnimationFrameBatch";
 import {
   MAX_APPOINTMENT_TABLE_COLUMN_WIDTH,
   MIN_APPOINTMENT_TABLE_COLUMN_WIDTHS,
@@ -44,6 +45,10 @@ const activeResize = shallowRef<{
   startWidth: number;
   draftWidth: number;
 } | null>(null);
+const previewBatch = useAnimationFrameBatch<{
+  columnKey: AppointmentTableColumnKey;
+  width: number;
+}>(({ columnKey, width }) => emit("preview", columnKey, width));
 
 function startResize(rawEvent: unknown): void {
   const event = rawEvent as PointerLikeEvent;
@@ -69,7 +74,7 @@ function previewResize(rawEvent: unknown): void {
     active.startWidth + event.clientX - active.startX,
   );
   active.draftWidth = width;
-  emit("preview", props.columnKey, width);
+  previewBatch.schedule({ columnKey: props.columnKey, width });
 }
 
 function finishResize(rawEvent: unknown): void {
@@ -79,6 +84,7 @@ function finishResize(rawEvent: unknown): void {
   event.preventDefault();
   event.stopPropagation();
   event.currentTarget?.releasePointerCapture?.(event.pointerId);
+  previewBatch.flush();
   activeResize.value = null;
   emit("commit", props.columnKey, active.draftWidth);
 }
@@ -89,6 +95,7 @@ function cancelResize(rawEvent?: unknown): void {
   const event = rawEvent as PointerLikeEvent | KeyboardLikeEvent | undefined;
   event?.preventDefault();
   event?.stopPropagation();
+  previewBatch.cancel();
   activeResize.value = null;
   emit("cancel", props.columnKey, active.startWidth);
 }

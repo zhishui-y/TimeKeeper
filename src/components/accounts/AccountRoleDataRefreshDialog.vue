@@ -171,7 +171,7 @@ useModalFocus({
 .role-refresh-dialog__title h2 {
   margin: 0;
   color: var(--ink-strong);
-  font-size: 16px;
+  font-size: calc(16px + var(--app-font-size-offset, 0px));
 }
 
 .role-refresh-dialog__summary {
@@ -192,12 +192,12 @@ useModalFocus({
 
 .role-refresh-dialog__summary span {
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .role-refresh-dialog__summary strong {
   color: var(--ink-strong);
-  font-size: 17px;
+  font-size: calc(17px + var(--app-font-size-offset, 0px));
 }
 
 .role-refresh-dialog__error {
@@ -206,7 +206,7 @@ useModalFocus({
   border-radius: 10px;
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 8%, var(--surface));
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   line-height: 1.55;
 }
 

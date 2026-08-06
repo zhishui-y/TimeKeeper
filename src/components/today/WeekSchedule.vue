@@ -136,13 +136,13 @@ function appointmentTitle(appointment: Appointment): string {
 .week-schedule__header h2 {
   margin-top: 2px;
   color: var(--ink-strong);
-  font-size: 16px;
+  font-size: calc(16px + var(--app-font-size-offset, 0px));
   line-height: 1.2;
 }
 
 .week-schedule__hint {
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .week-grid {
@@ -207,7 +207,7 @@ function appointmentTitle(appointment: Appointment): string {
 
 .week-day__heading span {
   color: var(--ink);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
 }
 
@@ -218,8 +218,8 @@ function appointmentTitle(appointment: Appointment): string {
   place-items: center;
   border-radius: 50%;
   color: var(--ink-strong);
-  font-family: "Bahnschrift", var(--font-sans);
-  font-size: 13px;
+  font-family: var(--app-font-family), "Bahnschrift", var(--font-sans);
+  font-size: calc(13px + var(--app-font-size-offset, 0px));
   font-weight: 700;
 }
 
@@ -339,8 +339,8 @@ function appointmentTitle(appointment: Appointment): string {
 
 .schedule-chip__time {
   flex: 0 0 auto;
-  font-family: "Bahnschrift", var(--font-sans);
-  font-size: 11px;
+  font-family: var(--app-font-family), "Bahnschrift", var(--font-sans);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
@@ -348,7 +348,7 @@ function appointmentTitle(appointment: Appointment): string {
 .schedule-chip strong {
   min-width: 0;
   overflow: hidden;
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -363,8 +363,8 @@ function appointmentTitle(appointment: Appointment): string {
   place-items: center;
   border: 1px dashed currentColor;
   border-radius: 5px;
-  font-family: "Bahnschrift", var(--font-sans);
-  font-size: 9px;
+  font-family: var(--app-font-family), "Bahnschrift", var(--font-sans);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 750;
   line-height: 1;
   background: color-mix(in srgb, var(--surface) 76%, transparent);
@@ -376,7 +376,7 @@ function appointmentTitle(appointment: Appointment): string {
   align-self: center;
   margin-top: 2px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
 }
 

@@ -14,6 +14,7 @@ describe("appAccess store", () => {
       initialized: true,
       unlocked: false,
       legacyMigrationPendingCount: 3,
+      recoveryQuestion: "常用角色？",
     });
     const store = useAppAccessStore();
 
@@ -36,6 +37,7 @@ describe("appAccess store", () => {
       initialized: true,
       unlocked: true,
       legacyMigrationPendingCount: 0,
+      recoveryQuestion: "常用角色？",
     });
     const store = useAppAccessStore();
 

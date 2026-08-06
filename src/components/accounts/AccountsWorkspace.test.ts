@@ -41,7 +41,7 @@ const profiles: AccountProfile[] = [
     currentScore: 2100,
     highestScore: 2300,
     scoreUpdatedAt: "2026-07-28",
-    usageInfo: "今晚使用中",
+    weeklyWins: 5,
     notes: null,
     needsReview: false,
     createdAt: "2026-07-28T00:00:00Z",
@@ -59,7 +59,7 @@ const profiles: AccountProfile[] = [
     currentScore: 2000,
     highestScore: 2200,
     scoreUpdatedAt: "2026-07-28",
-    usageInfo: null,
+    weeklyWins: null,
     notes: null,
     needsReview: false,
     createdAt: "2026-07-28T00:00:00Z",
@@ -68,13 +68,15 @@ const profiles: AccountProfile[] = [
 ];
 
 const settingsFixture: AppSettings = {
+  fontFamily: "Microsoft YaHei UI",
+  baseFontSize: 15,
   defaultReminderMinutes: 30,
   backupRetention: 30,
   lastAutomaticBackupDate: null,
   accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
   appointmentTableColumnWidths: { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS },
-  lastAccountUsageWeekStart: "2026-07-27",
   accountRoleDataServerUrl: DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
+  accountRoleDataApiKey: "test-api-key",
 };
 
 describe("AccountsWorkspace batch delete feedback", () => {
@@ -154,8 +156,6 @@ describe("AccountsWorkspace batch delete feedback", () => {
     wrapper.unmount();
   });
 
-  it("persists drag order and copies the selected account name", async () => {
-    vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
   it("searches on every query change and keeps only the newest response", async () => {
     const firstSearch = deferred<AccountProfile[]>();
     const secondSearch = deferred<AccountProfile[]>();
@@ -199,6 +199,8 @@ describe("AccountsWorkspace batch delete feedback", () => {
     wrapper.unmount();
   });
 
+  it("persists drag order and copies the selected account name", async () => {
+    vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
     const reorder = vi.spyOn(mockApi, "reorderAccountProfiles").mockResolvedValue();
     const copyAccountName = vi.spyOn(mockApi, "copyAccountName").mockResolvedValue();
     const copyAccountCharacterName = vi
@@ -236,98 +238,8 @@ describe("AccountsWorkspace batch delete feedback", () => {
     wrapper.unmount();
   });
 
-  it("saves trimmed usage without a feature-level unlock", async () => {
-    const updated = { ...profiles[0]!, usageInfo: "朋友使用到周末" };
-    const cleared = { ...updated, usageInfo: null };
-    const listProfiles = vi
-      .spyOn(mockApi, "listAccountProfiles")
-      .mockResolvedValueOnce(profiles)
-      .mockResolvedValueOnce([updated, profiles[1]!])
-      .mockResolvedValue([cleared, profiles[1]!]);
-    const updateUsage = vi
-      .spyOn(mockApi, "updateAccountProfileUsage")
-      .mockResolvedValueOnce(updated)
-      .mockResolvedValueOnce(cleared);
-
-    const pinia = createPinia();
-    const wrapper = mount(AccountsWorkspace, {
-      global: { plugins: [pinia] },
-    });
-    const ui = useUiStore(pinia);
-    await flushPromises();
-    const usageInput = wrapper.get('input[aria-label="编辑本周 账号一"]');
-    const emptyUsageInput = wrapper.get('input[aria-label="编辑本周 账号二"]');
-
-    expect(usageInput.attributes("disabled")).toBeUndefined();
-    expect(
-      wrapper.get('button[aria-label="复制账号一 的密码"]').attributes("disabled"),
-    ).toBeUndefined();
-    await emptyUsageInput.trigger("focus");
-    await emptyUsageInput.setValue("取消这次输入");
-    await emptyUsageInput.trigger("keydown", { key: "Escape" });
-    await flushPromises();
-    expect(updateUsage).not.toHaveBeenCalled();
-    expect(emptyUsageInput.element).toHaveProperty("value", "");
-
-    await usageInput.trigger("focus");
-    await usageInput.setValue("  朋友使用到周末  ");
-    await usageInput.trigger("keydown", { key: "Enter" });
-    await flushPromises();
-
-    expect(updateUsage).toHaveBeenCalledWith("account-1", "朋友使用到周末");
-    expect(listProfiles).toHaveBeenCalledTimes(2);
-    expect(ui.toast?.message).toBe("本周已保存");
-    expect(wrapper.get('input[aria-label="编辑本周 账号一"]').element).toHaveProperty(
-      "value",
-      "朋友使用到周末",
-    );
-
-    const updatedUsageInput = wrapper.get('input[aria-label="编辑本周 账号一"]');
-    await updatedUsageInput.setValue("   ");
-    await updatedUsageInput.trigger("blur");
-    await flushPromises();
-    expect(updateUsage).toHaveBeenLastCalledWith("account-1", null);
-    expect(wrapper.get('input[aria-label="编辑本周 账号一"]').element).toHaveProperty("value", "");
-    wrapper.unmount();
-  });
-
-  it("prevents duplicate usage saves and restores the original value on failure", async () => {
-    vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    const pendingUpdate = deferred<AccountProfile>();
-    const updateUsage = vi
-      .spyOn(mockApi, "updateAccountProfileUsage")
-      .mockReturnValue(pendingUpdate.promise);
-
-    const pinia = createPinia();
-    const wrapper = mount(AccountsWorkspace, {
-      global: { plugins: [pinia] },
-    });
-    const ui = useUiStore(pinia);
-    await flushPromises();
-    const table = wrapper.findComponent(AccountTable);
-    table.vm.$emit("updateUsageDraft", "account-1", "保存中的内容");
-    table.vm.$emit("saveUsage", profiles[0]!, "保存中的内容");
-    table.vm.$emit("saveUsage", profiles[0]!, "保存中的内容");
-    await flushPromises();
-
-    expect(updateUsage).toHaveBeenCalledTimes(1);
-    pendingUpdate.reject(new Error("使用情况保存失败"));
-    await flushPromises();
-
-    expect(ui.toast?.message).toBe("使用情况保存失败");
-    expect(wrapper.get('input[aria-label="编辑本周 账号一"]').element).toHaveProperty(
-      "value",
-      "今晚使用中",
-    );
-    wrapper.unmount();
-  });
-
   it("loads, previews, and persists account table column widths without a reset control", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
-      weekStart: "2026-07-27",
-      clearedCount: 0,
-    });
     vi.spyOn(mockApi, "getSettings").mockResolvedValue({
       ...settingsFixture,
       accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS, accountName: 72 },
@@ -358,10 +270,6 @@ describe("AccountsWorkspace batch delete feedback", () => {
 
   it("rolls column widths back when persistence fails", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
-      weekStart: "2026-07-27",
-      clearedCount: 0,
-    });
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
     vi.spyOn(mockApi, "updateAccountTableColumnWidths").mockRejectedValue(
       new Error("列宽保存失败"),
@@ -380,70 +288,11 @@ describe("AccountsWorkspace batch delete feedback", () => {
     wrapper.unmount();
   });
 
-  it("confirms and clears weekly content for all accounts while preserving drafts on failure", async () => {
-    vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
-      weekStart: "2026-07-27",
-      clearedCount: 0,
-    });
-    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
-    const clearWeekly = vi
-      .spyOn(mockApi, "clearAccountProfileUsage")
-      .mockRejectedValueOnce(new Error("清空失败"))
-      .mockResolvedValueOnce(1);
-    vi.spyOn(globalThis, "confirm").mockReturnValue(true);
-
-    const pinia = createPinia();
-    const wrapper = mount(AccountsWorkspace, { global: { plugins: [pinia] } });
-    await flushPromises();
-    const table = wrapper.findComponent(AccountTable);
-    table.vm.$emit("updateUsageDraft", "account-1", "未保存内容");
-    await wrapper.vm.$nextTick();
-
-    await buttonWithText(wrapper, "清空本周").trigger("click");
-    await flushPromises();
-    expect(clearWeekly).toHaveBeenCalledTimes(1);
-    expect(wrapper.get('input[aria-label="编辑本周 账号一"]').element).toHaveProperty(
-      "value",
-      "未保存内容",
-    );
-
-    await buttonWithText(wrapper, "清空本周").trigger("click");
-    await flushPromises();
-    expect(clearWeekly).toHaveBeenCalledTimes(2);
-    expect(wrapper.get('input[aria-label="编辑本周 账号一"]').element).toHaveProperty("value", "");
-    expect(useUiStore(pinia).toast?.message).toBe("已清空 1 个账号的本周内容");
-    expect(globalThis.confirm).toHaveBeenCalledWith(
-      "确定清空全部账号的本周内容吗？此操作无法撤销，未保存的本周输入也会被丢弃。",
-    );
-    wrapper.unmount();
-  });
-
-  it("reloads and reports an automatic weekly rollover", async () => {
-    const listProfiles = vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
-    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
-    vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
-      weekStart: "2026-08-03",
-      clearedCount: 1,
-    });
-
-    const pinia = createPinia();
-    const wrapper = mount(AccountsWorkspace, { global: { plugins: [pinia] } });
-    await flushPromises();
-    expect(listProfiles).toHaveBeenCalledTimes(1);
-    expect(useUiStore(pinia).toast?.message).toBe("新的一周已开始，已清空 1 个账号的本周内容");
-    wrapper.unmount();
-  });
-
   it("refreshes the current filtered list, disables every entry while busy, and opens a summary dialog", async () => {
     const pendingRefresh =
       deferred<Awaited<ReturnType<typeof mockApi.refreshAccountProfileRoleData>>>();
     const listProfiles = vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
-    vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
-      weekStart: "2026-07-27",
-      clearedCount: 0,
-    });
     const refresh = vi
       .spyOn(mockApi, "refreshAccountProfileRoleData")
       .mockReturnValue(pendingRefresh.promise);
@@ -495,10 +344,6 @@ describe("AccountsWorkspace batch delete feedback", () => {
   it("keeps request errors in the summary dialog without a duplicate toast", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
-    vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
-      weekStart: "2026-07-27",
-      clearedCount: 0,
-    });
     vi.spyOn(mockApi, "refreshAccountProfileRoleData").mockRejectedValue(
       new Error("角色服务器暂不可用"),
     );
@@ -526,10 +371,6 @@ describe("AccountsWorkspace batch delete feedback", () => {
   it("supports selected and single-row role data refresh targets", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
-    vi.spyOn(mockApi, "syncAccountProfileUsageWeek").mockResolvedValue({
-      weekStart: "2026-07-27",
-      clearedCount: 0,
-    });
     const refresh = vi.spyOn(mockApi, "refreshAccountProfileRoleData").mockResolvedValue({
       requestedCount: 1,
       updatedCount: 1,

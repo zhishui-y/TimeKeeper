@@ -7,7 +7,7 @@ import zhCnLocale from "@fullcalendar/core/locales/zh-cn";
 import type { CalendarOptions, EventApi, EventInput } from "@fullcalendar/core";
 import { CalendarDays, ChevronLeft, ChevronRight } from "@lucide/vue";
 import { format, subDays } from "date-fns";
-import { computed, shallowRef, useTemplateRef } from "vue";
+import { computed, onBeforeUnmount, onMounted, shallowRef, useTemplateRef } from "vue";
 import type { Appointment } from "../../types/domain";
 import { calendarAppointmentCounts, calendarEventClassNames } from "../../utils/calendar";
 import CalendarEventCard from "./CalendarEventCard.vue";
@@ -108,6 +108,15 @@ function move(direction: "prev" | "next" | "today"): void {
   if (!calendar) return;
   calendar[direction]();
 }
+
+function refreshCalendarSize(): void {
+  globalThis.requestAnimationFrame(() => calendarRef.value?.getApi().updateSize());
+}
+
+onMounted(() => globalThis.addEventListener("timekeeper-appearance-changed", refreshCalendarSize));
+onBeforeUnmount(() =>
+  globalThis.removeEventListener("timekeeper-appearance-changed", refreshCalendarSize),
+);
 </script>
 
 <template>
@@ -233,7 +242,7 @@ function move(direction: "prev" | "next" | "today"): void {
 .calendar-toolbar__date h2 {
   overflow: hidden;
   color: var(--ink-strong);
-  font-size: 16px;
+  font-size: calc(16px + var(--app-font-size-offset, 0px));
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -253,7 +262,7 @@ function move(direction: "prev" | "next" | "today"): void {
   height: 100%;
   color: var(--ink);
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .calendar-board__canvas :deep(.fc-theme-standard td),
@@ -299,16 +308,16 @@ function move(direction: "prev" | "next" | "today"): void {
   border-radius: 999px;
   color: var(--brand-strong);
   background: color-mix(in srgb, var(--brand-soft) 72%, var(--surface));
-  font-family: "Bahnschrift", var(--font-sans);
-  font-size: 9px;
+  font-family: var(--app-font-family), "Bahnschrift", var(--font-sans);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 750;
   line-height: 1;
 }
 
 .calendar-board__canvas :deep(.fc-timegrid-slot-label) {
   color: var(--ink-muted);
-  font-family: "Bahnschrift", var(--font-sans);
-  font-size: 10px;
+  font-family: var(--app-font-family), "Bahnschrift", var(--font-sans);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 600;
 }
 
@@ -442,8 +451,8 @@ function move(direction: "prev" | "next" | "today"): void {
 .calendar-board__canvas :deep(.fc-daygrid-day-number) {
   padding: 7px;
   color: var(--ink);
-  font-family: "Bahnschrift", var(--font-sans);
-  font-size: 12px;
+  font-family: var(--app-font-family), "Bahnschrift", var(--font-sans);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 700;
 }
 
@@ -474,7 +483,7 @@ function move(direction: "prev" | "next" | "today"): void {
 .calendar-board__canvas :deep(.fc-timegrid .fc-daygrid-more-link) {
   margin: 1px 3px 0;
   color: var(--brand-strong);
-  font-size: 9px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 750;
 }
 
@@ -493,7 +502,7 @@ function move(direction: "prev" | "next" | "today"): void {
   }
 
   .calendar-toolbar__date h2 {
-    font-size: 15px;
+    font-size: calc(15px + var(--app-font-size-offset, 0px));
   }
 
   .calendar-board__canvas {
@@ -507,7 +516,7 @@ function move(direction: "prev" | "next" | "today"): void {
 
   .calendar-day-heading__count {
     padding-inline: 4px;
-    font-size: 8px;
+    font-size: calc(12px + var(--app-font-size-offset, 0px));
   }
 }
 
@@ -522,7 +531,7 @@ function move(direction: "prev" | "next" | "today"): void {
 
   .calendar-board__canvas :deep(.fc-timegrid-slot) {
     height: 12px;
-    font-size: 9px;
+    font-size: calc(12px + var(--app-font-size-offset, 0px));
     line-height: 1;
   }
 

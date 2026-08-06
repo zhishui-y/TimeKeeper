@@ -108,7 +108,8 @@ mod tests {
             .await
             .unwrap();
             assert!(profile_columns.iter().any(|name| name == "sort_order"));
-            assert!(profile_columns.iter().any(|name| name == "usage_info"));
+            assert!(profile_columns.iter().any(|name| name == "weekly_wins"));
+            assert!(!profile_columns.iter().any(|name| name == "usage_info"));
             let appointment_columns = sqlx::query_scalar::<_, String>(
                 "SELECT name FROM pragma_table_info('appointments') ORDER BY cid",
             )
@@ -151,6 +152,7 @@ mod tests {
                 "account_profile_credentials",
                 "appointment_credentials",
                 "app_access",
+                "app_access_recovery",
                 "legacy_credential_migration",
             ] {
                 assert!(tables.iter().any(|name| name == expected));
@@ -250,6 +252,55 @@ mod tests {
                 .unwrap();
             assert_eq!(row.get::<String, _>("account_name"), "existing-name");
             assert_eq!(row.get::<Option<String>, _>("usage_info"), None);
+        });
+    }
+
+    #[test]
+    fn weekly_wins_migration_removes_legacy_usage_content() {
+        run_async(async {
+            let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:")
+                .await
+                .unwrap();
+            for migration in [
+                include_str!("../migrations/0001_initial.sql"),
+                include_str!("../migrations/0002_account_profile_sort_order.sql"),
+                include_str!("../migrations/0003_account_profile_usage_info.sql"),
+            ] {
+                sqlx::raw_sql(migration)
+                    .execute(&mut connection)
+                    .await
+                    .unwrap();
+            }
+            sqlx::query(
+                "INSERT INTO account_profiles (
+                    id, account_name, needs_review, sort_order, usage_info, created_at, updated_at
+                 ) VALUES ('legacy-weekly', 'legacy-name', 0, 0, '旧本周内容', ?, ?)",
+            )
+            .bind("2026-08-06T00:00:00Z")
+            .bind("2026-08-06T00:00:00Z")
+            .execute(&mut connection)
+            .await
+            .unwrap();
+
+            sqlx::raw_sql(include_str!("../migrations/0008_account_weekly_wins.sql"))
+                .execute(&mut connection)
+                .await
+                .unwrap();
+
+            let columns = sqlx::query_scalar::<_, String>(
+                "SELECT name FROM pragma_table_info('account_profiles') ORDER BY cid",
+            )
+            .fetch_all(&mut connection)
+            .await
+            .unwrap();
+            assert!(!columns.iter().any(|name| name == "usage_info"));
+            assert!(columns.iter().any(|name| name == "weekly_wins"));
+            let row = sqlx::query("SELECT account_name, weekly_wins FROM account_profiles")
+                .fetch_one(&mut connection)
+                .await
+                .unwrap();
+            assert_eq!(row.get::<String, _>("account_name"), "legacy-name");
+            assert_eq!(row.get::<Option<i64>, _>("weekly_wins"), None);
         });
     }
 

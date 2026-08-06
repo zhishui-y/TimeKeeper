@@ -65,6 +65,8 @@ describe("browser mock API", () => {
   });
 
   it("refreshes role data deterministically without a network request", async () => {
+    const previousSettings = await mockApi.getSettings();
+    await mockApi.updateSettings({ ...previousSettings, accountRoleDataApiKey: "demo-key" });
     const result = await mockApi.refreshAccountProfileRoleData([
       "account-1",
       "account-3",
@@ -80,6 +82,17 @@ describe("browser mock API", () => {
     expect((await mockApi.getAccountProfile("account-1")).scoreUpdatedAt).toMatch(
       /^\d{4}-\d{2}-\d{2}$/,
     );
+    expect((await mockApi.getAccountProfile("account-1")).weeklyWins).toBe(1);
+    await mockApi.updateSettings(previousSettings);
+  });
+
+  it("rejects role refresh before a request when the API key is empty", async () => {
+    const previousSettings = await mockApi.getSettings();
+    await mockApi.updateSettings({ ...previousSettings, accountRoleDataApiKey: "   " });
+    await expect(mockApi.refreshAccountProfileRoleData(["account-1"])).rejects.toThrow(
+      "请先配置角色数据 API 密钥",
+    );
+    await mockApi.updateSettings(previousSettings);
   });
 
   it("copies a profile character name through the demo client", async () => {
@@ -461,23 +474,9 @@ describe("browser mock API", () => {
     await mockApi.reorderAccountProfiles(before.map((profile) => profile.id));
   });
 
-  it("updates account usage without a feature-level unlock flow", async () => {
-    const profile = (await mockApi.listAccountProfiles())[0]!;
-
-    const updated = await mockApi.updateAccountProfileUsage(profile.id, "  今晚使用中  ");
-    expect(updated).toMatchObject({
-      id: profile.id,
-      accountName: profile.accountName,
-      usageInfo: "今晚使用中",
-    });
-    await expect(mockApi.updateAccountProfileUsage(profile.id, "   ")).resolves.toMatchObject({
-      usageInfo: null,
-    });
-  });
-
   it("persists validated account table widths in browser demo mode", async () => {
     const previous = (await mockApi.getSettings()).accountTableColumnWidths;
-    const widths = { ...previous, contactName: 72, weekly: 224 };
+    const widths = { ...previous, contactName: 72, weeklyWins: 120 };
 
     await expect(mockApi.updateAccountTableColumnWidths(widths)).resolves.toEqual(widths);
     await expect(mockApi.getSettings()).resolves.toMatchObject({
@@ -486,9 +485,9 @@ describe("browser mock API", () => {
     expect(localStorage.getItem("timekeeper.demo.accountTableColumnWidths")).toBe(
       JSON.stringify(widths),
     );
-    await expect(mockApi.updateAccountTableColumnWidths({ ...widths, weekly: 47 })).rejects.toThrow(
-      "列宽超出允许范围",
-    );
+    await expect(
+      mockApi.updateAccountTableColumnWidths({ ...widths, weeklyWins: 47 }),
+    ).rejects.toThrow("列宽超出允许范围");
 
     await mockApi.updateAccountTableColumnWidths(previous);
   });
@@ -547,6 +546,7 @@ describe("browser mock API", () => {
     const legacyWidths: Partial<typeof current> = { ...current };
     delete legacyWidths.accountName;
     delete legacyWidths.password;
+    delete legacyWidths.weeklyWins;
     localStorage.setItem(
       "timekeeper.demo.accountTableColumnWidths",
       JSON.stringify({ ...legacyWidths, weekly: 224 }),
@@ -559,43 +559,10 @@ describe("browser mock API", () => {
         ...legacyWidths,
         accountName: DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS.accountName,
         password: DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS.password,
-        weekly: 224,
+        weeklyWins: 224,
       },
     });
     localStorage.removeItem("timekeeper.demo.accountTableColumnWidths");
-  });
-
-  it("preserves the first weekly usage marker then clears at China Monday", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2098-08-03T12:00:00Z"));
-    const profile = (await mockApi.listAccountProfiles())[0]!;
-    await mockApi.updateAccountProfileUsage(profile.id, "周日安排");
-    const populatedCount = (await mockApi.listAccountProfiles()).filter(
-      (account) => account.usageInfo != null,
-    ).length;
-
-    await expect(mockApi.syncAccountProfileUsageWeek()).resolves.toMatchObject({
-      weekStart: "2098-07-28",
-      clearedCount: 0,
-    });
-
-    vi.setSystemTime(new Date("2098-08-03T16:00:00Z"));
-    await expect(mockApi.syncAccountProfileUsageWeek()).resolves.toMatchObject({
-      weekStart: "2098-08-04",
-      clearedCount: populatedCount,
-    });
-    await expect(mockApi.getAccountProfile(profile.id)).resolves.toMatchObject({
-      usageInfo: null,
-    });
-    await expect(mockApi.syncAccountProfileUsageWeek()).resolves.toMatchObject({
-      clearedCount: 0,
-    });
-
-    await mockApi.updateAccountProfileUsage(profile.id, "周一安排");
-    await expect(mockApi.clearAccountProfileUsage()).resolves.toBe(1);
-    await expect(mockApi.getAccountProfile(profile.id)).resolves.toMatchObject({
-      usageInfo: null,
-    });
   });
 
   it("returns one-time appointment passwords with appointment DTOs", async () => {

@@ -69,7 +69,7 @@ function checked(event: unknown): boolean {
 .import-scope legend {
   margin-bottom: 7px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
 }
 
@@ -148,13 +148,13 @@ function checked(event: unknown): boolean {
 
 .scope-option__copy strong {
   color: var(--ink-strong);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .scope-option__copy small {
   overflow: hidden;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -179,7 +179,7 @@ function checked(event: unknown): boolean {
 .import-scope > p {
   margin-top: 7px;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   line-height: 1.45;
 }
 

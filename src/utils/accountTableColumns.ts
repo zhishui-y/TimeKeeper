@@ -14,7 +14,7 @@ export const ACCOUNT_TABLE_COLUMN_KEYS: readonly AccountTableColumnKey[] = [
   "currentScore",
   "highestScore",
   "scoreUpdatedAt",
-  "weekly",
+  "weeklyWins",
   "notes",
 ];
 
@@ -29,7 +29,7 @@ export const DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS: AccountTableColumnWidths = {
   currentScore: 62,
   highestScore: 62,
   scoreUpdatedAt: 102,
-  weekly: 160,
+  weeklyWins: 96,
   notes: 160,
 };
 
@@ -44,7 +44,7 @@ export const MIN_ACCOUNT_TABLE_COLUMN_WIDTHS: AccountTableColumnWidths = {
   currentScore: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
   highestScore: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
   scoreUpdatedAt: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
-  weekly: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+  weeklyWins: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
   notes: MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
 };
 

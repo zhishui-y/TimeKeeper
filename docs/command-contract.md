@@ -9,21 +9,28 @@
 ## App access
 
 - `app_access_status() -> AppAccessStatus`
-- `initialize_app_access(password) -> AppAccessStatus`
+- `initialize_app_access(password, recovery) -> AppAccessStatus`
 - `unlock_app_access(password) -> AppAccessStatus`
 - `lock_app_access() -> AppAccessStatus`
 - `change_app_access_password(currentPassword, newPassword) -> AppAccessStatus`
-- `reset_app_access_password(newPassword, confirmationText) -> AppAccessStatus`
-- `migrate_legacy_credentials(password) -> LegacyCredentialMigrationResult`
+- `reset_app_access_password(newPassword, confirmationText, recoveryProof) -> AppAccessStatus`
+- `set_app_access_recovery(currentPassword, recovery) -> AppAccessStatus`
+- `migrate_legacy_credentials(password, recovery?) -> LegacyCredentialMigrationResult`
+- `get_app_appearance() -> AppearanceSettings`（无需解锁）
 
-`AppAccessStatus` 包含 `initialized`、`unlocked` 与
-`legacyMigrationPendingCount`。初始化、解锁、修改、重置的 Argon2id 工作都在阻塞任务执行。
+`AppAccessStatus` 包含 `initialized`、`unlocked`、`recoveryQuestion` 与
+`legacyMigrationPendingCount`。初始化、解锁、修改、重置以及恢复答案的 Argon2id 工作都在阻塞任务执行。
+`AppAccessRecoverySetup` 为 `{ question, answer }`；`AppAccessRecoveryProof` 为
+`{ kind: "answer", answer }` 或一次性旧用户兼容用的 `{ kind: "legacyEnrollment", recovery }`。
 修改密码要求当前进程已解锁并再次验证当前密码；新密码至少 4 个 Unicode 字符，界面建议 8 位
-以上。重置要求 `confirmationText === "重置"`，前端还必须要求两次新密码一致；重置只替换
-verifier，不触碰业务表或凭据表。
+以上。恢复问题长度为 2–100 个 Unicode 字符；答案先去首尾空白、合并连续空白并 Unicode 小写，
+规范化后限制为 2–100 个字符。重置要求 `confirmationText === "重置"`，前端还必须要求两次新
+密码一致；已有恢复问题时必须答对，旧用户无问题时只接受一次 `legacyEnrollment`。入口密码和
+恢复记录在同一事务中写入，不触碰业务表或凭据表。
 
-`migrate_legacy_credentials` 以只读方式验证旧 Stronghold。尚无入口 verifier 时，成功使用的旧密码
-同时初始化为入口密码；已有入口密码时，必须先解锁进程。结果包含 `migratedCount`、
+`migrate_legacy_credentials` 以只读方式验证旧 Stronghold。尚无入口 verifier 时，必须同时提供
+恢复设置，成功使用的旧密码才会初始化为入口密码并在同一事务写入恢复记录；已有入口密码时，
+必须先解锁进程。结果包含 `migratedCount`、
 `missingCount`、`pendingCount`。缺失 key 保留队列，已有新凭据不覆盖并清除对应旧队列项。
 
 ## Appointments
@@ -98,9 +105,6 @@ verifier，不触碰业务表或凭据表。
 - `get_account_profile(id) -> AccountProfile`
 - `create_account_profile(input) -> AccountProfile`
 - `update_account_profile(id, input) -> AccountProfile`
-- `update_account_profile_usage(id, usageInfo?) -> AccountProfile`
-- `clear_account_profile_usage() -> number`
-- `sync_account_profile_usage_week() -> AccountUsageWeekSyncResult`
 - `delete_account_profile(id) -> void`
 - `delete_account_profiles(ids) -> number`
 - `reorder_account_profiles(ids) -> void`
@@ -113,10 +117,13 @@ verifier，不触碰业务表或凭据表。
 档案元数据与凭据同一个 SQLite 事务提交；凭据通过外键级联删除。复制密码在 Rust 重读并执行
 30 秒剪贴板清理。
 
-本周用途按北京时间周一边界同步；第一次只记录周起始，之后跨周在一个事务内清空非空内容。
+`AccountProfile.weeklyWins` 是可空非负整数，只能由角色刷新成功响应中的有效 `week_win` 更新；前端
+只读展示，周边界完全由服务端负责。原 `usageInfo`、编辑/清空 command 和客户端周切换已删除。
 角色刷新对 ID 去空、去重并保留首次顺序；缺服务器或角色名为 `skipped`，服务端无记录为
-`noRecord`，网络/解析/大小/日期错误为 `failed`。最多 3 个并发，成功项在全部请求结束后一次事务
-写入；失败项保留旧值，最高分只增不降，不改写预约快照或密码。
+`noRecord`，网络/解析/大小/日期错误为 `failed`。请求路径保留服务器和角色名百分号编码，并追加
+`api_key` query 参数；空密钥不发请求，401 报密钥无效，503 报服务不可用或服务端未配置密钥。
+最多 3 个并发，成功项在全部请求结束后一次事务写入；缺失或无效 `week_win` 保留旧胜场但更新其他
+有效字段，请求失败或 `ok: false` 保留全部旧值，最高分只增不降，不改写预约快照或密码。
 
 ## Reports
 
@@ -158,6 +165,14 @@ Dashboard 只统计非取消业务预约的已结金额，待结数量只包含�
 
 `AppSettings` 不再包含 `autoLockMinutes`。入口锁没有空闲计时器；托盘恢复保持解锁，手动锁定和
 进程重启仍生效。表格列宽命令只更新各自字段并保留其余设置；角色数据服务器 URL 必须是无凭据、
-无 query、无 fragment 的绝对 HTTP(S) 基础 URL。账号表格列宽包含 `accountName` 与 `password`；
+无 query、无 fragment 的绝对 HTTP(S) 基础 URL。`accountRoleDataApiKey` 保存时去除首尾空白，作为
+普通设置随 `settings.json` 返回前端并进入完整备份，仅通过密码输入框掩码显示，不经过加密。账号
+表格列宽包含 `accountName`、`password` 与 `weeklyWins`；读取旧设置时原 `weekly` 宽度迁移到
+`weeklyWins`。
 账号和预约表格的所有可调列统一允许 `48..=480` 像素，48 像素约为当前字号下两个中文字符加单元格
-内边距。
+内边距。`AppearanceSettings` 包含 `fontFamily: string` 与 `baseFontSize: number`；普通设置写入
+仍要求已解锁，只有 `get_app_appearance` 可在锁屏读取。
+
+恢复 v2 备份时，暂存副本只接受从 `0001` 开始、校验和匹配且至少到 `0005` 的连续可信 migration
+前缀，并在副本中补跑缺失 migration 后按当前 schema、外键、恢复单例、问题、Argon2 verifier
+和时间戳验收。不得修改备份原件或正式数据库。

@@ -502,7 +502,7 @@ useModalFocus({
   margin-top: 2px;
   color: var(--ink-strong);
   font-family: var(--font-serif, "Noto Serif SC", serif);
-  font-size: 20px;
+  font-size: calc(20px + var(--app-font-size-offset, 0px));
   letter-spacing: 0.02em;
 }
 
@@ -579,12 +579,12 @@ useModalFocus({
 }
 
 .mode-switch__item strong {
-  font-size: 13px;
+  font-size: calc(13px + var(--app-font-size-offset, 0px));
 }
 
 .mode-switch__item small {
   color: inherit;
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   opacity: 0.78;
 }
 
@@ -598,7 +598,7 @@ useModalFocus({
   border-radius: var(--radius);
   color: #963f2f;
   background: #fff4f1;
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .form-section {
@@ -616,7 +616,7 @@ useModalFocus({
 .form-section h3 {
   color: var(--ink-strong);
   font-family: var(--font-serif, "Noto Serif SC", serif);
-  font-size: 13px;
+  font-size: calc(13px + var(--app-font-size-offset, 0px));
   font-weight: 750;
   letter-spacing: 0.025em;
 }
@@ -664,7 +664,7 @@ useModalFocus({
   border-radius: var(--radius-sm, 8px);
   color: var(--brand-strong);
   background: var(--surface);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
   cursor: pointer;
 }
@@ -692,7 +692,7 @@ useModalFocus({
   align-items: center;
   gap: 7px;
   color: var(--ink);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   cursor: pointer;
 }
 
@@ -705,7 +705,7 @@ useModalFocus({
   align-items: center;
   gap: 7px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .reminder-input .input {

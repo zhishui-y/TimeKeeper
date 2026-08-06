@@ -48,13 +48,15 @@ function appointment(serviceStatus: Appointment["serviceStatus"] = "scheduled"):
 
 function settings(): AppSettings {
   return {
+    fontFamily: "Microsoft YaHei UI",
+    baseFontSize: 15,
     defaultReminderMinutes: 30,
     backupRetention: 30,
     lastAutomaticBackupDate: null,
     accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
     appointmentTableColumnWidths: { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS },
-    lastAccountUsageWeekStart: null,
     accountRoleDataServerUrl: DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
+    accountRoleDataApiKey: "test-api-key",
   };
 }
 

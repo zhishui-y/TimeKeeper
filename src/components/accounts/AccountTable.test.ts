@@ -20,7 +20,7 @@ const profiles: AccountProfile[] = [
     currentScore: 2100,
     highestScore: 2300,
     scoreUpdatedAt: "2026-07-28",
-    usageInfo: "今晚使用中",
+    weeklyWins: 5,
     notes: "晚间优先，赛季末冲分，长备注用于验证列表中的单行省略展示",
     needsReview: false,
     createdAt: "2026-07-28T00:00:00Z",
@@ -38,7 +38,7 @@ const profiles: AccountProfile[] = [
     currentScore: 2000,
     highestScore: 2200,
     scoreUpdatedAt: "2026-07-28",
-    usageInfo: null,
+    weeklyWins: null,
     notes: null,
     needsReview: false,
     createdAt: "2026-07-28T00:00:00Z",
@@ -56,11 +56,8 @@ describe("AccountTable", () => {
         sortDirection: "asc",
         reorderEnabled: true,
         reorderDisabledReason: "",
-        usageDrafts: { "account-1": "今晚使用中", "account-2": "" },
-        savingUsageIds: new Set<string>(),
         columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
         savingColumnWidths: false,
-        clearingWeekly: false,
       },
     });
 
@@ -84,11 +81,8 @@ describe("AccountTable", () => {
         sortDirection: "asc",
         reorderEnabled: true,
         reorderDisabledReason: "",
-        usageDrafts: { "account-1": "今晚使用中" },
-        savingUsageIds: new Set<string>(),
         columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
         savingColumnWidths: false,
-        clearingWeekly: false,
       },
     });
 
@@ -110,11 +104,8 @@ describe("AccountTable", () => {
         sortDirection: "asc",
         reorderEnabled: true,
         reorderDisabledReason: "",
-        usageDrafts: { "account-1": "今晚使用中", "account-2": "" },
-        savingUsageIds: new Set<string>(),
         columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
         savingColumnWidths: false,
-        clearingWeekly: false,
       },
     });
 
@@ -153,11 +144,11 @@ describe("AccountTable", () => {
       "当前分",
       "最高分",
       "更新日期",
-      "本周",
+      "本周胜场",
       "备注",
       "",
     ]);
-    expect(rows[0]!.findAll("td")[11]!.classes()).toContain("usage-cell");
+    expect(rows[0]!.findAll("td")[11]!.text()).toBe("5");
     expect(rows[0]!.findAll("td")[12]!.classes()).toContain("notes-cell");
   });
 
@@ -170,11 +161,8 @@ describe("AccountTable", () => {
         sortDirection: "desc",
         reorderEnabled: false,
         reorderDisabledReason: "恢复默认排序后可拖动",
-        usageDrafts: { "account-1": "今晚使用中", "account-2": "" },
-        savingUsageIds: new Set<string>(),
         columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
         savingColumnWidths: false,
-        clearingWeekly: false,
       },
     });
 
@@ -196,11 +184,8 @@ describe("AccountTable", () => {
         sortDirection: "asc",
         reorderEnabled: true,
         reorderDisabledReason: "",
-        usageDrafts: { "account-1": "今晚使用中", "account-2": "" },
-        savingUsageIds: new Set<string>(),
         columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
         savingColumnWidths: false,
-        clearingWeekly: false,
       },
     });
     const dataTransfer = {
@@ -225,63 +210,8 @@ describe("AccountTable", () => {
     expect(wrapper.emitted("reorder")).toEqual([["account-1", "account-2", "before"]]);
   });
 
-  it("emits inline usage draft, save, and cancel actions", async () => {
-    const wrapper = mount(AccountTable, {
-      props: {
-        profiles: [profiles[0]!],
-        selectedIds: [],
-        sortKey: null,
-        sortDirection: "asc",
-        reorderEnabled: true,
-        reorderDisabledReason: "",
-        usageDrafts: { "account-1": "今晚使用中" },
-        savingUsageIds: new Set<string>(),
-        columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
-        savingColumnWidths: false,
-        clearingWeekly: false,
-      },
-    });
-    const input = wrapper.get('input[aria-label="编辑本周 账号一"]');
-
-    expect(input.attributes("disabled")).toBeUndefined();
-    await input.setValue("朋友使用到周末");
-    expect(wrapper.emitted("updateUsageDraft")).toEqual([["account-1", "朋友使用到周末"]]);
-
-    await wrapper.setProps({ usageDrafts: { "account-1": "朋友使用到周末" } });
-    await input.trigger("blur");
-    expect(wrapper.emitted("saveUsage")).toEqual([[profiles[0], "朋友使用到周末"]]);
-
-    await input.trigger("keydown", { key: "Escape" });
-    expect(wrapper.emitted("cancelUsage")).toEqual([[profiles[0]]]);
-    await wrapper.setProps({ savingUsageIds: new Set(["account-1"]) });
-    expect(input.attributes("disabled")).toBeDefined();
-  });
-
-  it("leaves an empty weekly field visually blank", () => {
-    const wrapper = mount(AccountTable, {
-      props: {
-        profiles: [profiles[0]!],
-        selectedIds: [],
-        sortKey: null,
-        sortDirection: "asc",
-        reorderEnabled: true,
-        reorderDisabledReason: "",
-        usageDrafts: { "account-1": "" },
-        savingUsageIds: new Set<string>(),
-        columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
-        savingColumnWidths: false,
-        clearingWeekly: false,
-      },
-    });
-
-    const input = wrapper.get('input[aria-label="编辑本周 账号一"]');
-    expect(input.element).toHaveProperty("value", "");
-    expect(input.attributes("placeholder")).toBeUndefined();
-    expect(input.attributes("title")).toBeUndefined();
-  });
-
   it("renders twelve resizable content columns including account and password", () => {
-    const columnWidths = { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS, weekly: 240 };
+    const columnWidths = { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS, weeklyWins: 120 };
     const wrapper = mount(AccountTable, {
       props: {
         profiles: [profiles[0]!],
@@ -290,11 +220,8 @@ describe("AccountTable", () => {
         sortDirection: "asc",
         reorderEnabled: true,
         reorderDisabledReason: "",
-        usageDrafts: { "account-1": "今晚使用中" },
-        savingUsageIds: new Set<string>(),
         columnWidths,
         savingColumnWidths: false,
-        clearingWeekly: true,
       },
     });
 
@@ -302,7 +229,8 @@ describe("AccountTable", () => {
     expect(wrapper.get("table").attributes("style")).toContain(
       `min-width: ${accountTableTotalWidth(columnWidths)}px`,
     );
-    expect(wrapper.get('input[aria-label="编辑本周 账号一"]').attributes("disabled")).toBeDefined();
+    expect(wrapper.find('input[aria-label^="编辑本周"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("本周胜场");
     expect(wrapper.get('th:nth-child(7) button[aria-label="调整账号列宽"]')).toBeTruthy();
     expect(wrapper.get('th:nth-child(8) button[aria-label="调整密码列宽"]')).toBeTruthy();
     expect(wrapper.find('th:last-child button[aria-label^="调整"]').exists()).toBe(false);

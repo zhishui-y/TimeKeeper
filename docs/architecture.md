@@ -11,12 +11,17 @@
 
 ## Process access gate and credentials
 
-`AppAccessState` 是进程内状态，启动默认锁定。`App.vue` 只加载入口状态，并在
-`AppAccessGate` 与 `AuthenticatedAppShell` 之间二选一挂载。托盘隐藏或恢复不会锁定；
+`AppAccessState` 是进程内状态，启动默认锁定。`App.vue` 并行加载入口状态和非敏感外观设置，
+在首屏挂载前应用字体与字号，再在 `AppAccessGate` 与 `AuthenticatedAppShell` 之间二选一挂载。
+托盘隐藏或恢复不会锁定；
 手动锁定与真正退出后重启会重新要求入口密码。所有业务 Tauri command 都在 Rust 边界调用
 `require_unlocked()`，不能只依赖前端路由保护。
 
-`app_access` 单例表只保存 Argon2id PHC verifier。账号档案和预约密码分别明文存入
+`app_access` 单例表只保存 Argon2id PHC verifier。Migration `0007` 新增
+`app_access_recovery` 单例表：问题明文保存用于展示，答案只保存独立随机盐的 Argon2id PHC
+verifier。首次设置入口密码必须同时写入恢复记录；已有问题的重置必须答对，旧用户无问题时只
+允许一次 `legacyEnrollment` 并在同一事务中补设。答案规范化为去首尾空白、合并连续空白和
+Unicode 小写。账号档案和预约密码分别明文存入
 `account_profile_credentials` 与 `appointment_credentials`，通过外键级联删除。入口密码只防止
 他人随手打开应用，不加密 SQLite 或备份，也不抵御拥有本机文件读取权限的攻击者。无损重置只
 替换 verifier 并立即解锁，不删除任何业务或凭据记录。
@@ -59,12 +64,17 @@ Vue 采用 Composition API、`<script setup lang="ts">`、Pinia 与 Vue Router�
 
 | Surface                 | Responsibility                                                              |
 | ----------------------- | --------------------------------------------------------------------------- |
-| `App.vue`               | 只启动入口状态和选择入口页/已认证壳层                                       |
-| `AuthenticatedAppShell` | 导航、全局预约抽屉、手动锁定                                                |
+| `App.vue`               | 并行启动入口状态与外观设置，首屏前应用外观并选择入口页/已认证壳层           |
+| `AuthenticatedAppShell` | 只组合导航、稳定页头、路由和全局浮层                                        |
 | Today / Calendar        | 只加载所需日期范围；Calendar 按 `datesSet` 可见区间加载并转换 exclusive end |
 | Appointments workspace  | 服务端分页、筛选、跨页选择 token、批量删除与末页回退                        |
-| Accounts workspace      | 账号筛选、角色数据刷新、批量操作与密码掩码                                  |
-| Settings workspace      | Excel 预览提交、通知、角色服务器与备份                                      |
+| Accounts workspace      | 账号筛选、角色数据刷新、只读本周胜场、批量操作与密码掩码                    |
+| Settings workspace      | 分类设置导航、外观预览、Excel 预览提交、通知、角色服务器、API 密钥与备份    |
+
+外观由 `useAppAppearance` 负责加载、预览、回退和持久化；`AppearanceSettingsPanel` 与
+`TypographyPreview` 负责字体和字号，字体不可用时原子回退到默认字体并反馈原因。字体变化会通知
+日历 `updateSize()` 与收益图表 `resize()`；ECharts 文本同步使用当前字体字号。外观字段写入
+`settings.json`，随完整备份保存。
 
 预约记录表格和编辑抽屉的“复制”都只生成日期为北京时间今天的新建草稿，保留当前表单内容并重置
 进度；关闭草稿不写库，只有再次保存才调用 `create_appointment`。原生 `duplicate_appointment`
@@ -110,8 +120,12 @@ Stronghold 解锁状态。
 `pending_settlement`，任一非取消且已结记录映射为 `completed`，取消优先。收益页面只展示
 非取消、业务、已结金额；待结信息按“服务已完成且未结算”的场次统计，并保持现有范围校验。
 
-角色数据刷新仍由 Rust 执行真实 HTTP：路径段百分号编码，单响应最多 64 KiB，最多 3 个并发，
-网络结束后一次事务提交成功项；失败项保留旧值。该操作不会改写预约账号快照或密码。
+角色数据刷新仍由 Rust 执行真实 HTTP：路径段百分号编码并以 `api_key` query 参数认证，单响应最多
+64 KiB，最多 3 个并发，网络结束后一次事务提交成功项。空密钥在发起网络请求前拒绝；401 表示密钥
+无效，503 表示角色数据服务不可用或服务端未配置密钥。有效 `week_win` 写入只读 `weekly_wins`；
+该字段缺失或无效时仍更新其他有效角色数据并保留旧胜场，请求失败或 `ok: false` 保留全部旧角色
+数据。该操作不会改写预约账号快照或密码。API 密钥是普通设置，保存在 `settings.json` 并进入完整
+备份，仅在界面掩码显示，不宣称经过加密。
 
 ## Backup and restore
 
@@ -122,4 +136,11 @@ Stronghold 解锁状态。
 
 恢复同时接受 v1 与 v2。解压前校验路径、大小、哈希和清单，暂存后校验数据库、设置以及存在时的
 Stronghold 文件；应用前先创建当前版本的 v2 预恢复备份。真正替换发生在重启早期，失败使用回滚
-目录恢复原文件，不覆盖可用数据；v1 数据库随后由正常 migration 升级到当前 `0006`。
+目录恢复原文件，不覆盖可用数据。v2 旧备份会在独立暂存副本中验证从 `0001` 开始的连续、校验
+和匹配且至少到 `0005` 的可信前缀，再补跑缺失 migration 到当前版本；备份原件和正式数据库不变。
+v1 数据库随后由正常 migration 升级到当前 `0008`。恢复会同时恢复当时的恢复问题和答案 verifier，
+但入口保护仍不是数据加密。
+
+Migration `0008` 删除 `account_profiles.usage_info` 并新增可空、非负整数 `weekly_wins`。这是有意的
+破坏性升级：旧人工“本周”文本以及编辑、清空和客户端自动周切换能力不再保留；恢复旧备份后补跑
+该 migration 时也会删除这些文本，因此正式升级或恢复前必须先创建完整备份。

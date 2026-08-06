@@ -39,13 +39,20 @@ const navigation = [
         :key="item.name"
         class="nav__item"
         :to="{ name: item.name }"
+        :title="item.label"
       >
-        <component :is="item.icon" :size="17" :stroke-width="1.8" />
+        <component :is="item.icon" :size="20" :stroke-width="1.8" />
         <span>{{ item.label }}</span>
       </RouterLink>
     </nav>
 
-    <button class="sidebar__footer" type="button" title="锁定时约管家" @click="emit('lock')">
+    <button
+      class="sidebar__footer"
+      type="button"
+      title="锁定时约管家"
+      aria-label="锁定时约管家"
+      @click="emit('lock')"
+    >
       <span class="access-dot" />
       <div>
         <strong>本次运行已解锁</strong>
@@ -60,9 +67,9 @@ const navigation = [
 .sidebar {
   position: relative;
   display: flex;
-  width: 216px;
+  width: var(--nav-width, 96px);
   height: 100%;
-  flex: 0 0 216px;
+  flex: 0 0 var(--nav-width, 96px);
   flex-direction: column;
   overflow: hidden;
   border-right: 1px solid rgba(8, 32, 25, 0.32);
@@ -95,8 +102,8 @@ const navigation = [
   height: 82px;
   flex: 0 0 82px;
   align-items: center;
-  gap: 12px;
-  padding: 0 20px;
+  justify-content: center;
+  padding: 0;
   border-bottom: 1px solid rgba(244, 239, 226, 0.11);
 }
 
@@ -114,29 +121,26 @@ const navigation = [
     inset 0 0 0 1px rgba(255, 255, 255, 0.08),
     0 8px 18px rgba(10, 27, 22, 0.24);
   font-family: var(--font-serif);
-  font-size: 21px;
+  font-size: calc(21px + var(--app-font-size-offset, 0px));
   font-weight: 650;
 }
 
 .brand__copy {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 3px;
+  display: none;
 }
 
 .brand__copy strong {
   color: var(--sidebar-ink);
   font-family: var(--font-serif);
-  font-size: 17px;
+  font-size: calc(17px + var(--app-font-size-offset, 0px));
   font-weight: 700;
   letter-spacing: 0.06em;
 }
 
 .brand__copy span {
   color: var(--sidebar-muted);
-  font-family: "Bahnschrift", var(--font-sans);
-  font-size: 9px;
+  font-family: var(--app-font-family), "Bahnschrift", var(--font-sans);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   letter-spacing: 0.18em;
 }
 
@@ -146,21 +150,23 @@ const navigation = [
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 6px;
-  padding: 20px 13px;
+  gap: 8px;
+  padding: 18px 8px;
 }
 
 .nav__item {
   position: relative;
   display: flex;
-  height: 43px;
+  height: 58px;
+  flex-direction: column;
+  justify-content: center;
   align-items: center;
-  gap: 11px;
-  padding: 0 13px;
+  gap: 5px;
+  padding: 4px;
   border: 1px solid transparent;
   border-radius: 11px;
   color: var(--sidebar-muted);
-  font-size: 13px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 620;
   letter-spacing: 0.02em;
   transition:
@@ -179,7 +185,6 @@ const navigation = [
   border-color: rgba(245, 239, 226, 0.08);
   color: #fff9ee;
   background: rgba(245, 239, 226, 0.07);
-  transform: translateX(2px);
 }
 
 .nav__item.router-link-active {
@@ -191,8 +196,8 @@ const navigation = [
 
 .nav__item.router-link-active::before {
   position: absolute;
-  top: 10px;
-  bottom: 10px;
+  top: 12px;
+  bottom: 12px;
   left: 0;
   width: 3px;
   border-radius: 0 3px 3px 0;
@@ -205,10 +210,11 @@ const navigation = [
   position: relative;
   z-index: 1;
   display: flex;
-  min-height: 74px;
+  min-height: 64px;
+  justify-content: center;
   align-items: center;
   gap: 10px;
-  padding: 13px 18px;
+  padding: 10px;
   border: 0;
   border-top: 1px solid rgba(244, 239, 226, 0.1);
   color: inherit;
@@ -223,21 +229,18 @@ const navigation = [
 }
 
 .sidebar__footer div {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 3px;
+  display: none;
 }
 
 .sidebar__footer strong {
   color: #eae8dc;
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
 }
 
 .sidebar__footer span:not(.access-dot) {
   color: var(--sidebar-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .access-dot {
@@ -250,21 +253,14 @@ const navigation = [
 }
 
 .sidebar__footer > svg {
-  margin-left: auto;
   color: var(--sidebar-muted);
 }
 
 @media (max-width: 1180px) {
-  .sidebar {
-    width: 184px;
-    flex-basis: 184px;
-  }
-
   .brand {
     height: 76px;
     flex-basis: 76px;
-    gap: 10px;
-    padding: 0 14px;
+    padding: 0;
   }
 
   .brand__seal {
@@ -272,29 +268,20 @@ const navigation = [
     height: 34px;
     flex-basis: 34px;
     border-radius: 10px;
-    font-size: 19px;
-  }
-
-  .brand__copy strong {
-    font-size: 15px;
-  }
-
-  .brand__copy span {
-    font-size: 8px;
-    letter-spacing: 0.14em;
+    font-size: calc(19px + var(--app-font-size-offset, 0px));
   }
 
   .nav {
-    padding: 16px 10px;
+    padding: 14px 8px;
   }
 
   .nav__item {
-    padding-inline: 11px;
+    padding-inline: 4px;
   }
 
   .sidebar__footer {
     min-height: 68px;
-    padding-inline: 14px;
+    padding-inline: 10px;
   }
 }
 </style>

@@ -41,8 +41,8 @@ const emit = defineEmits<{
   position: relative;
   z-index: 10;
   display: flex;
-  height: 82px;
-  flex: 0 0 82px;
+  height: 88px;
+  flex: 0 0 88px;
   align-items: center;
   justify-content: space-between;
   padding: 0 28px;
@@ -87,7 +87,7 @@ const emit = defineEmits<{
   overflow: hidden;
   color: var(--ink-strong);
   font-family: var(--font-serif);
-  font-size: 22px;
+  font-size: calc(22px + var(--app-font-size-offset, 0px));
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: 0.035em;
@@ -98,7 +98,7 @@ const emit = defineEmits<{
 .header__title p {
   overflow: hidden;
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   letter-spacing: 0.02em;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -126,13 +126,13 @@ const emit = defineEmits<{
 
 @media (max-width: 1180px) {
   .header {
-    height: 76px;
-    flex-basis: 76px;
+    height: 82px;
+    flex-basis: 82px;
     padding: 0 20px;
   }
 
   .header__title h1 {
-    font-size: 20px;
+    font-size: calc(20px + var(--app-font-size-offset, 0px));
   }
 
   .header__actions {

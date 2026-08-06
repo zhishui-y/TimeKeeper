@@ -102,7 +102,7 @@ function reset(): void {
 
 .filters__separator {
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .filters__select {

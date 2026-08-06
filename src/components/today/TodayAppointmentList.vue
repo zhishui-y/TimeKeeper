@@ -153,7 +153,7 @@ const emit = defineEmits<{
 .today-list__header h2 {
   margin-top: 2px;
   color: var(--ink-strong);
-  font-size: 16px;
+  font-size: calc(16px + var(--app-font-size-offset, 0px));
   line-height: 1.2;
 }
 
@@ -163,7 +163,7 @@ const emit = defineEmits<{
   border-radius: 999px;
   color: var(--ink);
   background: var(--surface);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
 }
 
@@ -217,7 +217,7 @@ const emit = defineEmits<{
 .appointment-row__time {
   grid-area: time;
   color: var(--ink-strong);
-  font-size: 13px;
+  font-size: calc(13px + var(--app-font-size-offset, 0px));
   font-weight: 700;
   letter-spacing: 0.01em;
 }
@@ -250,7 +250,7 @@ const emit = defineEmits<{
 .appointment-row__title strong {
   overflow: hidden;
   color: var(--ink-strong);
-  font-size: 14px;
+  font-size: calc(14px + var(--app-font-size-offset, 0px));
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -263,7 +263,7 @@ const emit = defineEmits<{
   border-radius: 999px;
   color: var(--gold-strong);
   background: color-mix(in srgb, var(--gold-soft) 92%, var(--surface));
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 750;
   line-height: 1.25;
 }
@@ -272,7 +272,7 @@ const emit = defineEmits<{
   margin-top: 4px;
   overflow: hidden;
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -296,7 +296,7 @@ const emit = defineEmits<{
   display: flex;
   align-items: center;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .appointment-row__notes-label {
@@ -320,12 +320,12 @@ const emit = defineEmits<{
 
 .appointment-row__amount strong {
   color: var(--ink-strong);
-  font-size: 13px;
+  font-size: calc(13px + var(--app-font-size-offset, 0px));
 }
 
 .appointment-row__amount > span {
   color: var(--blue);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
 }
 
@@ -351,7 +351,7 @@ const emit = defineEmits<{
   place-items: center;
   color: var(--ink-muted);
   background: radial-gradient(circle at center, var(--brand-soft), transparent 66%);
-  font-size: 13px;
+  font-size: calc(13px + var(--app-font-size-offset, 0px));
 }
 
 @media (max-width: 1180px) {

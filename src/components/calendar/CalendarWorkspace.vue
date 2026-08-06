@@ -111,6 +111,14 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
+.calendar-workspace > .loading-line {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  right: 4px;
+  left: 0;
+}
+
 .calendar-workspace > .page-toolbar {
   min-height: 42px;
 }
@@ -121,7 +129,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .calendar-legend span {
@@ -218,7 +226,7 @@ onBeforeUnmount(() => {
 
   .calendar-legend span {
     padding-inline: 7px;
-    font-size: 11px;
+    font-size: calc(12px + var(--app-font-size-offset, 0px));
   }
 
   .calendar-legend .legend-item--mode {

@@ -3,7 +3,7 @@ import type {
   AccountProfile,
   AccountRoleDataRefreshResult,
   AccountTableColumnWidths,
-  AccountUsageWeekSyncResult,
+  AppAccessRecoveryProof,
   AppAccessStatus,
   AppSettings,
   Appointment,
@@ -51,8 +51,10 @@ let appAccess: AppAccessStatus = {
   initialized: true,
   unlocked: true,
   legacyMigrationPendingCount: 0,
+  recoveryQuestion: "我最常用的陪玩角色是？",
 };
 let appAccessPassword: string | null = "demo";
+let appAccessRecoveryAnswer = "demo";
 const appointmentSelections = new Map<string, { ids: string[]; expiresAt: number }>();
 const ACCOUNT_TABLE_WIDTHS_STORAGE_KEY = "timekeeper.demo.accountTableColumnWidths";
 const APPOINTMENT_TABLE_WIDTHS_STORAGE_KEY = "timekeeper.demo.appointmentTableColumnWidths";
@@ -72,12 +74,15 @@ function loadStoredAccountTableColumnWidths(): AccountTableColumnWidths {
   try {
     const stored = globalThis.localStorage?.getItem(ACCOUNT_TABLE_WIDTHS_STORAGE_KEY);
     if (!stored) return { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS };
-    const parsed = JSON.parse(stored) as Partial<AccountTableColumnWidths>;
+    const parsed = JSON.parse(stored) as Partial<AccountTableColumnWidths> & { weekly?: number };
     const widths = {
       ...parsed,
       accountName: parsed.accountName ?? DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS.accountName,
       password: parsed.password ?? DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS.password,
+      weeklyWins:
+        parsed.weeklyWins ?? parsed.weekly ?? DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS.weeklyWins,
     } as AccountTableColumnWidths;
+    delete (widths as AccountTableColumnWidths & { weekly?: number }).weekly;
     if (!accountTableColumnWidthsAreValid(widths)) {
       return { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS };
     }
@@ -131,13 +136,15 @@ function storeAppointmentTableColumnWidths(widths: AppointmentTableColumnWidths)
 }
 
 let settings: AppSettings = {
+  fontFamily: "Microsoft YaHei UI",
+  baseFontSize: 15,
   defaultReminderMinutes: 30,
   backupRetention: 30,
   lastAutomaticBackupDate: format(new Date(), "yyyy-MM-dd"),
   accountTableColumnWidths: loadStoredAccountTableColumnWidths(),
   appointmentTableColumnWidths: loadStoredAppointmentTableColumnWidths(),
-  lastAccountUsageWeekStart: null,
   accountRoleDataServerUrl: DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
+  accountRoleDataApiKey: "",
 };
 let accountRoleDataRefreshBusy = false;
 
@@ -147,28 +154,19 @@ interface MockBackupSnapshot {
   settings: AppSettings;
   appAccess: Omit<AppAccessStatus, "unlocked">;
   appAccessPassword: string | null;
+  appAccessRecoveryAnswer: string;
 }
 
 let backupSnapshot: MockBackupSnapshot | null = null;
 let lastBackupPath: string | null = null;
 
+function normalizeRecoveryAnswer(value: string): string {
+  return value.trim().split(/\s+/u).filter(Boolean).join(" ").toLocaleLowerCase();
+}
+
 function makeId(prefix: string): string {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   return `${prefix}-${random}`;
-}
-
-function currentChinaWeekStart(): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const value = (type: Intl.DateTimeFormatPartTypes) =>
-    Number(parts.find((part) => part.type === type)?.value);
-  const monday = new Date(Date.UTC(value("year"), value("month") - 1, value("day")));
-  monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
-  return monday.toISOString().slice(0, 10);
 }
 
 function currentChinaDate(): string {
@@ -203,6 +201,7 @@ function refreshMockAccountRoleData(ids: string[]): AccountRoleDataRefreshResult
     profile.currentScore = nextScore;
     profile.highestScore = Math.max(profile.highestScore ?? 0, nextScore + 100);
     profile.scoreUpdatedAt = currentChinaDate();
+    profile.weeklyWins = index + 1;
     profile.updatedAt = new Date().toISOString();
     return { accountId: id, status: "updated" };
   });
@@ -215,27 +214,6 @@ function refreshMockAccountRoleData(ids: string[]): AccountRoleDataRefreshResult
     failedCount: items.filter((item) => item.status === "failed").length,
     items,
   };
-}
-
-function syncMockAccountUsageWeek(): AccountUsageWeekSyncResult {
-  const weekStart = currentChinaWeekStart();
-  const previous = settings.lastAccountUsageWeekStart;
-  if (!previous) {
-    settings.lastAccountUsageWeekStart = weekStart;
-    return { weekStart, clearedCount: 0 };
-  }
-  if (previous >= weekStart) return { weekStart, clearedCount: 0 };
-
-  let clearedCount = 0;
-  const timestamp = new Date().toISOString();
-  for (const account of accounts) {
-    if (account.usageInfo == null) continue;
-    account.usageInfo = null;
-    account.updatedAt = timestamp;
-    clearedCount += 1;
-  }
-  settings.lastAccountUsageWeekStart = weekStart;
-  return { weekStart, clearedCount };
 }
 
 function toAppointment(input: AppointmentInput, existing?: Appointment): Appointment {
@@ -745,7 +723,7 @@ export const mockApi: ApiClient = {
       currentScore: input.currentScore ?? null,
       highestScore: input.highestScore ?? null,
       scoreUpdatedAt: input.scoreUpdatedAt ?? null,
-      usageInfo: null,
+      weeklyWins: null,
       notes: input.notes?.trim() || null,
       needsReview: input.needsReview ?? false,
       createdAt: timestamp,
@@ -772,27 +750,6 @@ export const mockApi: ApiClient = {
       updatedAt: new Date().toISOString(),
     });
     return structuredClone(existing);
-  },
-  async updateAccountProfileUsage(id, usageInfo) {
-    syncMockAccountUsageWeek();
-    const existing = getAccountOrThrow(id);
-    existing.usageInfo = usageInfo?.trim() || null;
-    existing.updatedAt = new Date().toISOString();
-    return structuredClone(existing);
-  },
-  async clearAccountProfileUsage() {
-    let clearedCount = 0;
-    const timestamp = new Date().toISOString();
-    for (const account of accounts) {
-      if (account.usageInfo == null) continue;
-      account.usageInfo = null;
-      account.updatedAt = timestamp;
-      clearedCount += 1;
-    }
-    return clearedCount;
-  },
-  async syncAccountProfileUsageWeek() {
-    return syncMockAccountUsageWeek();
   },
   async deleteAccountProfile(id) {
     getAccountOrThrow(id);
@@ -830,6 +787,7 @@ export const mockApi: ApiClient = {
     if (accountRoleDataRefreshBusy) throw new Error("已有角色数据更新任务正在进行");
     const validationError = validateAccountRoleDataServerUrl(settings.accountRoleDataServerUrl);
     if (validationError) throw new Error(validationError);
+    if (!settings.accountRoleDataApiKey.trim()) throw new Error("请先配置角色数据 API 密钥");
     accountRoleDataRefreshBusy = true;
     try {
       return structuredClone(refreshMockAccountRoleData(ids));
@@ -841,12 +799,21 @@ export const mockApi: ApiClient = {
   async appAccessStatus() {
     return structuredClone(appAccess);
   },
-  async initializeAppAccess(password) {
+  async initializeAppAccess(password, recovery) {
     if (!isMasterPasswordLongEnough(password)) {
       throw new Error(`入口密码至少需要${MIN_MASTER_PASSWORD_CHARACTERS}个字符`);
     }
+    if (!recovery.question.trim() || recovery.answer.trim().length < 2) {
+      throw new Error("请完整填写恢复问题和答案");
+    }
     appAccessPassword = password;
-    appAccess = { ...appAccess, initialized: true, unlocked: true };
+    appAccessRecoveryAnswer = normalizeRecoveryAnswer(recovery.answer);
+    appAccess = {
+      ...appAccess,
+      initialized: true,
+      unlocked: true,
+      recoveryQuestion: recovery.question.trim(),
+    };
     return structuredClone(appAccess);
   },
   async unlockAppAccess(password) {
@@ -871,10 +838,28 @@ export const mockApi: ApiClient = {
     appAccessPassword = newPassword;
     return structuredClone(appAccess);
   },
-  async resetAppAccessPassword(newPassword, confirmationText) {
+  async resetAppAccessPassword(
+    newPassword,
+    confirmationText,
+    recoveryProof: AppAccessRecoveryProof,
+  ) {
     if (confirmationText !== "重置") throw new Error("请输入“重置”确认操作");
     if (!isMasterPasswordLongEnough(newPassword)) {
       throw new Error(`入口密码至少需要${MIN_MASTER_PASSWORD_CHARACTERS}个字符`);
+    }
+    if (appAccess.recoveryQuestion) {
+      if (
+        recoveryProof.kind !== "answer" ||
+        normalizeRecoveryAnswer(recoveryProof.answer) !== appAccessRecoveryAnswer
+      ) {
+        throw new Error("恢复答案错误");
+      }
+    } else {
+      if (recoveryProof.kind !== "legacyEnrollment") {
+        throw new Error("旧用户需要先设置恢复问题");
+      }
+      appAccessRecoveryAnswer = normalizeRecoveryAnswer(recoveryProof.recovery.answer);
+      appAccess = { ...appAccess, recoveryQuestion: recoveryProof.recovery.question.trim() };
     }
     appAccessPassword = newPassword;
     appAccess = { ...appAccess, initialized: true, unlocked: true };
@@ -884,11 +869,44 @@ export const mockApi: ApiClient = {
     appAccess = { ...appAccess, unlocked: false };
     return structuredClone(appAccess);
   },
-  async migrateLegacyCredentials(password) {
+  async setAppAccessRecovery(currentPassword, recovery) {
+    if (!appAccess.unlocked) throw new Error("应用尚未解锁");
+    if (appAccessPassword !== currentPassword) throw new Error("当前入口密码不正确");
+    appAccessRecoveryAnswer = normalizeRecoveryAnswer(recovery.answer);
+    appAccess = { ...appAccess, recoveryQuestion: recovery.question.trim() };
+    return structuredClone(appAccess);
+  },
+  async migrateLegacyCredentials(password, recovery) {
     if (!password) throw new Error("原主密码不能为空");
     const pendingCount = appAccess.legacyMigrationPendingCount;
-    appAccess = { initialized: true, unlocked: true, legacyMigrationPendingCount: 0 };
-    appAccessPassword = password;
+    if (pendingCount === 0) {
+      return { migratedCount: 0, missingCount: 0, pendingCount: 0 };
+    }
+    if (appAccess.initialized && !appAccess.unlocked) {
+      throw new Error("应用已锁定，请先输入入口密码");
+    }
+    if (!appAccess.initialized) {
+      if (!recovery) throw new Error("首次迁移入口密码时必须设置恢复问题");
+      const question = recovery.question.trim();
+      const answer = normalizeRecoveryAnswer(recovery.answer);
+      if (
+        question.length < 2 ||
+        question.length > 100 ||
+        answer.length < 2 ||
+        answer.length > 100
+      ) {
+        throw new Error("请完整填写2到100个字符的恢复问题和答案");
+      }
+      appAccessPassword = password;
+      appAccessRecoveryAnswer = normalizeRecoveryAnswer(recovery.answer);
+      appAccess = {
+        ...appAccess,
+        initialized: true,
+        unlocked: true,
+        recoveryQuestion: question,
+      };
+    }
+    appAccess = { ...appAccess, legacyMigrationPendingCount: 0 };
     return { migratedCount: pendingCount, missingCount: 0, pendingCount: 0 };
   },
   async copyAccountPassword(id) {
@@ -897,6 +915,10 @@ export const mockApi: ApiClient = {
       await navigator.clipboard.writeText(password);
       scheduleClipboardClear(password);
     }
+  },
+
+  async getAppAppearance() {
+    return { fontFamily: settings.fontFamily, baseFontSize: settings.baseFontSize };
   },
 
   async getDashboardSummary(date) {
@@ -1047,8 +1069,10 @@ export const mockApi: ApiClient = {
       appAccess: {
         initialized: appAccess.initialized,
         legacyMigrationPendingCount: appAccess.legacyMigrationPendingCount,
+        recoveryQuestion: appAccess.recoveryQuestion,
       },
       appAccessPassword,
+      appAccessRecoveryAnswer,
     };
     lastBackupPath = path;
     return {
@@ -1068,6 +1092,7 @@ export const mockApi: ApiClient = {
     settings = structuredClone(backupSnapshot.settings);
     appAccess = { ...structuredClone(backupSnapshot.appAccess), unlocked: false };
     appAccessPassword = backupSnapshot.appAccessPassword;
+    appAccessRecoveryAnswer = backupSnapshot.appAccessRecoveryAnswer;
   },
   async getSettings() {
     return structuredClone(settings);
@@ -1088,7 +1113,7 @@ export const mockApi: ApiClient = {
       accountTableColumnWidths: { ...nextSettings.accountTableColumnWidths },
       appointmentTableColumnWidths: { ...nextSettings.appointmentTableColumnWidths },
       accountRoleDataServerUrl: nextSettings.accountRoleDataServerUrl.trim(),
-      lastAccountUsageWeekStart: settings.lastAccountUsageWeekStart,
+      accountRoleDataApiKey: nextSettings.accountRoleDataApiKey.trim(),
     };
     return structuredClone(settings);
   },

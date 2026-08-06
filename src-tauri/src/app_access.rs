@@ -1,9 +1,12 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{Row, Sqlite, Transaction, sqlite::SqliteRow};
 use tauri::State;
 use zeroize::Zeroizing;
@@ -16,13 +19,76 @@ use crate::{
 
 const MIN_PASSWORD_CHARACTERS: usize = 4;
 const RESET_CONFIRMATION_TEXT: &str = "重置";
+const MIN_RECOVERY_TEXT_CHARACTERS: usize = 2;
+const MAX_RECOVERY_TEXT_CHARACTERS: usize = 100;
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub(crate) fn is_supported_access_verifier(verifier: &str) -> bool {
+    fn is_canonical_32_byte_base64(value: &str) -> bool {
+        const CANONICAL_LAST_CHARACTERS: &str = "AEIMQUYcgkosw048";
+        value.len() == 43
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'+' || byte == b'/')
+            && value
+                .chars()
+                .last()
+                .is_some_and(|last| CANONICAL_LAST_CHARACTERS.contains(last))
+    }
+
+    let parts = verifier.split('$').collect::<Vec<_>>();
+    matches!(
+        parts.as_slice(),
+        ["", "argon2id", "v=19", "m=65536,t=3,p=1", salt, hash]
+            if is_canonical_32_byte_base64(salt) && is_canonical_32_byte_base64(hash)
+    )
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppAccessStatus {
     pub initialized: bool,
     pub unlocked: bool,
     pub legacy_migration_pending_count: usize,
+    pub recovery_question: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppAccessRecoverySetup {
+    pub question: String,
+    pub answer: String,
+}
+
+impl fmt::Debug for AppAccessRecoverySetup {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AppAccessRecoverySetup")
+            .field("question", &self.question)
+            .field("answer", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum AppAccessRecoveryProof {
+    Answer { answer: String },
+    LegacyEnrollment { recovery: AppAccessRecoverySetup },
+}
+
+impl fmt::Debug for AppAccessRecoveryProof {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Answer { .. } => formatter
+                .debug_struct("Answer")
+                .field("answer", &"<redacted>")
+                .finish(),
+            Self::LegacyEnrollment { recovery } => formatter
+                .debug_struct("LegacyEnrollment")
+                .field("recovery", recovery)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -78,6 +144,28 @@ fn validate_password(password: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn normalize_recovery_answer(answer: &str) -> String {
+    answer
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn validate_recovery_setup(recovery: &AppAccessRecoverySetup) -> Result<String, String> {
+    let question = recovery.question.trim();
+    let answer = normalize_recovery_answer(&recovery.answer);
+    let question_count = question.chars().count();
+    let answer_count = answer.chars().count();
+    if !(MIN_RECOVERY_TEXT_CHARACTERS..=MAX_RECOVERY_TEXT_CHARACTERS).contains(&question_count) {
+        return Err("恢复问题需要2到100个字符".into());
+    }
+    if !(MIN_RECOVERY_TEXT_CHARACTERS..=MAX_RECOVERY_TEXT_CHARACTERS).contains(&answer_count) {
+        return Err("恢复答案规范化后需要2到100个字符".into());
+    }
+    Ok(answer)
+}
+
 fn hash_password(password: String) -> Result<String, String> {
     validate_password(&password)?;
     let password = Zeroizing::new(password);
@@ -91,10 +179,30 @@ fn hash_password(password: String) -> Result<String, String> {
     .map_err(|error| format!("派生入口密码校验值失败：{error}"))
 }
 
+fn hash_recovery_answer(answer: String) -> Result<String, String> {
+    let answer = normalize_recovery_answer(&answer);
+    if !(MIN_RECOVERY_TEXT_CHARACTERS..=MAX_RECOVERY_TEXT_CHARACTERS)
+        .contains(&answer.chars().count())
+    {
+        return Err("恢复答案规范化后需要2到100个字符".into());
+    }
+    let answer = Zeroizing::new(answer);
+    let mut salt = [0_u8; 32];
+    getrandom::fill(&mut salt).map_err(|error| format!("生成恢复答案盐失败：{error}"))?;
+    argon2::hash_encoded(answer.as_bytes(), &salt, &argon2::Config::rfc9106_low_mem())
+        .map_err(|error| format!("派生恢复答案校验值失败：{error}"))
+}
+
 fn verify_password(verifier: String, password: String) -> Result<bool, String> {
     let password = Zeroizing::new(password);
     argon2::verify_encoded(&verifier, password.as_bytes())
         .map_err(|_| "入口密码校验数据损坏".to_string())
+}
+
+fn verify_recovery_answer(verifier: String, answer: String) -> Result<bool, String> {
+    let answer = Zeroizing::new(normalize_recovery_answer(&answer));
+    argon2::verify_encoded(&verifier, answer.as_bytes())
+        .map_err(|_| "恢复答案校验数据损坏".to_string())
 }
 
 async fn run_blocking_access_operation<T, F>(operation: F) -> Result<T, String>
@@ -122,6 +230,20 @@ async fn pending_migration_count(database: &Database) -> Result<usize, String> {
     Ok(count.max(0) as usize)
 }
 
+async fn load_recovery_question(database: &Database) -> Result<Option<String>, String> {
+    sqlx::query_scalar::<_, String>("SELECT question FROM app_access_recovery WHERE id = 1")
+        .fetch_optional(database.pool())
+        .await
+        .map_err(|error| db_error("读取恢复问题失败", error))
+}
+
+async fn load_recovery_verifier(database: &Database) -> Result<Option<String>, String> {
+    sqlx::query_scalar::<_, String>("SELECT answer_verifier FROM app_access_recovery WHERE id = 1")
+        .fetch_optional(database.pool())
+        .await
+        .map_err(|error| db_error("读取恢复答案状态失败", error))
+}
+
 async fn status_impl(
     database: &Database,
     access: &AppAccessState,
@@ -131,6 +253,7 @@ async fn status_impl(
         initialized,
         unlocked: initialized && access.is_unlocked(),
         legacy_migration_pending_count: pending_migration_count(database).await?,
+        recovery_question: load_recovery_question(database).await?,
     })
 }
 
@@ -146,25 +269,51 @@ async fn initialize_impl(
     database: &Database,
     access: &AppAccessState,
     password: String,
+    recovery: AppAccessRecoverySetup,
 ) -> Result<AppAccessStatus, String> {
     if load_verifier(database).await?.is_some() {
         return Err("入口密码已经初始化".into());
     }
-    let verifier = run_blocking_access_operation(move || hash_password(password)).await?;
+    let normalized_answer = validate_recovery_setup(&recovery)?;
+    let answer_for_hash = normalized_answer.clone();
+    let (verifier, answer_verifier) = run_blocking_access_operation(move || {
+        Ok((
+            hash_password(password)?,
+            hash_recovery_answer(answer_for_hash)?,
+        ))
+    })
+    .await?;
+    let mut transaction = database
+        .pool()
+        .begin()
+        .await
+        .map_err(|error| db_error("开始初始化入口安全事务失败", error))?;
     let now = chrono::Utc::now().to_rfc3339();
-    let result = sqlx::query(
-        "INSERT INTO app_access (id, password_verifier, updated_at)
-         SELECT 1, ?, ?
-         WHERE NOT EXISTS (SELECT 1 FROM app_access WHERE id = 1)",
-    )
-    .bind(verifier)
-    .bind(now)
-    .execute(database.pool())
-    .await
-    .map_err(|error| db_error("保存入口密码失败", error))?;
+    let result =
+        sqlx::query("INSERT INTO app_access (id, password_verifier, updated_at) VALUES (1, ?, ?)")
+            .bind(verifier)
+            .bind(&now)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| db_error("保存入口密码失败", error))?;
     if result.rows_affected() != 1 {
+        transaction.rollback().await.ok();
         return Err("入口密码已经初始化".into());
     }
+    sqlx::query(
+        "INSERT INTO app_access_recovery (id, question, answer_verifier, updated_at)
+         VALUES (1, ?, ?, ?)",
+    )
+    .bind(recovery.question.trim())
+    .bind(answer_verifier)
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| db_error("保存恢复问题失败", error))?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| db_error("提交入口安全初始化失败", error))?;
     access.set_unlocked(true);
     status_impl(database, access).await
 }
@@ -172,12 +321,13 @@ async fn initialize_impl(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn initialize_app_access(
     password: String,
+    recovery: AppAccessRecoverySetup,
     database: State<'_, Database>,
     backup: State<'_, BackupState>,
     access: State<'_, AppAccessState>,
 ) -> Result<AppAccessStatus, String> {
     let _operation_guard = backup.lock_data_operation().await;
-    initialize_impl(database.inner(), access.inner(), password).await
+    initialize_impl(database.inner(), access.inner(), password, recovery).await
 }
 
 async fn unlock_impl(
@@ -268,16 +418,98 @@ pub async fn change_app_access_password(
     .await
 }
 
+async fn set_recovery_impl(
+    database: &Database,
+    access: &AppAccessState,
+    current_password: String,
+    recovery: AppAccessRecoverySetup,
+) -> Result<AppAccessStatus, String> {
+    access.require_unlocked()?;
+    let normalized_answer = validate_recovery_setup(&recovery)?;
+    let verifier = load_verifier(database)
+        .await?
+        .ok_or_else(|| "入口密码尚未初始化".to_string())?;
+    let verified =
+        run_blocking_access_operation(move || verify_password(verifier, current_password)).await?;
+    if !verified {
+        return Err("当前入口密码不正确".into());
+    }
+    let answer_verifier =
+        run_blocking_access_operation(move || hash_recovery_answer(normalized_answer)).await?;
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO app_access_recovery (id, question, answer_verifier, updated_at)
+         VALUES (1, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+            question = excluded.question,
+            answer_verifier = excluded.answer_verifier,
+            updated_at = excluded.updated_at",
+    )
+    .bind(recovery.question.trim())
+    .bind(answer_verifier)
+    .bind(now)
+    .execute(database.pool())
+    .await
+    .map_err(|error| db_error("保存恢复问题失败", error))?;
+    status_impl(database, access).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn set_app_access_recovery(
+    current_password: String,
+    recovery: AppAccessRecoverySetup,
+    database: State<'_, Database>,
+    backup: State<'_, BackupState>,
+    access: State<'_, AppAccessState>,
+) -> Result<AppAccessStatus, String> {
+    let _operation_guard = backup.lock_data_operation().await;
+    set_recovery_impl(database.inner(), access.inner(), current_password, recovery).await
+}
+
 async fn reset_password_impl(
     database: &Database,
     access: &AppAccessState,
     new_password: String,
     confirmation_text: String,
+    recovery_proof: AppAccessRecoveryProof,
 ) -> Result<AppAccessStatus, String> {
     if confirmation_text != RESET_CONFIRMATION_TEXT {
         return Err("请输入“重置”以确认无损重置入口密码".into());
     }
-    let verifier = run_blocking_access_operation(move || hash_password(new_password)).await?;
+    let existing_recovery_verifier = load_recovery_verifier(database).await?;
+    let enrollment = match (existing_recovery_verifier, recovery_proof) {
+        (Some(verifier), AppAccessRecoveryProof::Answer { answer }) => {
+            let verified =
+                run_blocking_access_operation(move || verify_recovery_answer(verifier, answer))
+                    .await?;
+            if !verified {
+                return Err("恢复答案错误".into());
+            }
+            None
+        }
+        (Some(_), AppAccessRecoveryProof::LegacyEnrollment { .. }) => {
+            return Err("恢复问题已经存在，请先回答当前问题".into());
+        }
+        (None, AppAccessRecoveryProof::LegacyEnrollment { recovery }) => {
+            let normalized_answer = validate_recovery_setup(&recovery)?;
+            Some((recovery.question.trim().to_string(), normalized_answer))
+        }
+        (None, AppAccessRecoveryProof::Answer { .. }) => {
+            return Err("旧用户需要先设置恢复问题".into());
+        }
+    };
+    let answer_for_hash = enrollment.as_ref().map(|(_, answer)| answer.clone());
+    let (verifier, answer_verifier) = run_blocking_access_operation(move || {
+        let answer_verifier = answer_for_hash.map(hash_recovery_answer).transpose()?;
+        Ok((hash_password(new_password)?, answer_verifier))
+    })
+    .await?;
+    let mut transaction = database
+        .pool()
+        .begin()
+        .await
+        .map_err(|error| db_error("开始重置入口安全事务失败", error))?;
+    let now = chrono::Utc::now().to_rfc3339();
     sqlx::query(
         "INSERT INTO app_access (id, password_verifier, updated_at)
          VALUES (1, ?, ?)
@@ -286,10 +518,30 @@ async fn reset_password_impl(
             updated_at = excluded.updated_at",
     )
     .bind(verifier)
-    .bind(chrono::Utc::now().to_rfc3339())
-    .execute(database.pool())
+    .bind(&now)
+    .execute(&mut *transaction)
     .await
     .map_err(|error| db_error("重置入口密码失败", error))?;
+    if let Some((question, _)) = enrollment {
+        sqlx::query(
+            "INSERT INTO app_access_recovery (id, question, answer_verifier, updated_at)
+             VALUES (1, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                question = excluded.question,
+                answer_verifier = excluded.answer_verifier,
+                updated_at = excluded.updated_at",
+        )
+        .bind(question)
+        .bind(answer_verifier.expect("旧用户兼容注册必须生成答案校验值"))
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| db_error("创建恢复问题失败", error))?;
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|error| db_error("提交入口密码重置失败", error))?;
     access.set_unlocked(true);
     status_impl(database, access).await
 }
@@ -298,6 +550,7 @@ async fn reset_password_impl(
 pub async fn reset_app_access_password(
     new_password: String,
     confirmation_text: String,
+    recovery_proof: AppAccessRecoveryProof,
     database: State<'_, Database>,
     backup: State<'_, BackupState>,
     access: State<'_, AppAccessState>,
@@ -308,6 +561,7 @@ pub async fn reset_app_access_password(
         access.inner(),
         new_password,
         confirmation_text,
+        recovery_proof,
     )
     .await
 }
@@ -410,6 +664,7 @@ async fn migrate_impl(
     access: &AppAccessState,
     vault: &VaultState,
     password: String,
+    recovery: Option<AppAccessRecoverySetup>,
 ) -> Result<LegacyCredentialMigrationResult, String> {
     let rows = load_migration_rows(database).await?;
     if rows.is_empty() {
@@ -424,6 +679,15 @@ async fn migrate_impl(
     if initialized_before {
         access.require_unlocked()?;
     }
+    let recovery_to_create = if initialized_before {
+        None
+    } else {
+        Some(recovery.ok_or_else(|| "首次迁移入口密码时必须设置恢复问题".to_string())?)
+    };
+    let recovery_answer = recovery_to_create
+        .as_ref()
+        .map(validate_recovery_setup)
+        .transpose()?;
 
     let sources = rows
         .iter()
@@ -435,10 +699,18 @@ async fn migrate_impl(
         worker_vault.read_legacy_credentials(legacy_password, sources)
     })
     .await?;
-    let new_verifier = if initialized_before {
-        None
+    let (new_verifier, new_recovery_verifier) = if initialized_before {
+        (None, None)
     } else {
-        Some(run_blocking_access_operation(move || hash_password(password)).await?)
+        let recovery_answer = recovery_answer.clone().expect("恢复答案已经校验");
+        let (verifier, answer_verifier) = run_blocking_access_operation(move || {
+            Ok((
+                hash_password(password)?,
+                hash_recovery_answer(recovery_answer)?,
+            ))
+        })
+        .await?;
+        (Some(verifier), Some(answer_verifier))
     };
 
     let mut transaction = database
@@ -461,6 +733,17 @@ async fn migrate_impl(
             transaction.rollback().await.ok();
             return Err("入口密码状态已变化，请重新操作".into());
         }
+        let recovery = recovery_to_create.as_ref().expect("首次迁移必须带恢复设置");
+        sqlx::query(
+            "INSERT INTO app_access_recovery (id, question, answer_verifier, updated_at)
+             VALUES (1, ?, ?, ?)",
+        )
+        .bind(recovery.question.trim())
+        .bind(new_recovery_verifier.expect("首次迁移必须生成恢复答案校验值"))
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| db_error("保存迁移后的恢复问题失败", error))?;
     }
 
     let mut migrated_count = 0_usize;
@@ -503,13 +786,21 @@ async fn migrate_impl(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn migrate_legacy_credentials(
     password: String,
+    recovery: Option<AppAccessRecoverySetup>,
     database: State<'_, Database>,
     backup: State<'_, BackupState>,
     access: State<'_, AppAccessState>,
     vault: State<'_, VaultState>,
 ) -> Result<LegacyCredentialMigrationResult, String> {
     let _operation_guard = backup.lock_data_operation().await;
-    migrate_impl(database.inner(), access.inner(), vault.inner(), password).await
+    migrate_impl(
+        database.inner(),
+        access.inner(),
+        vault.inner(),
+        password,
+        recovery,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -534,6 +825,47 @@ mod tests {
             "timekeeper-app-access-{name}-{}",
             uuid::Uuid::now_v7()
         ))
+    }
+
+    #[test]
+    fn accepts_only_the_canonical_access_verifier_profile() {
+        let valid = argon2::hash_encoded(
+            b"temporary password",
+            &[7; 32],
+            &argon2::Config::rfc9106_low_mem(),
+        )
+        .unwrap();
+        assert!(is_supported_access_verifier(&valid));
+        assert!(!is_supported_access_verifier("$argon2id$broken"));
+        assert!(!is_supported_access_verifier(
+            "$argon2id$v=19$m=8,t=1,p=1$c2FsdA$aGFzaA"
+        ));
+        assert!(!is_supported_access_verifier(
+            "$argon2id$v=19$m=999999999,t=99,p=1$c2FsdA$aGFzaA"
+        ));
+    }
+
+    #[test]
+    fn recovery_debug_output_redacts_answers() {
+        let setup = AppAccessRecoverySetup {
+            question: "公开问题".into(),
+            answer: "绝不能出现在日志里的答案".into(),
+        };
+        let proof = AppAccessRecoveryProof::LegacyEnrollment {
+            recovery: setup.clone(),
+        };
+        let answer_proof = AppAccessRecoveryProof::Answer {
+            answer: setup.answer.clone(),
+        };
+
+        for output in [
+            format!("{setup:?}"),
+            format!("{proof:?}"),
+            format!("{answer_proof:?}"),
+        ] {
+            assert!(!output.contains("绝不能出现在日志里的答案"));
+            assert!(output.contains("<redacted>"));
+        }
     }
 
     #[test]
@@ -769,9 +1101,17 @@ mod tests {
         run_async(async {
             let database = Database::in_memory().await.unwrap();
             let access = AppAccessState::new();
-            let initialized = initialize_impl(&database, &access, "first password".into())
-                .await
-                .unwrap();
+            let initialized = initialize_impl(
+                &database,
+                &access,
+                "first password".into(),
+                AppAccessRecoverySetup {
+                    question: "常用角色".into(),
+                    answer: "青瓷".into(),
+                },
+            )
+            .await
+            .unwrap();
             assert!(initialized.initialized);
             assert!(initialized.unlocked);
 
@@ -797,14 +1137,49 @@ mod tests {
             .execute(database.pool())
             .await
             .unwrap();
+            sqlx::query(
+                "INSERT INTO appointments (
+                    id, service_date, contact_name, mode, service_status,
+                    settlement_status, amount_minor, created_at, updated_at
+                 ) VALUES (
+                    'kept-appointment', '2026-08-05', 'kept-contact', 'business',
+                    'completed', 'settled', 100, 'now', 'now'
+                 )",
+            )
+            .execute(database.pool())
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO appointment_credentials (appointment_id, password)
+                 VALUES ('kept-appointment', 'kept-secret')",
+            )
+            .execute(database.pool())
+            .await
+            .unwrap();
             assert!(
-                reset_password_impl(&database, &access, "new password".into(), "错误".into())
-                    .await
-                    .is_err()
-            );
-            reset_password_impl(&database, &access, "new password".into(), "重置".into())
+                reset_password_impl(
+                    &database,
+                    &access,
+                    "new password".into(),
+                    "错误".into(),
+                    AppAccessRecoveryProof::Answer {
+                        answer: "青瓷".into()
+                    },
+                )
                 .await
-                .unwrap();
+                .is_err()
+            );
+            reset_password_impl(
+                &database,
+                &access,
+                "new password".into(),
+                "重置".into(),
+                AppAccessRecoveryProof::Answer {
+                    answer: "青瓷".into(),
+                },
+            )
+            .await
+            .unwrap();
             assert_eq!(
                 sqlx::query_scalar::<_, i64>(
                     "SELECT COUNT(*) FROM account_profiles WHERE id = 'kept-profile'",
@@ -813,6 +1188,25 @@ mod tests {
                 .await
                 .unwrap(),
                 1
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM appointments WHERE id = 'kept-appointment'",
+                )
+                .fetch_one(database.pool())
+                .await
+                .unwrap(),
+                1
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT password FROM appointment_credentials
+                     WHERE appointment_id = 'kept-appointment'",
+                )
+                .fetch_one(database.pool())
+                .await
+                .unwrap(),
+                "kept-secret"
             );
             access.set_unlocked(false);
             assert!(
@@ -825,6 +1219,225 @@ mod tests {
                     .await
                     .unwrap()
                     .unlocked
+            );
+        });
+    }
+
+    #[test]
+    fn legacy_recovery_enrollment_is_atomic_and_can_only_happen_once() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let access = AppAccessState::new();
+            initialize_impl(
+                &database,
+                &access,
+                "legacy password".into(),
+                AppAccessRecoverySetup {
+                    question: "临时问题".into(),
+                    answer: "临时答案".into(),
+                },
+            )
+            .await
+            .unwrap();
+            sqlx::query("DELETE FROM app_access_recovery WHERE id = 1")
+                .execute(database.pool())
+                .await
+                .unwrap();
+            let verifier_before = load_verifier(&database).await.unwrap().unwrap();
+
+            sqlx::raw_sql(
+                "CREATE TRIGGER reject_recovery_insert
+                 BEFORE INSERT ON app_access_recovery
+                 BEGIN
+                    SELECT RAISE(FAIL, 'forced recovery enrollment rollback');
+                 END;",
+            )
+            .execute(database.pool())
+            .await
+            .unwrap();
+            let recovery = AppAccessRecoverySetup {
+                question: "首次设置的问题".into(),
+                answer: "首次设置的答案".into(),
+            };
+            assert!(
+                reset_password_impl(
+                    &database,
+                    &access,
+                    "new password".into(),
+                    "重置".into(),
+                    AppAccessRecoveryProof::LegacyEnrollment {
+                        recovery: recovery.clone(),
+                    },
+                )
+                .await
+                .is_err()
+            );
+            assert_eq!(
+                load_verifier(&database).await.unwrap().unwrap(),
+                verifier_before
+            );
+            assert!(load_recovery_verifier(&database).await.unwrap().is_none());
+
+            sqlx::query("DROP TRIGGER reject_recovery_insert")
+                .execute(database.pool())
+                .await
+                .unwrap();
+            reset_password_impl(
+                &database,
+                &access,
+                "new password".into(),
+                "重置".into(),
+                AppAccessRecoveryProof::LegacyEnrollment {
+                    recovery: recovery.clone(),
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                load_recovery_question(&database).await.unwrap().as_deref(),
+                Some("首次设置的问题")
+            );
+
+            assert!(
+                reset_password_impl(
+                    &database,
+                    &access,
+                    "another password".into(),
+                    "重置".into(),
+                    AppAccessRecoveryProof::LegacyEnrollment { recovery },
+                )
+                .await
+                .is_err()
+            );
+            reset_password_impl(
+                &database,
+                &access,
+                "another password".into(),
+                "重置".into(),
+                AppAccessRecoveryProof::Answer {
+                    answer: "首次设置的答案".into(),
+                },
+            )
+            .await
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn recovery_answers_guard_reset_and_recovery_updates_are_transactional() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let access = AppAccessState::new();
+            initialize_impl(
+                &database,
+                &access,
+                "initial password".into(),
+                AppAccessRecoverySetup {
+                    question: "常用角色？".into(),
+                    answer: "青 瓷".into(),
+                },
+            )
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO account_profiles (
+                    id, account_name, needs_review, sort_order, created_at, updated_at
+                 ) VALUES ('recovery-kept', 'kept', 0, 0, 'now', 'now')",
+            )
+            .execute(database.pool())
+            .await
+            .unwrap();
+
+            assert!(
+                set_recovery_impl(
+                    &database,
+                    &access,
+                    "wrong password".into(),
+                    AppAccessRecoverySetup {
+                        question: "新问题".into(),
+                        answer: "新答案".into(),
+                    },
+                )
+                .await
+                .is_err()
+            );
+            set_recovery_impl(
+                &database,
+                &access,
+                "initial password".into(),
+                AppAccessRecoverySetup {
+                    question: "新问题".into(),
+                    answer: "新答案".into(),
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                status_impl(&database, &access)
+                    .await
+                    .unwrap()
+                    .recovery_question
+                    .as_deref(),
+                Some("新问题")
+            );
+
+            assert!(
+                reset_password_impl(
+                    &database,
+                    &access,
+                    "next password".into(),
+                    "重置".into(),
+                    AppAccessRecoveryProof::Answer {
+                        answer: "错误答案".into(),
+                    },
+                )
+                .await
+                .is_err()
+            );
+            sqlx::raw_sql(
+                "CREATE TRIGGER reject_recovery_update
+                 BEFORE UPDATE ON app_access_recovery
+                 BEGIN
+                    SELECT RAISE(FAIL, 'forced recovery rollback');
+                 END;",
+            )
+            .execute(database.pool())
+            .await
+            .unwrap();
+            assert!(
+                set_recovery_impl(
+                    &database,
+                    &access,
+                    "initial password".into(),
+                    AppAccessRecoverySetup {
+                        question: "不会保存".into(),
+                        answer: "答案".into(),
+                    },
+                )
+                .await
+                .is_err()
+            );
+            sqlx::query("DROP TRIGGER reject_recovery_update")
+                .execute(database.pool())
+                .await
+                .unwrap();
+            assert_eq!(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT question FROM app_access_recovery WHERE id = 1",
+                )
+                .fetch_one(database.pool())
+                .await
+                .unwrap(),
+                "新问题"
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM account_profiles WHERE id = 'recovery-kept'",
+                )
+                .fetch_one(database.pool())
+                .await
+                .unwrap(),
+                1
             );
         });
     }
@@ -887,9 +1500,18 @@ mod tests {
             .unwrap();
 
             assert!(
-                migrate_impl(&database, &access, &vault, "wrong password".into())
-                    .await
-                    .is_err()
+                migrate_impl(
+                    &database,
+                    &access,
+                    &vault,
+                    "wrong password".into(),
+                    Some(AppAccessRecoverySetup {
+                        question: "常用角色".into(),
+                        answer: "青瓷".into()
+                    }),
+                )
+                .await
+                .is_err()
             );
             sqlx::raw_sql(
                 "CREATE TRIGGER reject_legacy_appointment_credential
@@ -902,9 +1524,18 @@ mod tests {
             .await
             .unwrap();
             assert!(
-                migrate_impl(&database, &access, &vault, "legacy password".into())
-                    .await
-                    .is_err()
+                migrate_impl(
+                    &database,
+                    &access,
+                    &vault,
+                    "legacy password".into(),
+                    Some(AppAccessRecoverySetup {
+                        question: "常用角色".into(),
+                        answer: "青瓷".into()
+                    }),
+                )
+                .await
+                .is_err()
             );
             assert_eq!(
                 sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM app_access")
@@ -934,9 +1565,18 @@ mod tests {
                 .execute(database.pool())
                 .await
                 .unwrap();
-            let migrated = migrate_impl(&database, &access, &vault, "legacy password".into())
-                .await
-                .unwrap();
+            let migrated = migrate_impl(
+                &database,
+                &access,
+                &vault,
+                "legacy password".into(),
+                Some(AppAccessRecoverySetup {
+                    question: "常用角色".into(),
+                    answer: "青瓷".into(),
+                }),
+            )
+            .await
+            .unwrap();
             assert_eq!(migrated.migrated_count, 2);
             assert_eq!(migrated.missing_count, 0);
             assert_eq!(migrated.pending_count, 0);
@@ -992,9 +1632,18 @@ mod tests {
             .await
             .unwrap();
 
-            let result = migrate_impl(&database, &access, &vault, "legacy password".into())
-                .await
-                .unwrap();
+            let result = migrate_impl(
+                &database,
+                &access,
+                &vault,
+                "legacy password".into(),
+                Some(AppAccessRecoverySetup {
+                    question: "常用角色".into(),
+                    answer: "青瓷".into(),
+                }),
+            )
+            .await
+            .unwrap();
             assert_eq!(result.migrated_count, 0);
             assert_eq!(result.missing_count, 1);
             assert_eq!(result.pending_count, 1);

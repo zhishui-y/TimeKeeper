@@ -154,9 +154,6 @@ pub fn run() {
             accounts::get_account_profile,
             accounts::create_account_profile,
             accounts::update_account_profile,
-            accounts::update_account_profile_usage,
-            accounts::clear_account_profile_usage,
-            accounts::sync_account_profile_usage_week,
             accounts::delete_account_profile,
             accounts::delete_account_profiles,
             accounts::reorder_account_profiles,
@@ -173,9 +170,11 @@ pub fn run() {
             app_access::unlock_app_access,
             app_access::lock_app_access,
             app_access::change_app_access_password,
+            app_access::set_app_access_recovery,
             app_access::reset_app_access_password,
             app_access::migrate_legacy_credentials,
             settings::get_settings,
+            settings::get_app_appearance,
             settings::update_settings,
             settings::update_account_table_column_widths,
             settings::update_appointment_table_column_widths,
@@ -242,6 +241,9 @@ mod access_boundary_tests {
             );
             for block in blocks {
                 let name = command_name(block);
+                if name == "get_app_appearance" {
+                    continue;
+                }
                 let body_start = block.find('{').expect("command must have a body");
                 let guard_prefix = &block[body_start..block.len().min(body_start + 1_200)];
                 assert!(

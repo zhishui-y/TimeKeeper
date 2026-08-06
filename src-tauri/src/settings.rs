@@ -5,7 +5,6 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use thiserror::Error;
@@ -18,6 +17,8 @@ use crate::{
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const SETTINGS_RECOVERY_FILE_NAME: &str = "settings.previous.json";
 pub const DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL: &str = "https://zhishui.cc/api/jx3/excel/";
+pub const DEFAULT_FONT_FAMILY: &str = "Microsoft YaHei UI";
+pub const DEFAULT_BASE_FONT_SIZE: u32 = 15;
 
 fn default_account_role_data_server_url() -> String {
     DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL.to_string()
@@ -52,7 +53,8 @@ pub struct AccountTableColumnWidths {
     pub current_score: u32,
     pub highest_score: u32,
     pub score_updated_at: u32,
-    pub weekly: u32,
+    #[serde(alias = "weekly")]
+    pub weekly_wins: u32,
     pub notes: u32,
 }
 
@@ -69,7 +71,7 @@ impl Default for AccountTableColumnWidths {
             current_score: 62,
             highest_score: 62,
             score_updated_at: 102,
-            weekly: 160,
+            weekly_wins: 96,
             notes: 160,
         }
     }
@@ -112,7 +114,11 @@ impl AccountTableColumnWidths {
                 self.score_updated_at,
                 MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
             ),
-            ("本周", self.weekly, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
+            (
+                "本周胜场",
+                self.weekly_wins,
+                MIN_RESIZABLE_TABLE_COLUMN_WIDTH,
+            ),
             ("备注", self.notes, MIN_RESIZABLE_TABLE_COLUMN_WIDTH),
         ];
         for (label, width, minimum) in widths {
@@ -193,9 +199,13 @@ impl AppointmentTableColumnWidths {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    #[serde(default = "default_font_family")]
+    pub font_family: String,
+    #[serde(default = "default_base_font_size")]
+    pub base_font_size: u32,
     pub default_reminder_minutes: u32,
     pub backup_retention: u32,
     pub last_automatic_backup_date: Option<String>,
@@ -203,32 +213,94 @@ pub struct AppSettings {
     pub account_table_column_widths: AccountTableColumnWidths,
     #[serde(default)]
     pub appointment_table_column_widths: AppointmentTableColumnWidths,
-    #[serde(default)]
-    pub last_account_usage_week_start: Option<String>,
     #[serde(default = "default_account_role_data_server_url")]
     pub account_role_data_server_url: String,
+    #[serde(default)]
+    pub account_role_data_api_key: String,
+}
+
+impl std::fmt::Debug for AppSettings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AppSettings")
+            .field("font_family", &self.font_family)
+            .field("base_font_size", &self.base_font_size)
+            .field("default_reminder_minutes", &self.default_reminder_minutes)
+            .field("backup_retention", &self.backup_retention)
+            .field(
+                "last_automatic_backup_date",
+                &self.last_automatic_backup_date,
+            )
+            .field(
+                "account_table_column_widths",
+                &self.account_table_column_widths,
+            )
+            .field(
+                "appointment_table_column_widths",
+                &self.appointment_table_column_widths,
+            )
+            .field(
+                "account_role_data_server_url",
+                &self.account_role_data_server_url,
+            )
+            .field("account_role_data_api_key", &"<redacted>")
+            .finish()
+    }
+}
+
+fn default_font_family() -> String {
+    DEFAULT_FONT_FAMILY.to_string()
+}
+
+fn default_base_font_size() -> u32 {
+    DEFAULT_BASE_FONT_SIZE
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppearanceSettings {
+    pub font_family: String,
+    pub base_font_size: u32,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            font_family: default_font_family(),
+            base_font_size: default_base_font_size(),
             default_reminder_minutes: 30,
             backup_retention: 30,
             last_automatic_backup_date: None,
             account_table_column_widths: AccountTableColumnWidths::default(),
             appointment_table_column_widths: AppointmentTableColumnWidths::default(),
-            last_account_usage_week_start: None,
             account_role_data_server_url: default_account_role_data_server_url(),
+            account_role_data_api_key: String::new(),
         }
     }
 }
 
 impl AppSettings {
     fn normalize(&mut self) {
+        self.font_family = self.font_family.trim().to_string();
         self.account_role_data_server_url = self.account_role_data_server_url.trim().to_string();
+        self.account_role_data_api_key = self.account_role_data_api_key.trim().to_string();
     }
 
     pub(crate) fn validate(&self) -> Result<(), SettingsError> {
+        let font_length = self.font_family.chars().count();
+        if !(1..=120).contains(&font_length)
+            || self.font_family.contains('\r')
+            || self.font_family.contains('\n')
+        {
+            return Err(SettingsError::Validation(
+                "字体名必须是1到120个字符的单一系统字体名".into(),
+            ));
+        }
+        if !(14..=18).contains(&self.base_font_size) {
+            return Err(SettingsError::Validation(
+                "基础字号必须在14到18像素之间".into(),
+            ));
+        }
         if self.default_reminder_minutes > 7 * 24 * 60 {
             return Err(SettingsError::Validation("默认提醒时间不能超过7天".into()));
         }
@@ -244,16 +316,6 @@ impl AppSettings {
         }
         self.account_table_column_widths.validate()?;
         self.appointment_table_column_widths.validate()?;
-        if let Some(date) = &self.last_account_usage_week_start {
-            let date = NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| {
-                SettingsError::Validation("账号本周起始日期必须使用 YYYY-MM-DD 格式".into())
-            })?;
-            if date.weekday().num_days_from_monday() != 0 {
-                return Err(SettingsError::Validation(
-                    "账号本周起始日期必须是周一".into(),
-                ));
-            }
-        }
         if self.account_role_data_server_url.is_empty() {
             return Err(SettingsError::Validation(
                 "角色数据服务器 URL 不能为空".into(),
@@ -317,8 +379,6 @@ impl SettingsState {
 
         // This value is maintained only after a backup has actually succeeded.
         proposed.last_automatic_backup_date = current.last_automatic_backup_date.clone();
-        // This value advances only after weekly account usage synchronization succeeds.
-        proposed.last_account_usage_week_start = current.last_account_usage_week_start.clone();
         proposed.normalize();
         proposed.validate()?;
         write_settings_atomic(&self.path, &self.recovery_path, &proposed)?;
@@ -364,23 +424,6 @@ impl SettingsState {
         Ok(widths)
     }
 
-    pub(crate) fn record_account_usage_week_start(
-        &self,
-        date: NaiveDate,
-    ) -> Result<AppSettings, SettingsError> {
-        if date.weekday().num_days_from_monday() != 0 {
-            return Err(SettingsError::Validation(
-                "账号本周起始日期必须是周一".into(),
-            ));
-        }
-        let mut current = self.lock()?;
-        let mut updated = current.clone();
-        updated.last_account_usage_week_start = Some(date.format("%Y-%m-%d").to_string());
-        write_settings_atomic(&self.path, &self.recovery_path, &updated)?;
-        *current = updated.clone();
-        Ok(updated)
-    }
-
     fn lock(&self) -> Result<MutexGuard<'_, AppSettings>, SettingsError> {
         self.inner.lock().map_err(|_| SettingsError::StatePoisoned)
     }
@@ -393,6 +436,15 @@ pub fn get_settings(
 ) -> Result<AppSettings, String> {
     access.require_unlocked()?;
     state.snapshot().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn get_app_appearance(state: State<'_, SettingsState>) -> Result<AppearanceSettings, String> {
+    let settings = state.snapshot().map_err(|error| error.to_string())?;
+    Ok(AppearanceSettings {
+        font_family: settings.font_family,
+        base_font_size: settings.base_font_size,
+    })
 }
 
 #[tauri::command]
@@ -584,7 +636,7 @@ mod tests {
             loaded.appointment_table_column_widths,
             AppointmentTableColumnWidths::default()
         );
-        assert_eq!(loaded.last_account_usage_week_start, None);
+        assert_eq!(loaded.account_role_data_api_key, "");
         assert_eq!(
             loaded.account_role_data_server_url,
             DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL
@@ -637,7 +689,7 @@ mod tests {
 
         assert_eq!(widths.account_name, default_account_name_column_width());
         assert_eq!(widths.password, default_account_password_column_width());
-        assert_eq!(widths.weekly, 224);
+        assert_eq!(widths.weekly_wins, 224);
     }
 
     #[test]
@@ -646,6 +698,7 @@ mod tests {
         let state = SettingsState::load(&dir).unwrap();
         let proposed = AppSettings {
             account_role_data_server_url: "  https://example.test/jx3/  ".into(),
+            account_role_data_api_key: "  excel-secret  ".into(),
             ..AppSettings::default()
         };
         let updated = state.update_from_frontend(proposed).unwrap();
@@ -653,6 +706,7 @@ mod tests {
             updated.account_role_data_server_url,
             "https://example.test/jx3/"
         );
+        assert_eq!(updated.account_role_data_api_key, "excel-secret");
         assert_eq!(
             SettingsState::load(&dir)
                 .unwrap()
@@ -681,15 +735,22 @@ mod tests {
     }
 
     #[test]
+    fn debug_output_redacts_role_data_api_key() {
+        let settings = AppSettings {
+            account_role_data_api_key: "must-not-appear".into(),
+            ..AppSettings::default()
+        };
+        let output = format!("{settings:?}");
+        assert!(!output.contains("must-not-appear"));
+        assert!(output.contains("<redacted>"));
+    }
+
+    #[test]
     fn validates_and_persists_account_table_column_widths_independently() {
         let dir = test_dir("account-table-widths");
         let state = SettingsState::load(&dir).unwrap();
-        state
-            .record_account_usage_week_start(NaiveDate::from_ymd_opt(2026, 7, 27).unwrap())
-            .unwrap();
-
         let widths = AccountTableColumnWidths {
-            weekly: 240,
+            weekly_wins: 240,
             notes: 220,
             ..AccountTableColumnWidths::default()
         };
@@ -701,13 +762,8 @@ mod tests {
         );
         let reloaded = SettingsState::load(&dir).unwrap().snapshot().unwrap();
         assert_eq!(reloaded.account_table_column_widths, widths);
-        assert_eq!(
-            reloaded.last_account_usage_week_start.as_deref(),
-            Some("2026-07-27")
-        );
-
         let invalid = AccountTableColumnWidths {
-            weekly: 47,
+            weekly_wins: 47,
             ..AccountTableColumnWidths::default()
         };
         assert!(state.update_account_table_column_widths(invalid).is_err());
@@ -725,10 +781,6 @@ mod tests {
         state
             .update_account_table_column_widths(account_widths.clone())
             .unwrap();
-        state
-            .record_account_usage_week_start(NaiveDate::from_ymd_opt(2026, 7, 27).unwrap())
-            .unwrap();
-
         let widths = AppointmentTableColumnWidths {
             content: 220,
             account: 240,
@@ -744,11 +796,6 @@ mod tests {
         let reloaded = SettingsState::load(&dir).unwrap().snapshot().unwrap();
         assert_eq!(reloaded.appointment_table_column_widths, widths);
         assert_eq!(reloaded.account_table_column_widths, account_widths);
-        assert_eq!(
-            reloaded.last_account_usage_week_start.as_deref(),
-            Some("2026-07-27")
-        );
-
         let invalid = AppointmentTableColumnWidths {
             voice: 47,
             ..AppointmentTableColumnWidths::default()

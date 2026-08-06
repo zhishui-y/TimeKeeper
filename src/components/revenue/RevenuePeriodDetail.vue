@@ -296,7 +296,7 @@ useModalFocus({
   margin-top: 2px;
   color: var(--ink-strong);
   font-family: var(--font-serif, "Noto Serif SC", serif);
-  font-size: 20px;
+  font-size: calc(20px + var(--app-font-size-offset, 0px));
   letter-spacing: 0.02em;
 }
 
@@ -306,7 +306,7 @@ useModalFocus({
   gap: 6px;
   margin-top: 5px;
   color: var(--gold-strong);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
 }
 
@@ -341,13 +341,13 @@ useModalFocus({
 
 .detail-summary span {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .detail-summary strong {
   overflow: hidden;
   color: var(--ink-strong);
-  font-size: 14px;
+  font-size: calc(14px + var(--app-font-size-offset, 0px));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -375,12 +375,12 @@ useModalFocus({
   margin-top: 1px;
   color: var(--ink-strong);
   font-family: var(--font-serif, "Noto Serif SC", serif);
-  font-size: 14px;
+  font-size: calc(14px + var(--app-font-size-offset, 0px));
 }
 
 .daily-detail > header > span {
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .daily-table-wrap {
@@ -391,7 +391,7 @@ useModalFocus({
   min-width: 590px;
   width: 100%;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .daily-table__head,
@@ -408,7 +408,7 @@ useModalFocus({
 .daily-table__head {
   color: var(--ink-muted);
   background: color-mix(in srgb, var(--surface-soft) 54%, transparent);
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 600;
 }
 
@@ -432,7 +432,7 @@ useModalFocus({
 
 .daily-table__row > strong {
   color: var(--ink-strong);
-  font-size: 11px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
 }
 
@@ -474,7 +474,7 @@ useModalFocus({
   min-height: 180px;
   place-items: center;
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 @media (max-width: 680px) {

@@ -47,8 +47,8 @@ const showSecondary = computed(() => !props.compact || (!props.allDay && !shortE
   >
     <strong class="calendar-event-card__contact">{{ appointment.contactName }}</strong>
     <time v-if="compact" class="calendar-event-card__time">{{ timeLabel }}</time>
-    <small v-if="showSecondary" class="calendar-event-card__content">{{ contentLabel }}</small>
-    <span v-if="showSecondary" class="fc-event-progress calendar-event-card__progress">
+    <small v-if="!compact" class="calendar-event-card__content">{{ contentLabel }}</small>
+    <span v-if="!compact || showSecondary" class="fc-event-progress calendar-event-card__progress">
       {{ progressLabel }}
     </span>
   </div>
@@ -106,20 +106,20 @@ const showSecondary = computed(() => !props.compact || (!props.allDay && !shortE
 }
 
 .calendar-event-card__contact {
-  font-size: 10.5px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 750;
 }
 
 .calendar-event-card__time {
   justify-self: end;
-  font-family: "Bahnschrift", var(--font-sans);
-  font-size: 9px;
+  font-family: var(--app-font-family), "Bahnschrift", var(--font-sans);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-style: normal;
   font-weight: 700;
 }
 
 .calendar-event-card__content {
-  font-size: 9px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   opacity: 0.9;
 }
 
@@ -129,8 +129,8 @@ const showSecondary = computed(() => !props.compact || (!props.allDay && !shortE
   padding: 0 3px;
   border: 1px dashed currentColor;
   border-radius: 4px;
-  font-family: "Bahnschrift", var(--font-sans);
-  font-size: 8.5px;
+  font-family: var(--app-font-family), "Bahnschrift", var(--font-sans);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
   background: color-mix(in srgb, var(--surface) 72%, transparent);
 }
@@ -141,7 +141,7 @@ const showSecondary = computed(() => !props.compact || (!props.allDay && !shortE
   margin-top: auto;
   padding: 1px 4px;
   border-radius: 5px;
-  font-size: 10px;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .calendar-event-card--pending .calendar-event-card__contact {

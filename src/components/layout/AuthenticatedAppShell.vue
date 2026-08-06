@@ -138,7 +138,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :aria-busy="savingAppointment || deletingAppointment">
     <AppSidebar @lock="lockApplication" />
     <div class="app-main">
       <AppHeader
@@ -149,11 +149,14 @@ onUnmounted(() => {
       />
       <main class="app-content">
         <RouterView v-slot="{ Component, route: viewRoute }">
-          <Transition name="page" mode="out-in">
-            <component :is="Component" :key="viewRoute.name" />
-          </Transition>
+          <component :is="Component" :key="viewRoute.name" />
         </RouterView>
       </main>
+    </div>
+
+    <div v-if="savingAppointment || deletingAppointment" class="app-shell__busy" role="status">
+      <span class="app-shell__busy-dot" aria-hidden="true" />
+      {{ deletingAppointment ? "正在删除预约" : "正在保存预约" }}
     </div>
 
     <LazyAppointmentDrawer
@@ -206,6 +209,7 @@ onUnmounted(() => {
   min-height: 0;
   flex: 1;
   overflow: auto;
+  scrollbar-gutter: stable;
   padding: 22px 26px 26px;
   background:
     radial-gradient(circle at 92% 0%, rgba(181, 82, 62, 0.045), transparent 27%),
@@ -213,28 +217,52 @@ onUnmounted(() => {
     linear-gradient(145deg, #f5f4ed 0%, #efefe7 100%);
 }
 
-.page-enter-active,
-.page-leave-active {
-  transition:
-    opacity 170ms ease,
-    transform 170ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.page-enter-from {
-  opacity: 0;
-  transform: translateY(6px);
-}
-
-.page-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
-}
-
 .toast-enter-active,
 .toast-leave-active {
   transition:
     opacity 150ms ease,
     transform 150ms ease;
+}
+
+.app-shell__busy {
+  position: fixed;
+  z-index: 80;
+  top: 92px;
+  right: 28px;
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--brand-border);
+  border-radius: 999px;
+  color: var(--brand-strong);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: var(--shadow-soft);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+}
+
+.app-shell__busy-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: busy-pulse 1.1s ease-in-out infinite alternate;
+}
+
+@keyframes busy-pulse {
+  to {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell__busy-dot,
+  .toast-enter-active,
+  .toast-leave-active {
+    animation: none;
+    transition: none;
+  }
 }
 
 .toast-enter-from,

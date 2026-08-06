@@ -3,8 +3,10 @@ import type {
   AccountProfileInput,
   AccountRoleDataRefreshResult,
   AccountTableColumnWidths,
-  AccountUsageWeekSyncResult,
+  AppAccessRecoveryProof,
+  AppAccessRecoverySetup,
   AppAccessStatus,
+  AppearanceSettings,
   AppSettings,
   Appointment,
   AppointmentDeleteResult,
@@ -54,9 +56,6 @@ export interface ApiClient {
   getAccountProfile(id: string): Promise<AccountProfile>;
   createAccountProfile(input: AccountProfileInput): Promise<AccountProfile>;
   updateAccountProfile(id: string, input: AccountProfileInput): Promise<AccountProfile>;
-  updateAccountProfileUsage(id: string, usageInfo?: string | null): Promise<AccountProfile>;
-  clearAccountProfileUsage(): Promise<number>;
-  syncAccountProfileUsageWeek(): Promise<AccountUsageWeekSyncResult>;
   deleteAccountProfile(id: string): Promise<void>;
   deleteAccountProfiles(ids: string[]): Promise<number>;
   reorderAccountProfiles(ids: string[]): Promise<void>;
@@ -65,12 +64,23 @@ export interface ApiClient {
   refreshAccountProfileRoleData(ids: string[]): Promise<AccountRoleDataRefreshResult>;
 
   appAccessStatus(): Promise<AppAccessStatus>;
-  initializeAppAccess(password: string): Promise<AppAccessStatus>;
+  initializeAppAccess(password: string, recovery: AppAccessRecoverySetup): Promise<AppAccessStatus>;
   unlockAppAccess(password: string): Promise<AppAccessStatus>;
   lockAppAccess(): Promise<AppAccessStatus>;
   changeAppAccessPassword(currentPassword: string, newPassword: string): Promise<AppAccessStatus>;
-  resetAppAccessPassword(newPassword: string, confirmationText: string): Promise<AppAccessStatus>;
-  migrateLegacyCredentials(password: string): Promise<LegacyCredentialMigrationResult>;
+  resetAppAccessPassword(
+    newPassword: string,
+    confirmationText: string,
+    recoveryProof: AppAccessRecoveryProof,
+  ): Promise<AppAccessStatus>;
+  setAppAccessRecovery(
+    currentPassword: string,
+    recovery: AppAccessRecoverySetup,
+  ): Promise<AppAccessStatus>;
+  migrateLegacyCredentials(
+    password: string,
+    recovery?: AppAccessRecoverySetup,
+  ): Promise<LegacyCredentialMigrationResult>;
   copyAccountPassword(id: string): Promise<void>;
 
   getDashboardSummary(date: string): Promise<DashboardSummary>;
@@ -87,6 +97,7 @@ export interface ApiClient {
   createBackup(destination?: string): Promise<BackupResult>;
   restoreBackup(path: string): Promise<void>;
   getSettings(): Promise<AppSettings>;
+  getAppAppearance(): Promise<AppearanceSettings>;
   updateSettings(settings: AppSettings): Promise<AppSettings>;
   updateAccountTableColumnWidths(
     widths: AccountTableColumnWidths,
