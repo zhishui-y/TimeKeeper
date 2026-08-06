@@ -360,16 +360,4 @@ onMounted(loadColumnWidths);
   color: var(--ink);
   font-weight: 650;
 }
-
-@media (max-width: 1260px) {
-  .appointments-workspace__toolbar {
-    min-height: 96px;
-    flex-basis: 96px;
-    align-items: flex-start;
-  }
-
-  .appointments-workspace__toolbar > .button {
-    margin-top: 1px;
-  }
-}
 </style>

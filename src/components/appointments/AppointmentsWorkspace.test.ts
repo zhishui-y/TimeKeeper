@@ -433,7 +433,7 @@ describe("AppointmentsWorkspace", () => {
     wrapper.unmount();
   });
 
-  it("replaces the URL when applying or resetting filters", async () => {
+  it("replaces the URL as filters change and when resetting", async () => {
     const list = vi.spyOn(mockApi, "listAppointmentPage").mockResolvedValue(appointmentPage([]));
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settings());
     const replace = vi.spyOn(router, "replace");
@@ -442,9 +442,13 @@ describe("AppointmentsWorkspace", () => {
     });
     await flushPromises();
 
+    expect(wrapper.findAll("button").some((button) => button.text().trim() === "筛选")).toBe(false);
     await wrapper.get('input[placeholder="搜索联系人、内容或账号"]').setValue("  阿水  ");
+    await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({ query: "阿水" });
+    expect(list).toHaveBeenLastCalledWith({ query: "阿水" }, 1, 100);
+
     await wrapper.get('select[aria-label="预约进度"]').setValue("pending_settlement");
-    await wrapper.get("form").trigger("submit");
     await flushPromises();
     expect(replace).toHaveBeenLastCalledWith({
       query: { query: "阿水", progressStatus: "pending_settlement" },
@@ -477,13 +481,20 @@ describe("AppointmentsWorkspace", () => {
     await flushPromises();
 
     await wrapper.get('input[aria-label="开始日期"]').setValue("2026-08-10");
+    await flushPromises();
+    expect(list).toHaveBeenCalledTimes(1);
+
     await wrapper.get('input[aria-label="结束日期"]').setValue("2026-08-03");
-    await wrapper.get("form").trigger("submit");
     await flushPromises();
 
     expect(list).toHaveBeenCalledTimes(1);
     expect(router.currentRoute.value.query).toEqual({});
     expect(useUiStore(pinia).toast?.message).toBe("开始日期不能晚于结束日期");
+
+    await wrapper.get('input[placeholder="搜索联系人、内容或账号"]').setValue("阿水");
+    await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({ query: "阿水" });
+    expect(list).toHaveBeenLastCalledWith({ query: "阿水" }, 1, 100);
     wrapper.unmount();
   });
 });

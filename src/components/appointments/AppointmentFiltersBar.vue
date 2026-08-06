@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ListFilter, RotateCcw, Search } from "@lucide/vue";
+import { RotateCcw, Search } from "@lucide/vue";
 import { reactive, watch } from "vue";
 import type { AppointmentFilters } from "../../types/domain";
 
@@ -14,21 +14,78 @@ const emit = defineEmits<{
 
 const draft = reactive<AppointmentFilters>({ ...props.filters });
 
-function replaceDraft(value: AppointmentFilters): void {
-  Object.keys(draft).forEach((key) => delete draft[key as keyof AppointmentFilters]);
-  Object.assign(draft, value);
+function hasPartialDateRange(value: AppointmentFilters): boolean {
+  return Boolean(value.from) !== Boolean(value.to);
 }
 
-watch(() => props.filters, replaceDraft, { deep: true });
+function replaceDraft(value: AppointmentFilters, preservePartialDates = false): void {
+  const partialDates = preservePartialDates ? { from: draft.from, to: draft.to } : null;
+  Object.keys(draft).forEach((key) => delete draft[key as keyof AppointmentFilters]);
+  Object.assign(draft, value);
+  if (partialDates) Object.assign(draft, partialDates);
+}
 
 watch(
-  () => draft.mode,
-  (mode) => {
-    if (mode === "entertainment" && draft.progressStatus === "pending_settlement") {
-      delete draft.progressStatus;
-    }
-  },
+  () => props.filters,
+  (value) => replaceDraft(value, hasPartialDateRange(draft) && !value.from && !value.to),
+  { deep: true },
 );
+
+function filtersWithLastValidDateRange(): AppointmentFilters {
+  const next = { ...draft };
+  const hasValidDraftRange = Boolean(next.from && next.to && next.from <= next.to);
+  if (!hasValidDraftRange) {
+    delete next.from;
+    delete next.to;
+    if (props.filters.from && props.filters.to) {
+      next.from = props.filters.from;
+      next.to = props.filters.to;
+    }
+  }
+  return next;
+}
+
+function applyNonDateFilters(): void {
+  emit("apply", filtersWithLastValidDateRange());
+}
+
+function applyMode(): void {
+  if (draft.mode === "entertainment" && draft.progressStatus === "pending_settlement") {
+    delete draft.progressStatus;
+  }
+  applyNonDateFilters();
+}
+
+function applyDateRange(): void {
+  const from = draft.from ?? "";
+  const to = draft.to ?? "";
+
+  if (from && to) {
+    emit("apply", { ...draft });
+    return;
+  }
+
+  if (!from && !to) {
+    emit("apply", { ...draft });
+    return;
+  }
+
+  if (props.filters.from && props.filters.to) {
+    delete draft.from;
+    delete draft.to;
+    emit("apply", { ...draft });
+  }
+}
+
+function openDatePicker(event: globalThis.PointerEvent): void {
+  const input = event.currentTarget as InstanceType<typeof globalThis.HTMLInputElement> | null;
+  if (typeof input?.showPicker !== "function") return;
+  try {
+    input.showPicker();
+  } catch {
+    // 保留不支持主动打开日期面板的 WebView 默认点击行为。
+  }
+}
 
 function reset(): void {
   replaceDraft({});
@@ -37,25 +94,47 @@ function reset(): void {
 </script>
 
 <template>
-  <form class="filters" @submit.prevent="emit('apply', { ...draft })">
+  <div class="filters" role="search">
     <label class="search-field">
       <Search class="search-field__icon" :size="15" />
-      <input v-model="draft.query" class="input" placeholder="搜索联系人、内容或账号" />
+      <input
+        v-model="draft.query"
+        class="input"
+        placeholder="搜索联系人、内容或账号"
+        @input="applyNonDateFilters"
+      />
     </label>
-    <input
-      v-model="draft.from"
-      class="input filters__date filters__date--from"
-      type="date"
-      aria-label="开始日期"
-    />
+    <label class="filters__date-field filters__date--from" :class="{ 'is-empty': !draft.from }">
+      <span v-if="!draft.from" class="filters__date-placeholder" aria-hidden="true">
+        开始日期
+      </span>
+      <input
+        v-model="draft.from"
+        class="input filters__date"
+        type="date"
+        aria-label="开始日期"
+        @click="openDatePicker"
+        @change="applyDateRange"
+      />
+    </label>
     <span class="filters__separator">至</span>
-    <input
-      v-model="draft.to"
-      class="input filters__date filters__date--to"
-      type="date"
-      aria-label="结束日期"
-    />
-    <select v-model="draft.mode" class="select filters__select filters__mode" aria-label="预约模式">
+    <label class="filters__date-field filters__date--to" :class="{ 'is-empty': !draft.to }">
+      <span v-if="!draft.to" class="filters__date-placeholder" aria-hidden="true"> 结束日期 </span>
+      <input
+        v-model="draft.to"
+        class="input filters__date"
+        type="date"
+        aria-label="结束日期"
+        @click="openDatePicker"
+        @change="applyDateRange"
+      />
+    </label>
+    <select
+      v-model="draft.mode"
+      class="select filters__select filters__mode"
+      aria-label="预约模式"
+      @change="applyMode"
+    >
       <option :value="undefined">全部模式</option>
       <option value="business">业务</option>
       <option value="entertainment">娱乐</option>
@@ -64,6 +143,7 @@ function reset(): void {
       v-model="draft.progressStatus"
       class="select filters__select filters__status"
       aria-label="预约进度"
+      @change="applyNonDateFilters"
     >
       <option :value="undefined">全部进度</option>
       <option value="scheduled">已预约</option>
@@ -72,10 +152,6 @@ function reset(): void {
       <option value="completed">已完成</option>
       <option value="cancelled">已取消</option>
     </select>
-    <button class="button button--compact filters__apply" type="submit">
-      <ListFilter :size="14" />
-      筛选
-    </button>
     <button
       class="icon-button filters__reset"
       type="button"
@@ -85,7 +161,7 @@ function reset(): void {
     >
       <RotateCcw :size="15" />
     </button>
-  </form>
+  </div>
 </template>
 
 <style scoped>
@@ -96,8 +172,51 @@ function reset(): void {
   gap: 8px;
 }
 
-.filters__date {
+.filters__date-field {
+  position: relative;
+  display: block;
   width: 132px;
+}
+
+.filters__date {
+  width: 100%;
+  cursor: pointer;
+}
+
+.filters__date-placeholder {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 12px;
+  color: #8c9690;
+  font-size: calc(13px + var(--app-font-size-offset, 0px));
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.filters__date-field.is-empty .filters__date {
+  color: transparent;
+}
+
+.filters__date-field.is-empty .filters__date::-webkit-datetime-edit {
+  color: transparent;
+}
+
+.filters__date-field.is-empty .filters__date::-webkit-datetime-edit-year-field,
+.filters__date-field.is-empty .filters__date::-webkit-datetime-edit-month-field,
+.filters__date-field.is-empty .filters__date::-webkit-datetime-edit-day-field,
+.filters__date-field.is-empty .filters__date::-webkit-datetime-edit-text {
+  color: transparent;
+  background-color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.filters__date-field.is-empty .filters__date::-webkit-datetime-edit-year-field:focus,
+.filters__date-field.is-empty .filters__date::-webkit-datetime-edit-month-field:focus,
+.filters__date-field.is-empty .filters__date::-webkit-datetime-edit-day-field:focus {
+  color: transparent;
+  background-color: transparent;
+  -webkit-text-fill-color: transparent;
 }
 
 .filters__separator {
@@ -113,10 +232,8 @@ function reset(): void {
   .filters {
     display: grid;
     flex: 1;
-    grid-template-areas:
-      "search from separator to mode status"
-      "apply apply apply apply apply reset";
-    grid-template-columns: minmax(170px, 1fr) 120px auto 120px 94px 94px;
+    grid-template-areas: "search from separator to mode status reset";
+    grid-template-columns: minmax(150px, 1fr) 112px auto 112px 90px 90px 34px;
     gap: 5px;
   }
 
@@ -125,8 +242,8 @@ function reset(): void {
     width: 100%;
   }
 
-  .filters__date {
-    width: 120px;
+  .filters__date-field {
+    width: 112px;
   }
 
   .filters__date--from {
@@ -152,11 +269,6 @@ function reset(): void {
 
   .filters__status {
     grid-area: status;
-  }
-
-  .filters__apply {
-    grid-area: apply;
-    justify-self: end;
   }
 
   .filters__reset {
