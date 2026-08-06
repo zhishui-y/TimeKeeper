@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Appointment } from "../types/domain";
 import {
+  calendarAmountLabel,
   calendarAppointmentCounts,
   calendarEventClassNames,
   calendarEventTimeLabel,
@@ -33,13 +34,16 @@ describe("calendar appointment presentation", () => {
     const settled = appointment({ settlementStatus: "settled", amountMinor: 36_000 });
 
     expect(calendarEventClassNames(unsettled)).toContain("appointment-event--pending_settlement");
-    expect(calendarProgressLabel(unsettled)).toBe("待结算 · ¥180");
+    expect(calendarProgressLabel(unsettled)).toBe("待结算");
+    expect(calendarAmountLabel(unsettled)).toBe("¥180");
     expect(calendarEventClassNames(settled)).toContain("appointment-event--completed");
-    expect(calendarProgressLabel(settled)).toBe("已完成 · ¥360");
+    expect(calendarProgressLabel(settled)).toBe("已完成");
+    expect(calendarAmountLabel(settled)).toBe("¥360");
   });
 
   it("keeps every mode and cancellation visible through one progress label", () => {
     expect(calendarProgressLabel(appointment({ amountMinor: null }))).toBe("待结算");
+    expect(calendarAmountLabel(appointment({ amountMinor: null }))).toBe("—");
     expect(
       calendarProgressLabel(
         appointment({
@@ -50,9 +54,17 @@ describe("calendar appointment presentation", () => {
         }),
       ),
     ).toBe("已完成");
-    expect(calendarProgressLabel(appointment({ serviceStatus: "cancelled" }))).toBe(
-      "已取消 · ¥180",
-    );
+    expect(
+      calendarAmountLabel(
+        appointment({
+          mode: "entertainment",
+          serviceStatus: "completed",
+          settlementStatus: "not_applicable",
+          amountMinor: null,
+        }),
+      ),
+    ).toBe("—");
+    expect(calendarProgressLabel(appointment({ serviceStatus: "cancelled" }))).toBe("已取消");
   });
 
   it("counts active appointments by service date and excludes cancelled records", () => {

@@ -105,7 +105,7 @@ describe("TodayAppointmentList", () => {
     expect(wrapper.find('button[aria-label="复制账号密码"]').exists()).toBe(false);
   });
 
-  it("shows one unified status and exposes settlement only for pending business appointments", () => {
+  it("makes the pending status itself open settlement and keeps other statuses read-only", async () => {
     const wrapper = mount(TodayAppointmentList, {
       props: {
         appointments: [
@@ -125,9 +125,14 @@ describe("TodayAppointmentList", () => {
     const rows = wrapper.findAll(".appointment-row");
     expect(rows[0]?.findAll(".badge")).toHaveLength(1);
     expect(rows[0]?.get(".badge").text()).toBe("待结算");
-    expect(rows[0]?.find('button[aria-label="编辑结算"]').exists()).toBe(true);
+    const settlementButton = rows[0]?.get('button[aria-label="填写测试联系人 的结算金额"]');
+    expect(settlementButton?.text()).toBe("待结算");
+    await settlementButton?.trigger("click");
+    expect(wrapper.emitted("settle")?.[0]?.[0]).toMatchObject({ id: "appointment-1" });
+    expect(rows[0]?.find('button[aria-label="编辑结算"]').exists()).toBe(false);
     expect(rows[1]?.get(".badge").text()).toBe("已完成");
-    expect(rows[1]?.find('button[aria-label="编辑结算"]').exists()).toBe(false);
+    expect(rows[1]?.find(".appointment-row__settlement-status").exists()).toBe(false);
     expect(rows[2]?.get(".badge").text()).toBe("已完成");
+    expect(rows[2]?.find(".appointment-row__settlement-status").exists()).toBe(false);
   });
 });

@@ -73,7 +73,7 @@ const calendarOptions = computed<CalendarOptions>(() => ({
   selectMirror: true,
   eventStartEditable: false,
   eventDurationEditable: false,
-  eventMinHeight: 15,
+  eventMinHeight: 36,
   eventShortHeight: 36,
   slotMinTime: "08:00:00",
   slotMaxTime: "26:00:00",

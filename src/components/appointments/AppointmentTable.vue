@@ -67,6 +67,17 @@ function toggleOne(appointmentId: string, event: unknown): void {
   emit("toggleOne", appointmentId, isChecked(event));
 }
 
+function toggleRow(appointmentId: string, event: { target: unknown }): void {
+  const target = event.target as { closest?: (selector: string) => unknown } | null;
+  if (
+    typeof target?.closest === "function" &&
+    target.closest("button, input, select, textarea, a, [role='button'], [contenteditable='true']")
+  ) {
+    return;
+  }
+  emit("toggleOne", appointmentId, !selectedIdSet.value.has(appointmentId));
+}
+
 function previewColumnWidth(columnKey: AppointmentTableColumnKey, width: number): void {
   emit("previewColumnWidth", columnKey, width);
 }
@@ -236,7 +247,13 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
           </tr>
         </thead>
         <tbody>
-          <tr v-for="appointment in appointments" :key="appointment.id">
+          <tr
+            v-for="appointment in appointments"
+            :key="appointment.id"
+            :class="{ 'is-selected': selectedIdSet.has(appointment.id) }"
+            :aria-selected="selectedIdSet.has(appointment.id)"
+            @click="toggleRow(appointment.id, $event)"
+          >
             <td>
               <input
                 type="checkbox"
@@ -445,6 +462,7 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
 }
 
 .appointment-table tbody tr {
+  cursor: pointer;
   transition:
     background-color 140ms ease,
     box-shadow 140ms ease;
@@ -452,5 +470,16 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
 
 .appointment-table tbody tr:hover {
   box-shadow: inset 3px 0 0 color-mix(in srgb, var(--brand) 72%, transparent);
+}
+
+.appointment-table tbody tr.is-selected,
+.appointment-table tbody tr.is-selected:hover {
+  background: color-mix(in srgb, var(--brand-soft) 72%, var(--surface));
+  box-shadow: inset 4px 0 0 var(--brand);
+}
+
+.appointment-table tbody tr.is-selected td:last-child,
+.appointment-table tbody tr.is-selected:hover td:last-child {
+  background: color-mix(in srgb, var(--brand-soft) 72%, var(--surface));
 }
 </style>

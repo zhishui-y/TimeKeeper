@@ -107,6 +107,24 @@ function toggleOne(profileId: string, event: unknown): void {
   selectedIds.value = [...next];
 }
 
+function toggleRow(profileId: string, event: { target: unknown }): void {
+  const target = event.target as { closest?: (selector: string) => unknown } | null;
+  if (
+    typeof target?.closest === "function" &&
+    target.closest("button, input, select, textarea, a, [role='button'], [contenteditable='true']")
+  ) {
+    return;
+  }
+
+  const next = new Set(selectedIds.value);
+  if (next.has(profileId)) {
+    next.delete(profileId);
+  } else {
+    next.add(profileId);
+  }
+  selectedIds.value = [...next];
+}
+
 function ariaSort(sortKey: AccountProfileSortKey): "ascending" | "descending" | "none" {
   if (props.sortKey !== sortKey) return "none";
   return props.sortDirection === "asc" ? "ascending" : "descending";
@@ -444,11 +462,14 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
               refreshingIds.has(profile.id),
             ]"
             :class="{
+              'is-selected': selectedIdSet.has(profile.id),
               'needs-review': profile.needsReview,
               'is-dragging': draggedId === profile.id,
               'is-drop-before': dropTarget?.id === profile.id && dropTarget.placement === 'before',
               'is-drop-after': dropTarget?.id === profile.id && dropTarget.placement === 'after',
             }"
+            :aria-selected="selectedIdSet.has(profile.id)"
+            @click="toggleRow(profile.id, $event)"
             @dragover="dragOver(profile.id, $event)"
             @drop="dropOn(profile.id, $event)"
           >
@@ -782,6 +803,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
 }
 
 .account-table tbody tr {
+  cursor: pointer;
   transition:
     background-color 140ms ease,
     box-shadow 140ms ease;
@@ -789,6 +811,17 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
 
 .account-table tbody tr:hover {
   box-shadow: inset 3px 0 0 color-mix(in srgb, var(--brand) 72%, transparent);
+}
+
+.account-table tbody tr.is-selected,
+.account-table tbody tr.is-selected:hover {
+  background: color-mix(in srgb, var(--brand-soft) 72%, var(--surface));
+  box-shadow: inset 4px 0 0 var(--brand);
+}
+
+.account-table tbody tr.is-selected td:last-child,
+.account-table tbody tr.is-selected:hover td:last-child {
+  background: color-mix(in srgb, var(--brand-soft) 72%, var(--surface));
 }
 
 .account-table tbody tr.is-dragging {

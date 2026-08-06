@@ -166,6 +166,37 @@ describe("AppointmentTable", () => {
     });
   });
 
+  it("toggles existing batch selection from non-interactive row clicks", async () => {
+    const target = appointment();
+    const wrapper = mount(AppointmentTable, {
+      props: {
+        appointments: [target],
+        selectedIds: [],
+        allSelected: false,
+        selectionIndeterminate: false,
+        selectingAll: false,
+        columnWidths: { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+      },
+    });
+
+    const row = wrapper.get("tbody tr");
+    expect(row.attributes("aria-selected")).toBe("false");
+    await row.trigger("click");
+    expect(wrapper.emitted("toggleOne")).toEqual([[target.id, true]]);
+
+    await wrapper.setProps({ selectedIds: [target.id] });
+    expect(row.classes()).toContain("is-selected");
+    expect(row.attributes("aria-selected")).toBe("true");
+    await row.trigger("click");
+    const toggleEvents = wrapper.emitted("toggleOne") ?? [];
+    expect(toggleEvents[toggleEvents.length - 1]).toEqual([target.id, false]);
+
+    const eventCount = wrapper.emitted("toggleOne")?.length;
+    await wrapper.get('button[aria-label="编辑"]').trigger("click");
+    expect(wrapper.emitted("toggleOne")?.length).toBe(eventCount);
+  });
+
   it("exposes all ten resizable data columns and emits typed width actions", async () => {
     const wrapper = mount(AppointmentTable, {
       props: {

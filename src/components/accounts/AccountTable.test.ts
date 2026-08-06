@@ -72,6 +72,38 @@ describe("AccountTable", () => {
     expect(updates[updates.length - 1]?.[0]).toEqual(["account-2"]);
   });
 
+  it("toggles additive selection from row clicks without hijacking row controls", async () => {
+    const wrapper = mount(AccountTable, {
+      props: {
+        profiles,
+        selectedIds: [],
+        sortKey: null,
+        sortDirection: "asc",
+        reorderEnabled: true,
+        reorderDisabledReason: "",
+        columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+      },
+    });
+
+    const rows = wrapper.findAll("tbody tr");
+    expect(rows[0]!.attributes("aria-selected")).toBe("false");
+    await rows[0]!.trigger("click");
+    let updates = wrapper.emitted("update:selectedIds") ?? [];
+    expect(updates[updates.length - 1]?.[0]).toEqual(["account-1"]);
+
+    await wrapper.setProps({ selectedIds: ["account-1"] });
+    expect(rows[0]!.classes()).toContain("is-selected");
+    expect(rows[0]!.attributes("aria-selected")).toBe("true");
+    await rows[1]!.trigger("click");
+    updates = wrapper.emitted("update:selectedIds") ?? [];
+    expect(updates[updates.length - 1]?.[0]).toEqual(["account-1", "account-2"]);
+
+    const eventCount = wrapper.emitted("update:selectedIds")?.length;
+    await wrapper.get('button[aria-label="编辑账号"]').trigger("click");
+    expect(wrapper.emitted("update:selectedIds")?.length).toBe(eventCount);
+  });
+
   it("keeps row actions available after the application has been unlocked", () => {
     const wrapper = mount(AccountTable, {
       props: {

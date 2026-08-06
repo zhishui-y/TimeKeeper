@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CheckCircle2, CircleDollarSign, Pencil, Trash2 } from "@lucide/vue";
+import { CheckCircle2, Pencil, Trash2 } from "@lucide/vue";
 import type { Appointment, ServiceStatus } from "../../types/domain";
 import { formatCurrency, formatTimeRange } from "../../utils/formatters";
 import { appointmentProgressStatus } from "../../utils/appointmentProgress";
@@ -51,7 +51,17 @@ const emit = defineEmits<{
             <span v-if="appointment.id === nextAppointmentId" class="appointment-row__next">
               下一时段
             </span>
-            <StatusBadge :progress-status="appointmentProgressStatus(appointment)" />
+            <button
+              v-if="appointmentProgressStatus(appointment) === 'pending_settlement'"
+              class="appointment-row__settlement-status"
+              type="button"
+              title="点击填写结算金额"
+              :aria-label="`填写${appointment.contactName} 的结算金额`"
+              @click="emit('settle', appointment)"
+            >
+              <StatusBadge progress-status="pending_settlement" />
+            </button>
+            <StatusBadge v-else :progress-status="appointmentProgressStatus(appointment)" />
           </div>
           <p>{{ appointment.content || "未填写预约内容" }}</p>
         </div>
@@ -92,16 +102,6 @@ const emit = defineEmits<{
             @click="emit('changeStatus', appointment, 'completed')"
           >
             <CheckCircle2 :size="15" />
-          </button>
-          <button
-            v-if="appointmentProgressStatus(appointment) === 'pending_settlement'"
-            class="icon-button"
-            type="button"
-            title="去结算"
-            aria-label="编辑结算"
-            @click="emit('settle', appointment)"
-          >
-            <CircleDollarSign :size="15" />
           </button>
           <button
             class="icon-button"
@@ -238,6 +238,25 @@ const emit = defineEmits<{
 .appointment-row__main {
   min-width: 0;
   grid-area: main;
+}
+
+.appointment-row__settlement-status {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.appointment-row__settlement-status:hover {
+  filter: brightness(0.96);
+}
+
+.appointment-row__settlement-status:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--amber) 72%, transparent);
+  outline-offset: 2px;
 }
 
 .appointment-row__title {

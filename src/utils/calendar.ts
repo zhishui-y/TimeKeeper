@@ -11,10 +11,13 @@ export function calendarEventClassNames(appointment: Appointment): string[] {
 }
 
 export function calendarProgressLabel(appointment: Appointment): string {
-  const statusLabel = appointmentProgressStatusLabels[appointmentProgressStatus(appointment)];
-  return appointment.mode !== "business" || appointment.amountMinor == null
-    ? statusLabel
-    : `${statusLabel} · ${formatCurrency(appointment.amountMinor)}`;
+  return appointmentProgressStatusLabels[appointmentProgressStatus(appointment)];
+}
+
+export function calendarAmountLabel(appointment: Appointment): string {
+  return appointment.mode === "business" && appointment.amountMinor != null
+    ? formatCurrency(appointment.amountMinor)
+    : "—";
 }
 
 export function calendarAppointmentCounts(
