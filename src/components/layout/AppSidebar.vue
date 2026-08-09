@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   LockKeyhole,
 } from "@lucide/vue";
+import AppBrandIcon from "../common/AppBrandIcon.vue";
 
 const emit = defineEmits<{
   lock: [];
@@ -26,7 +27,7 @@ const navigation = [
 <template>
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand__seal" aria-hidden="true">时</div>
+      <AppBrandIcon class="brand__seal" />
       <div class="brand__copy">
         <strong>时约管家</strong>
         <span>TIMEKEEPER</span>
@@ -108,21 +109,10 @@ const navigation = [
 }
 
 .brand__seal {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
-  place-items: center;
-  border: 1px solid rgba(255, 248, 235, 0.22);
-  border-radius: 12px;
-  color: #fff8eb;
-  background: var(--accent);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
-    0 8px 18px rgba(10, 27, 22, 0.24);
-  font-family: var(--font-serif);
-  font-size: calc(21px + var(--app-font-size-offset, 0px));
-  font-weight: 650;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  filter: drop-shadow(0 8px 14px rgba(10, 27, 22, 0.24));
 }
 
 .brand__copy {
@@ -264,11 +254,9 @@ const navigation = [
   }
 
   .brand__seal {
-    width: 34px;
-    height: 34px;
-    flex-basis: 34px;
-    border-radius: 10px;
-    font-size: calc(19px + var(--app-font-size-offset, 0px));
+    width: 40px;
+    height: 40px;
+    flex-basis: 40px;
   }
 
   .nav {

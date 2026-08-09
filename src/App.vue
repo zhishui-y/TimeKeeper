@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, shallowRef } from "vue";
 import { useAppAppearance } from "./composables/useAppAppearance";
+import AppBrandIcon from "./components/common/AppBrandIcon.vue";
 import AuthenticatedAppShell from "./components/layout/AuthenticatedAppShell.vue";
 import AppAccessGate from "./components/security/AppAccessGate.vue";
 import { useAppAccessStore } from "./stores/appAccess";
@@ -17,7 +18,7 @@ onMounted(async () => {
 
 <template>
   <div v-if="!startupReady" class="app-startup" role="status" aria-live="polite">
-    <div class="app-startup__seal">时</div>
+    <AppBrandIcon class="app-startup__seal" />
     <strong>正在打开时约管家</strong>
     <span>正在应用本机外观并检查入口状态…</span>
   </div>
@@ -42,16 +43,9 @@ onMounted(async () => {
 }
 
 .app-startup__seal {
-  display: grid;
   width: 54px;
   height: 54px;
-  place-items: center;
-  border-radius: 17px;
-  color: #fffaf0;
-  background: var(--accent);
-  box-shadow: var(--shadow);
-  font-family: var(--font-serif);
-  font-size: calc(26px + var(--app-font-size-offset, 0px));
+  filter: drop-shadow(0 10px 18px rgba(35, 48, 40, 0.16));
 }
 
 .app-startup strong {

@@ -3,6 +3,7 @@ import { KeyRound, LockKeyhole, ShieldCheck, TriangleAlert } from "@lucide/vue";
 import { computed, shallowRef, watch } from "vue";
 import { useAppAccessStore } from "../../stores/appAccess";
 import { useUiStore } from "../../stores/ui";
+import AppBrandIcon from "../common/AppBrandIcon.vue";
 import {
   MIN_MASTER_PASSWORD_CHARACTERS,
   RECOMMENDED_MASTER_PASSWORD_CHARACTERS,
@@ -247,7 +248,7 @@ watch(
 <template>
   <div class="access-gate">
     <div class="access-gate__brand">
-      <span class="access-gate__seal">时</span>
+      <AppBrandIcon class="access-gate__seal" />
       <span>时约管家</span>
     </div>
     <section
@@ -436,16 +437,9 @@ watch(
 }
 
 .access-gate__seal {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  border-radius: 12px;
-  color: #fff8eb;
-  background: var(--accent);
-  box-shadow: 0 9px 22px rgba(128, 55, 40, 0.2);
-  font-family: var(--font-serif);
-  font-size: calc(20px + var(--app-font-size-offset, 0px));
+  width: 42px;
+  height: 42px;
+  filter: drop-shadow(0 9px 16px rgba(35, 48, 40, 0.16));
 }
 
 .access-gate__dialog {

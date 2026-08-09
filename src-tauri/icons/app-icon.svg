@@ -1,9 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <rect x="64" y="64" width="896" height="896" rx="184" fill="#28634f" />
-  <rect x="218" y="246" width="588" height="536" rx="72" fill="#ffffff" />
-  <path d="M218 358h588" stroke="#28634f" stroke-width="48" />
-  <path d="M346 198v112M678 198v112" stroke="#ffffff" stroke-width="56" stroke-linecap="round" />
-  <circle cx="664" cy="652" r="188" fill="#d3a04e" stroke="#ffffff" stroke-width="32" />
-  <path d="M664 550v112l86 56" fill="none" stroke="#ffffff" stroke-width="42" stroke-linecap="round" stroke-linejoin="round" />
-  <circle cx="664" cy="652" r="22" fill="#ffffff" />
+  <rect x="64" y="64" width="896" height="896" rx="184" fill="#2d6854" />
+  <path
+    d="M791 393A310 310 0 1 0 667 781"
+    fill="none"
+    stroke="#f7f3e8"
+    stroke-width="64"
+    stroke-linecap="round"
+  />
+  <path
+    d="M512 390V512L625 605"
+    fill="none"
+    stroke="#f7f3e8"
+    stroke-width="60"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M662 696L735 769L854 630"
+    fill="none"
+    stroke="#afc4a7"
+    stroke-width="64"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
 </svg>
