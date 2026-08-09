@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { format } from "date-fns";
+import { format, startOfWeek } from "date-fns";
 
 interface BusinessAppointmentDraft {
   contactName: string;
@@ -42,6 +42,39 @@ async function expectOnlyGlobalCreateAction(page: Page): Promise<void> {
   await expect(
     page.locator(".header").getByRole("button", { name: "新建预约", exact: true }),
   ).toHaveCount(1);
+}
+
+async function calendarShowsDefaultTimedRange(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const canvas = document.querySelector<HTMLElement>(".calendar-board__canvas");
+    const body = document.querySelector<HTMLElement>(".fc-timegrid-body");
+    const scroller = body?.closest<HTMLElement>(".fc-scroller");
+    const noon = body?.querySelector<HTMLElement>('.fc-timegrid-slot-lane[data-time="12:00:00"]');
+    const one = body?.querySelector<HTMLElement>('.fc-timegrid-slot-lane[data-time="01:00:00"]');
+    const oneThirty = body?.querySelector<HTMLElement>(
+      '.fc-timegrid-slot-lane[data-time="01:30:00"]',
+    );
+    if (
+      !canvas?.style.getPropertyValue("--calendar-slot-height") ||
+      !scroller ||
+      !noon ||
+      !one ||
+      !oneThirty
+    ) {
+      return false;
+    }
+
+    const scrollerTop = scroller.getBoundingClientRect().top;
+    const viewportBottom = scrollerTop + scroller.clientHeight;
+    const noonBounds = noon.getBoundingClientRect();
+    const oneBounds = one.getBoundingClientRect();
+    const oneThirtyBounds = oneThirty.getBoundingClientRect();
+    return (
+      Math.abs(noonBounds.top - scrollerTop) <= 2 &&
+      Math.abs(oneBounds.bottom - viewportBottom) <= 2 &&
+      oneThirtyBounds.top >= viewportBottom - 1
+    );
+  });
 }
 
 async function readHashRoute(page: Page): Promise<{
@@ -302,6 +335,80 @@ test("排班日历显示完整起止时间且时间标签未被截断", async ({
   expect(clippedLabels).toEqual([]);
   await expect(page.locator(".fc-event-draggable")).toHaveCount(0);
   await expect(page.locator(".fc-event-resizable")).toHaveCount(0);
+});
+
+test("排班日历按窗口高度默认显示12时至次日1时半格", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  await page.goto("/#/calendar");
+
+  await expect.poll(() => calendarShowsDefaultTimedRange(page)).toBe(true);
+
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("Playwright 视口不可用");
+  await page.setViewportSize({ width: viewport.width, height: viewport.height - 40 });
+  await expect.poll(() => calendarShowsDefaultTimedRange(page)).toBe(true);
+
+  await page.getByRole("button", { name: "月", exact: true }).click();
+  await expect(page.locator(".fc-dayGridMonth-view")).toBeVisible();
+  await page.getByRole("button", { name: "周", exact: true }).click();
+  await expect(page.locator(".fc-timeGridWeek-view")).toBeVisible();
+  await expect.poll(() => calendarShowsDefaultTimedRange(page)).toBe(true);
+  expect(consoleErrors).toEqual([]);
+});
+
+test("相邻短预约保持整列且不遮挡后续预约", async ({ page }) => {
+  const serviceDate = format(startOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd");
+  const shortContact = "短预约回归";
+  const followingContact = "后续预约回归";
+
+  await page.goto("/");
+  await createBusinessAppointment(page, serviceDate, {
+    contactName: shortContact,
+    startTime: "19:37",
+    endTime: "20:00",
+    amountYuan: "10",
+  });
+  await createBusinessAppointment(page, serviceDate, {
+    contactName: followingContact,
+    startTime: "20:00",
+    endTime: "22:00",
+    amountYuan: "20",
+  });
+  await page.getByRole("link", { name: "排班日历" }).click();
+
+  const shortCard = page.locator(".calendar-event-card").filter({ hasText: shortContact });
+  const followingCard = page.locator(".calendar-event-card").filter({ hasText: followingContact });
+  await expect(shortCard).toBeVisible();
+  await expect(followingCard).toBeVisible();
+
+  const geometry = await Promise.all(
+    [shortCard, followingCard].map((card) =>
+      card.evaluate((element) => {
+        const event = element.closest<HTMLElement>(".fc-timegrid-event-harness");
+        const column = element.closest<HTMLElement>(".fc-timegrid-col");
+        if (!event || !column) throw new Error("预约卡片未渲染在日历时间列中");
+        const eventBounds = event.getBoundingClientRect();
+        const columnBounds = column.getBoundingClientRect();
+        return {
+          x: eventBounds.x,
+          y: eventBounds.y,
+          width: eventBounds.width,
+          height: eventBounds.height,
+          columnWidth: columnBounds.width,
+        };
+      }),
+    ),
+  );
+  const [shortGeometry, followingGeometry] = geometry;
+
+  expect(shortGeometry.width / shortGeometry.columnWidth).toBeGreaterThan(0.9);
+  expect(followingGeometry.width / followingGeometry.columnWidth).toBeGreaterThan(0.9);
+  expect(Math.abs(shortGeometry.x - followingGeometry.x)).toBeLessThanOrEqual(2);
+  expect(Math.abs(shortGeometry.width - followingGeometry.width)).toBeLessThanOrEqual(2);
+  expect(shortGeometry.y + shortGeometry.height).toBeLessThanOrEqual(followingGeometry.y + 1);
 });
 
 test("账号档案可通过左侧手柄拖动排序", async ({ page }) => {

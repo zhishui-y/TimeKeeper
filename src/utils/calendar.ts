@@ -3,6 +3,12 @@ import type { Appointment } from "../types/domain";
 import { formatCurrency, formatTimeRange } from "./formatters";
 import { appointmentProgressStatus, appointmentProgressStatusLabels } from "./appointmentProgress";
 
+export const CALENDAR_VISIBLE_HALF_HOUR_SLOTS = 27;
+
+export function calendarSlotHeight(viewportHeight: number): number {
+  return Math.max(0, viewportHeight) / CALENDAR_VISIBLE_HALF_HOUR_SLOTS;
+}
+
 export function calendarEventClassNames(appointment: Appointment): string[] {
   return [
     `appointment-event--${appointment.mode}`,
@@ -10,14 +16,19 @@ export function calendarEventClassNames(appointment: Appointment): string[] {
   ];
 }
 
-export function calendarProgressLabel(appointment: Appointment): string {
-  return appointmentProgressStatusLabels[appointmentProgressStatus(appointment)];
-}
-
-export function calendarAmountLabel(appointment: Appointment): string {
-  return appointment.mode === "business" && appointment.amountMinor != null
-    ? formatCurrency(appointment.amountMinor)
-    : "—";
+export function calendarCardProgressLabel(appointment: Appointment): string | null {
+  switch (appointmentProgressStatus(appointment)) {
+    case "scheduled":
+      return null;
+    case "completed":
+      return "完成";
+    case "cancelled":
+      return "取消";
+    case "in_progress":
+      return "进行中";
+    case "pending_settlement":
+      return "待结算";
+  }
 }
 
 export function calendarAppointmentCounts(

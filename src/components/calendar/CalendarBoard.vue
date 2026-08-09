@@ -7,10 +7,24 @@ import zhCnLocale from "@fullcalendar/core/locales/zh-cn";
 import type { CalendarOptions, EventApi, EventInput } from "@fullcalendar/core";
 import { CalendarDays, ChevronLeft, ChevronRight } from "@lucide/vue";
 import { format, subDays } from "date-fns";
-import { computed, onBeforeUnmount, onMounted, shallowRef, useTemplateRef } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  shallowRef,
+  useTemplateRef,
+  type CSSProperties,
+} from "vue";
 import type { Appointment } from "../../types/domain";
-import { calendarAppointmentCounts, calendarEventClassNames } from "../../utils/calendar";
+import {
+  calendarAppointmentCounts,
+  calendarEventClassNames,
+  calendarSlotHeight,
+} from "../../utils/calendar";
 import CalendarEventCard from "./CalendarEventCard.vue";
+
+const DEFAULT_SCROLL_SLOT_OFFSET = 8;
 
 const props = defineProps<{
   appointments: readonly Appointment[];
@@ -24,9 +38,21 @@ const emit = defineEmits<{
 }>();
 
 const calendarRef = useTemplateRef<InstanceType<typeof FullCalendar>>("calendar");
+const canvasRef = useTemplateRef<globalThis.HTMLDivElement>("canvas");
 const currentTitle = shallowRef("");
 const activeView = shallowRef("timeGridWeek");
+const slotHeight = shallowRef<number | null>(null);
 const appointmentCounts = computed(() => calendarAppointmentCounts(props.appointments));
+const canvasStyle = computed<CSSProperties>(() =>
+  slotHeight.value === null
+    ? {}
+    : ({ "--calendar-slot-height": `${slotHeight.value}px` } as CSSProperties),
+);
+
+let resizeObserver: globalThis.ResizeObserver | undefined;
+let layoutFrame: number | undefined;
+let scrollRestoreFrame: number | undefined;
+let resetScrollOnNextLayout = false;
 
 const events = computed<EventInput[]>(() =>
   props.appointments.map((appointment) => ({
@@ -73,7 +99,7 @@ const calendarOptions = computed<CalendarOptions>(() => ({
   selectMirror: true,
   eventStartEditable: false,
   eventDurationEditable: false,
-  eventMinHeight: 36,
+  eventMinHeight: 1,
   eventShortHeight: 36,
   slotMinTime: "08:00:00",
   slotMaxTime: "26:00:00",
@@ -85,6 +111,7 @@ const calendarOptions = computed<CalendarOptions>(() => ({
   datesSet(info) {
     currentTitle.value = info.view.title;
     activeView.value = info.view.type;
+    scheduleCalendarLayout(true);
     emit(
       "rangeChange",
       format(info.start, "yyyy-MM-dd"),
@@ -109,14 +136,69 @@ function move(direction: "prev" | "next" | "today"): void {
   calendar[direction]();
 }
 
-function refreshCalendarSize(): void {
-  globalThis.requestAnimationFrame(() => calendarRef.value?.getApi().updateSize());
+function timeGridScroller(): globalThis.HTMLElement | null {
+  const timeGridBody = canvasRef.value?.querySelector<globalThis.HTMLElement>(".fc-timegrid-body");
+  return timeGridBody?.closest<globalThis.HTMLElement>(".fc-scroller") ?? null;
 }
 
-onMounted(() => globalThis.addEventListener("timekeeper-appearance-changed", refreshCalendarSize));
-onBeforeUnmount(() =>
-  globalThis.removeEventListener("timekeeper-appearance-changed", refreshCalendarSize),
-);
+async function applyCalendarLayout(resetScroll: boolean): Promise<void> {
+  if (!isCompactTimeGrid(activeView.value)) {
+    slotHeight.value = null;
+    return;
+  }
+
+  const scroller = timeGridScroller();
+  if (!scroller || scroller.clientHeight <= 0) return;
+
+  const previousSlotHeight = slotHeight.value;
+  const topSlotOffset =
+    resetScroll || previousSlotHeight === null
+      ? DEFAULT_SCROLL_SLOT_OFFSET
+      : scroller.scrollTop / previousSlotHeight;
+  const nextSlotHeight = calendarSlotHeight(scroller.clientHeight);
+  slotHeight.value = nextSlotHeight;
+
+  await nextTick();
+  calendarRef.value?.getApi().updateSize();
+
+  scrollRestoreFrame = globalThis.requestAnimationFrame(() => {
+    scrollRestoreFrame = undefined;
+    const currentScroller = timeGridScroller();
+    if (currentScroller) currentScroller.scrollTop = topSlotOffset * nextSlotHeight;
+  });
+}
+
+function scheduleCalendarLayout(resetScroll = false): void {
+  resetScrollOnNextLayout ||= resetScroll;
+  if (layoutFrame !== undefined) return;
+
+  layoutFrame = globalThis.requestAnimationFrame(() => {
+    layoutFrame = undefined;
+    const shouldResetScroll = resetScrollOnNextLayout;
+    resetScrollOnNextLayout = false;
+    void applyCalendarLayout(shouldResetScroll);
+  });
+}
+
+function refreshCalendarSize(): void {
+  scheduleCalendarLayout(false);
+}
+
+onMounted(() => {
+  if (typeof globalThis.ResizeObserver !== "undefined" && canvasRef.value) {
+    resizeObserver = new globalThis.ResizeObserver(() => scheduleCalendarLayout(false));
+    resizeObserver.observe(canvasRef.value);
+  }
+  globalThis.addEventListener("timekeeper-appearance-changed", refreshCalendarSize);
+  scheduleCalendarLayout(true);
+});
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect();
+  if (layoutFrame !== undefined) globalThis.cancelAnimationFrame(layoutFrame);
+  if (scrollRestoreFrame !== undefined) globalThis.cancelAnimationFrame(scrollRestoreFrame);
+  globalThis.removeEventListener("timekeeper-appearance-changed", refreshCalendarSize);
+});
 </script>
 
 <template>
@@ -175,7 +257,7 @@ onBeforeUnmount(() =>
         </button>
       </div>
     </header>
-    <div class="calendar-board__canvas">
+    <div ref="canvas" class="calendar-board__canvas" :style="canvasStyle">
       <FullCalendar ref="calendar" :options="calendarOptions">
         <template #eventContent="content">
           <CalendarEventCard
@@ -322,7 +404,7 @@ onBeforeUnmount(() =>
 }
 
 .calendar-board__canvas :deep(.fc-timegrid-slot) {
-  height: 18px;
+  height: var(--calendar-slot-height, 1.5em);
 }
 
 .calendar-board__canvas :deep(.fc-timegrid-axis-cushion),
@@ -530,7 +612,6 @@ onBeforeUnmount(() =>
   }
 
   .calendar-board__canvas :deep(.fc-timegrid-slot) {
-    height: 12px;
     font-size: calc(12px + var(--app-font-size-offset, 0px));
     line-height: 1;
   }

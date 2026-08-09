@@ -71,7 +71,7 @@ describe("CalendarBoard", () => {
     expect(options.slotMinTime).toBe("08:00:00");
     expect(options.slotMaxTime).toBe("26:00:00");
     expect(options.scrollTime).toBe("12:00:00");
-    expect(options.eventMinHeight).toBe(15);
+    expect(options.eventMinHeight).toBe(1);
     expect(options.eventShortHeight).toBe(36);
     expect(options.views?.timeGridDay?.dayMaxEvents).toBe(1);
     expect(options.views?.timeGridWeek?.dayMaxEvents).toBe(1);

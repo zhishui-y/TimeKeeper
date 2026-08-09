@@ -35,12 +35,13 @@ describe("CalendarEventCard", () => {
     expect(wrapper.get(".calendar-event-card__contact").text()).toBe("小北");
     expect(wrapper.get(".calendar-event-card__time").text()).toBe("14:00–15:00");
     expect(wrapper.get(".calendar-event-card__content").text()).toBe("手法陪练");
-    expect(wrapper.get(".calendar-event-card__amount").text()).toBe("¥180");
-    expect(wrapper.get(".calendar-event-card__progress").text()).toBe("已完成");
+    expect(wrapper.find(".calendar-event-card__amount").exists()).toBe(false);
+    expect(wrapper.get(".calendar-event-card__progress").text()).toBe("完成");
     expect(wrapper.attributes("title")).toContain("时间：14:00–15:00");
+    expect(wrapper.attributes("title")).toContain("金额：¥180");
   });
 
-  it("keeps appointments shorter than one hour in the same two-line layout", () => {
+  it("reduces appointments shorter than one hour to one visible line", () => {
     const wrapper = mount(CalendarEventCard, {
       props: {
         appointment: appointment({ endsAt: "2026-07-30T14:30:00+08:00" }),
@@ -52,10 +53,11 @@ describe("CalendarEventCard", () => {
 
     expect(wrapper.classes()).toContain("calendar-event-card--short");
     expect(wrapper.get(".calendar-event-card__time").text()).toBe("14:00–14:30");
-    expect(wrapper.get(".calendar-event-card__content").text()).toBe("手法陪练");
-    expect(wrapper.get(".calendar-event-card__amount").text()).toBe("¥180");
-    expect(wrapper.get(".calendar-event-card__progress").text()).toBe("已完成");
+    expect(wrapper.find(".calendar-event-card__content").exists()).toBe(false);
+    expect(wrapper.find(".calendar-event-card__amount").exists()).toBe(false);
+    expect(wrapper.find(".calendar-event-card__progress").exists()).toBe(false);
     expect(wrapper.attributes("title")).toContain("内容：手法陪练");
+    expect(wrapper.attributes("title")).toContain("金额：¥180");
   });
 
   it("renders date-only appointments as a compact pending label", () => {
@@ -71,8 +73,8 @@ describe("CalendarEventCard", () => {
     expect(wrapper.classes()).toContain("calendar-event-card--pending");
     expect(wrapper.get(".calendar-event-card__time").text()).toBe("待定");
     expect(wrapper.get(".calendar-event-card__content").text()).toBe("手法陪练");
-    expect(wrapper.get(".calendar-event-card__amount").text()).toBe("¥180");
-    expect(wrapper.get(".calendar-event-card__progress").text()).toBe("已完成");
+    expect(wrapper.find(".calendar-event-card__amount").exists()).toBe(false);
+    expect(wrapper.get(".calendar-event-card__progress").text()).toBe("完成");
   });
 
   it("keeps the legacy content layout outside compact time-grid views", () => {
@@ -83,26 +85,38 @@ describe("CalendarEventCard", () => {
     expect(wrapper.classes()).toContain("calendar-event-card--legacy");
     expect(wrapper.get(".calendar-event-card__time").text()).toBe("14:00–15:00");
     expect(wrapper.get(".calendar-event-card__content").text()).toBe("手法陪练");
-    expect(wrapper.get(".calendar-event-card__amount").text()).toBe("¥180");
-    expect(wrapper.get(".calendar-event-card__progress").text()).toBe("已完成");
+    expect(wrapper.find(".calendar-event-card__amount").exists()).toBe(false);
+    expect(wrapper.get(".calendar-event-card__progress").text()).toBe("完成");
   });
 
-  it("shows a dash when an appointment has no applicable amount", () => {
-    const wrapper = mount(CalendarEventCard, {
-      props: {
-        appointment: appointment({
-          mode: "entertainment",
-          settlementStatus: "not_applicable",
-          amountMinor: null,
-        }),
-        compact: true,
-        allDay: false,
-      },
-    });
+  it.each([
+    ["scheduled", "unsettled", null],
+    ["in_progress", "unsettled", "进行中"],
+    ["completed", "unsettled", "待结算"],
+    ["completed", "settled", "完成"],
+    ["cancelled", "unsettled", "取消"],
+  ] as const)(
+    "renders the compact status for %s appointments",
+    (serviceStatus, settlementStatus, label) => {
+      const wrapper = mount(CalendarEventCard, {
+        props: {
+          appointment: appointment({
+            serviceStatus,
+            settlementStatus,
+          }),
+          compact: true,
+          allDay: false,
+        },
+      });
 
-    expect(wrapper.get(".calendar-event-card__amount").text()).toBe("—");
-    expect(wrapper.get(".calendar-event-card__progress").text()).toBe("已完成");
-  });
+      expect(wrapper.find(".calendar-event-card__amount").exists()).toBe(false);
+      if (label) {
+        expect(wrapper.get(".calendar-event-card__progress").text()).toBe(label);
+      } else {
+        expect(wrapper.find(".calendar-event-card__progress").exists()).toBe(false);
+      }
+    },
+  );
 
   it("prefers FullCalendar live time text while an appointment is being moved", () => {
     const wrapper = mount(CalendarEventCard, {
