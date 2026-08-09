@@ -1,6 +1,7 @@
 import { differenceInMinutes, endOfWeek, format, parseISO, startOfWeek } from "date-fns";
 import type {
   AccountProfile,
+  AccountRoleDataRefreshProgress,
   AccountRoleDataRefreshResult,
   AccountTableColumnWidths,
   AppAccessRecoveryProof,
@@ -181,29 +182,52 @@ function currentChinaDate(): string {
   return `${value("year")}-${value("month")}-${value("day")}`;
 }
 
-function refreshMockAccountRoleData(ids: string[]): AccountRoleDataRefreshResult {
+function refreshMockAccountRoleData(
+  ids: string[],
+  onProgress?: (progress: AccountRoleDataRefreshProgress) => void,
+): AccountRoleDataRefreshResult {
   const normalizedIds = [...new Set(ids.map((id) => id.trim()))];
   if (!normalizedIds.length) throw new Error("请至少选择一个账号更新角色数据");
   if (normalizedIds.some((id) => !id)) throw new Error("角色数据更新包含空白账号 ID");
 
   const items: AccountRoleDataRefreshResult["items"] = normalizedIds.map((id, index) => {
     const profile = accounts.find((account) => account.id === id);
-    if (!profile) return { accountId: id, status: "failed", message: "账号档案不存在" };
-    if (!profile.server?.trim() || !profile.characterName?.trim()) {
-      return { accountId: id, status: "skipped", message: "缺少服务器或角色名" };
+    let item: AccountRoleDataRefreshResult["items"][number];
+    let patch: AccountRoleDataRefreshProgress["patch"];
+    if (!profile) {
+      item = { accountId: id, status: "failed", message: "账号档案不存在" };
+    } else if (!profile.server?.trim() || !profile.characterName?.trim()) {
+      item = { accountId: id, status: "skipped", message: "缺少服务器或角色名" };
+    } else if (profile.characterName.includes("未补充")) {
+      item = { accountId: id, status: "noRecord", message: "服务器未返回角色战绩" };
+    } else {
+      const nextScore = (profile.currentScore ?? 1800) + index + 1;
+      profile.gearScore = String(200_000 + nextScore);
+      profile.currentScore = nextScore;
+      profile.highestScore = Math.max(profile.highestScore ?? 0, nextScore + 100);
+      profile.scoreUpdatedAt = currentChinaDate();
+      profile.weeklyWins = index + 1;
+      profile.updatedAt = new Date().toISOString();
+      item = { accountId: id, status: "updated" };
+      patch = {
+        accountId: id,
+        gearScore: profile.gearScore,
+        currentScore: profile.currentScore,
+        highestScore: profile.highestScore,
+        scoreUpdatedAt: profile.scoreUpdatedAt,
+        weeklyWins: profile.weeklyWins,
+        updatedAt: profile.updatedAt,
+      };
     }
-    if (profile.characterName.includes("未补充")) {
-      return { accountId: id, status: "noRecord", message: "服务器未返回角色战绩" };
-    }
-
-    const nextScore = (profile.currentScore ?? 1800) + index + 1;
-    profile.gearScore = String(200_000 + nextScore);
-    profile.currentScore = nextScore;
-    profile.highestScore = Math.max(profile.highestScore ?? 0, nextScore + 100);
-    profile.scoreUpdatedAt = currentChinaDate();
-    profile.weeklyWins = index + 1;
-    profile.updatedAt = new Date().toISOString();
-    return { accountId: id, status: "updated" };
+    onProgress?.(
+      structuredClone({
+        completedCount: index + 1,
+        requestedCount: normalizedIds.length,
+        item,
+        patch,
+      }),
+    );
+    return item;
   });
 
   return {
@@ -783,14 +807,14 @@ export const mockApi: ApiClient = {
     if (!globalThis.navigator?.clipboard) throw new Error("当前环境无法访问剪贴板");
     await globalThis.navigator.clipboard.writeText(characterName);
   },
-  async refreshAccountProfileRoleData(ids) {
+  async refreshAccountProfileRoleData(ids, onProgress) {
     if (accountRoleDataRefreshBusy) throw new Error("已有角色数据更新任务正在进行");
     const validationError = validateAccountRoleDataServerUrl(settings.accountRoleDataServerUrl);
     if (validationError) throw new Error(validationError);
     if (!settings.accountRoleDataApiKey.trim()) throw new Error("请先配置角色数据 API 密钥");
     accountRoleDataRefreshBusy = true;
     try {
-      return structuredClone(refreshMockAccountRoleData(ids));
+      return structuredClone(refreshMockAccountRoleData(ids, onProgress));
     } finally {
       accountRoleDataRefreshBusy = false;
     }

@@ -5,7 +5,11 @@ import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockApi } from "../../api/mockClient";
 import { useUiStore } from "../../stores/ui";
-import type { AccountProfile, AppSettings } from "../../types/domain";
+import type {
+  AccountProfile,
+  AccountRoleDataRefreshProgress,
+  AppSettings,
+} from "../../types/domain";
 import { DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS } from "../../utils/accountTableColumns";
 import { DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS } from "../../utils/appointmentTableColumns";
 import { DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL } from "../../utils/accountRoleData";
@@ -293,9 +297,13 @@ describe("AccountsWorkspace batch delete feedback", () => {
       deferred<Awaited<ReturnType<typeof mockApi.refreshAccountProfileRoleData>>>();
     const listProfiles = vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
+    let reportProgress: ((progress: AccountRoleDataRefreshProgress) => void) | undefined;
     const refresh = vi
       .spyOn(mockApi, "refreshAccountProfileRoleData")
-      .mockReturnValue(pendingRefresh.promise);
+      .mockImplementation((_ids, onProgress) => {
+        reportProgress = onProgress;
+        return pendingRefresh.promise;
+      });
 
     const pinia = createPinia();
     const wrapper = mount(AccountsWorkspace, { global: { plugins: [pinia] } });
@@ -305,7 +313,7 @@ describe("AccountsWorkspace batch delete feedback", () => {
     await buttonWithText(wrapper, "更新当前列表").trigger("click");
     await flushPromises();
 
-    expect(refresh).toHaveBeenCalledWith(["account-1"]);
+    expect(refresh).toHaveBeenCalledWith(["account-1"], expect.any(Function));
     expect(buttonWithText(wrapper, "更新当前列表").attributes("disabled")).toBeDefined();
     expect(buttonWithText(wrapper, "更新选中").attributes("disabled")).toBeDefined();
     expect(
@@ -315,13 +323,42 @@ describe("AccountsWorkspace batch delete feedback", () => {
       "true",
     );
 
+    reportProgress!({
+      completedCount: 1,
+      requestedCount: 1,
+      item: { accountId: "account-1", status: "updated" },
+      patch: {
+        accountId: "account-1",
+        gearScore: "200000",
+        currentScore: 2500,
+        highestScore: 2600,
+        scoreUpdatedAt: "2026-08-09",
+        weeklyWins: 8,
+        updatedAt: "2026-08-09T00:00:00Z",
+      },
+    });
+    await flushPromises();
+
+    expect(wrapper.findComponent(AccountTable).props("profiles")[0]).toMatchObject({
+      id: "account-1",
+      gearScore: "200000",
+      currentScore: 2500,
+      highestScore: 2600,
+      weeklyWins: 8,
+    });
+    expect(listProfiles).toHaveBeenCalledTimes(1);
+    expect(ui.accountRevision).toBe(0);
+    expect(wrapper.get('button[aria-label="更新角色数据 账号一"]').attributes("aria-busy")).toBe(
+      "false",
+    );
+
     pendingRefresh.resolve({
       requestedCount: 1,
-      updatedCount: 0,
-      noRecordCount: 1,
+      updatedCount: 1,
+      noRecordCount: 0,
       skippedCount: 0,
       failedCount: 0,
-      items: [{ accountId: "account-1", status: "noRecord", message: "无角色战绩" }],
+      items: [{ accountId: "account-1", status: "updated" }],
     });
     await flushPromises();
 
@@ -329,7 +366,7 @@ describe("AccountsWorkspace batch delete feedback", () => {
     expect(wrapper.find(".role-refresh-dialog").exists()).toBe(false);
     const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]');
     expect(dialog?.textContent).toContain("角色数据更新完成");
-    expect(dialog?.textContent).toContain("无战绩1");
+    expect(dialog?.textContent).toContain("更新1");
     expect(dialog?.textContent).not.toContain("无角色战绩");
     expect(ui.accountRevision).toBe(1);
     expect(ui.toast).toBeNull();
@@ -385,11 +422,15 @@ describe("AccountsWorkspace batch delete feedback", () => {
     await wrapper.get('input[aria-label="选择账号 账号二"]').setValue(true);
     await buttonWithText(wrapper, "更新选中").trigger("click");
     await flushPromises();
-    expect(refresh).toHaveBeenLastCalledWith(["account-2"]);
+    let lastCall = refresh.mock.calls[refresh.mock.calls.length - 1];
+    expect(lastCall?.[0]).toEqual(["account-2"]);
+    expect(lastCall?.[1]).toEqual(expect.any(Function));
 
     await wrapper.get('button[aria-label="更新角色数据 账号一"]').trigger("click");
     await flushPromises();
-    expect(refresh).toHaveBeenLastCalledWith(["account-1"]);
+    lastCall = refresh.mock.calls[refresh.mock.calls.length - 1];
+    expect(lastCall?.[0]).toEqual(["account-1"]);
+    expect(lastCall?.[1]).toEqual(expect.any(Function));
     wrapper.unmount();
   });
 });

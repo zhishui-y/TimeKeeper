@@ -111,7 +111,7 @@
 - `copy_account_name(id) -> void`
 - `copy_account_character_name(id) -> void`
 - `copy_account_password(id) -> void`
-- `refresh_account_profile_role_data(ids) -> AccountRoleDataRefreshResult`
+- `refresh_account_profile_role_data(ids, onProgress) -> AccountRoleDataRefreshResult`
 
 `AccountProfile.password` 是 `string | null`，列表与详情均返回。创建、修改、明确移除和删除时，
 档案元数据与凭据同一个 SQLite 事务提交；凭据通过外键级联删除。复制密码在 Rust 重读并执行
@@ -122,8 +122,12 @@
 角色刷新对 ID 去空、去重并保留首次顺序；缺服务器或角色名为 `skipped`，服务端无记录为
 `noRecord`，网络/解析/大小/日期错误为 `failed`。请求路径保留服务器和角色名百分号编码，并追加
 `api_key` query 参数；空密钥不发请求，401 报密钥无效，503 报服务不可用或服务端未配置密钥。
-最多 3 个并发，成功项在全部请求结束后一次事务写入；缺失或无效 `week_win` 保留旧胜场但更新其他
-有效字段，请求失败或 `ok: false` 保留全部旧值，最高分只增不降，不改写预约快照或密码。
+最多 3 个并发。每个成功项使用独立 SQLite 事务写入，提交后通过请求级 `onProgress` Channel 返回
+`AccountRoleDataRefreshProgress`；其中 `patch` 只含 `accountId`、装分、当前分、最高分、分数更新日期、
+本周胜场和 `updatedAt`，不含密码。进度按完成顺序发送，最终 `items` 仍按首次输入顺序汇总；单项
+写入失败计入该项 `failed`，不回滚此前成功项，Channel 发送失败也不回滚已提交数据。缺失或无效
+`week_win` 保留旧胜场但更新其他有效字段，请求失败或 `ok: false` 保留全部旧值，最高分只增不降，
+不改写预约快照或密码。
 
 ## Reports
 

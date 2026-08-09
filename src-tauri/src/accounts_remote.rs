@@ -6,7 +6,10 @@ use reqwest::{Client, StatusCode, Url};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
+use tauri::ipc::Channel;
 use tokio::sync::{Mutex, MutexGuard};
+
+use crate::backup::BackupState;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -68,10 +71,25 @@ pub struct AccountRoleDataRefreshResult {
     pub items: Vec<AccountRoleDataRefreshItem>,
 }
 
-#[derive(Debug, Clone)]
-pub struct PreparedAccountRoleDataRefresh {
-    items: Vec<AccountRoleDataRefreshItem>,
-    updates: Vec<AccountRoleDataUpdate>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountRoleDataRefreshPatch {
+    pub account_id: String,
+    pub gear_score: String,
+    pub current_score: i64,
+    pub highest_score: Option<i64>,
+    pub score_updated_at: String,
+    pub weekly_wins: Option<i64>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountRoleDataRefreshProgress {
+    pub completed_count: usize,
+    pub requested_count: usize,
+    pub item: AccountRoleDataRefreshItem,
+    pub patch: Option<AccountRoleDataRefreshPatch>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,18 +117,21 @@ struct AccountRoleDataFetchOutcome {
     update: Option<AccountRoleDataUpdate>,
 }
 
-pub async fn prepare_account_role_data_refresh(
+pub async fn refresh_account_role_data(
     pool: &SqlitePool,
     client: &Client,
     base_url: &str,
     api_key: &str,
     ids: Vec<String>,
-) -> Result<PreparedAccountRoleDataRefresh, String> {
+    backup: &BackupState,
+    on_progress: &Channel<AccountRoleDataRefreshProgress>,
+) -> Result<AccountRoleDataRefreshResult, String> {
     let api_key = api_key.trim();
     if api_key.is_empty() {
         return Err("请先配置角色数据 API 密钥".into());
     }
     let ids = normalize_ids(ids)?;
+    let requested_count = ids.len();
     let mut slots = vec![None; ids.len()];
     let mut targets = Vec::new();
 
@@ -162,76 +183,134 @@ pub async fn prepare_account_role_data_refresh(
         });
     }
 
-    let fetched = stream::iter(targets.into_iter().map(|target| async move {
+    let mut completed_count = 0;
+    for outcome in slots.iter().flatten() {
+        completed_count += 1;
+        send_progress(
+            on_progress,
+            completed_count,
+            requested_count,
+            outcome.item.clone(),
+            None,
+        );
+    }
+
+    let mut fetched = stream::iter(targets.into_iter().map(|target| async move {
         fetch_account_role_data(client, base_url, api_key, target).await
     }))
-    .buffer_unordered(MAX_CONCURRENT_REQUESTS)
-    .collect::<Vec<_>>()
-    .await;
-    for outcome in fetched {
+    .buffer_unordered(MAX_CONCURRENT_REQUESTS);
+    while let Some(mut outcome) = fetched.next().await {
+        let patch = if let Some(update) = outcome.update.take() {
+            let _operation_guard = backup.lock_data_operation().await;
+            match commit_account_role_data_update(pool, update).await {
+                Ok(patch) => Some(patch),
+                Err(message) => {
+                    outcome.item = result_item(
+                        &outcome.item.account_id,
+                        AccountRoleDataRefreshStatus::Failed,
+                        &message,
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let position = outcome.position;
-        slots[position] = Some(outcome);
+        slots[position] = Some(AccountRoleDataFetchOutcome {
+            position,
+            item: outcome.item.clone(),
+            update: None,
+        });
+        completed_count += 1;
+        send_progress(
+            on_progress,
+            completed_count,
+            requested_count,
+            outcome.item,
+            patch,
+        );
     }
 
-    let outcomes = slots
+    let items = slots
         .into_iter()
         .map(|slot| slot.expect("every requested account must produce an outcome"))
-        .collect::<Vec<_>>();
-    Ok(PreparedAccountRoleDataRefresh {
-        items: outcomes
-            .iter()
-            .map(|outcome| outcome.item.clone())
-            .collect(),
-        updates: outcomes
-            .into_iter()
-            .filter_map(|outcome| outcome.update)
-            .collect(),
-    })
+        .map(|outcome| outcome.item)
+        .collect();
+    Ok(summarize(items))
 }
 
-pub async fn commit_account_role_data_refresh(
+async fn commit_account_role_data_update(
     pool: &SqlitePool,
-    prepared: PreparedAccountRoleDataRefresh,
-) -> Result<AccountRoleDataRefreshResult, String> {
-    let PreparedAccountRoleDataRefresh { items, updates } = prepared;
-    if !updates.is_empty() {
-        let mut transaction = pool.begin().await.map_err(db_error)?;
-        let updated_at = chrono::Utc::now().to_rfc3339();
-        for update in updates {
-            let result = sqlx::query(
-                "UPDATE account_profiles SET
-                    gear_score = ?, current_score = ?,
-                    highest_score = CASE
-                        WHEN ? IS NULL THEN highest_score
-                        WHEN highest_score IS NULL OR highest_score < ? THEN ?
-                        ELSE highest_score
-                    END,
-                    score_updated_at = ?,
-                    weekly_wins = CASE WHEN ? IS NULL THEN weekly_wins ELSE ? END,
-                    updated_at = ?
-                 WHERE id = ?",
-            )
-            .bind(update.gear_score)
-            .bind(update.current_score)
-            .bind(update.highest_score)
-            .bind(update.highest_score)
-            .bind(update.highest_score)
-            .bind(update.score_updated_at)
-            .bind(update.weekly_wins)
-            .bind(update.weekly_wins)
-            .bind(&updated_at)
-            .bind(&update.account_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(db_error)?;
-            if result.rows_affected() == 0 {
-                return Err(format!("账号档案不存在: {}", update.account_id));
-            }
-        }
-        transaction.commit().await.map_err(db_error)?;
+    update: AccountRoleDataUpdate,
+) -> Result<AccountRoleDataRefreshPatch, String> {
+    let mut transaction = pool.begin().await.map_err(db_error)?;
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        "UPDATE account_profiles SET
+            gear_score = ?, current_score = ?,
+            highest_score = CASE
+                WHEN ? IS NULL THEN highest_score
+                WHEN highest_score IS NULL OR highest_score < ? THEN ?
+                ELSE highest_score
+            END,
+            score_updated_at = ?,
+            weekly_wins = CASE WHEN ? IS NULL THEN weekly_wins ELSE ? END,
+            updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(update.gear_score)
+    .bind(update.current_score)
+    .bind(update.highest_score)
+    .bind(update.highest_score)
+    .bind(update.highest_score)
+    .bind(update.score_updated_at)
+    .bind(update.weekly_wins)
+    .bind(update.weekly_wins)
+    .bind(&updated_at)
+    .bind(&update.account_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(db_error)?;
+    if result.rows_affected() == 0 {
+        return Err(format!("账号档案不存在: {}", update.account_id));
     }
 
-    Ok(summarize(items))
+    let row = sqlx::query(
+        "SELECT gear_score, current_score, highest_score, score_updated_at,
+                weekly_wins, updated_at
+         FROM account_profiles WHERE id = ?",
+    )
+    .bind(&update.account_id)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(db_error)?;
+    let patch = AccountRoleDataRefreshPatch {
+        account_id: update.account_id,
+        gear_score: row.try_get("gear_score").map_err(db_error)?,
+        current_score: row.try_get("current_score").map_err(db_error)?,
+        highest_score: row.try_get("highest_score").map_err(db_error)?,
+        score_updated_at: row.try_get("score_updated_at").map_err(db_error)?,
+        weekly_wins: row.try_get("weekly_wins").map_err(db_error)?,
+        updated_at: row.try_get("updated_at").map_err(db_error)?,
+    };
+    transaction.commit().await.map_err(db_error)?;
+    Ok(patch)
+}
+
+fn send_progress(
+    channel: &Channel<AccountRoleDataRefreshProgress>,
+    completed_count: usize,
+    requested_count: usize,
+    item: AccountRoleDataRefreshItem,
+    patch: Option<AccountRoleDataRefreshPatch>,
+) {
+    let _ = channel.send(AccountRoleDataRefreshProgress {
+        completed_count,
+        requested_count,
+        item,
+        patch,
+    });
 }
 
 async fn fetch_account_role_data(
@@ -527,16 +606,19 @@ fn db_error(error: sqlx::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Database;
+    use crate::{backup::BackupState, db::Database};
     use std::{
+        fs,
         io::{Read, Write},
         net::TcpListener,
+        path::PathBuf,
         sync::{
-            Arc,
+            Arc, Mutex as StdMutex,
             atomic::{AtomicUsize, Ordering},
         },
         thread,
     };
+    use tauri::ipc::InvokeResponseBody;
 
     fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
         tokio::runtime::Builder::new_current_thread()
@@ -544,6 +626,34 @@ mod tests {
             .build()
             .unwrap()
             .block_on(future)
+    }
+
+    fn test_backup_state() -> (BackupState, PathBuf) {
+        let data_dir = std::env::temp_dir().join(format!(
+            "timekeeper-role-refresh-test-{}",
+            uuid::Uuid::now_v7()
+        ));
+        let state = BackupState::new(&data_dir, data_dir.join("database.sqlite3")).unwrap();
+        (state, data_dir)
+    }
+
+    fn progress_channel() -> (
+        Channel<AccountRoleDataRefreshProgress>,
+        Arc<StdMutex<Vec<Value>>>,
+    ) {
+        let messages = Arc::new(StdMutex::new(Vec::new()));
+        let messages_for_channel = Arc::clone(&messages);
+        let channel = Channel::new(move |body| {
+            let InvokeResponseBody::Json(json) = body else {
+                panic!("role refresh progress must use JSON");
+            };
+            messages_for_channel
+                .lock()
+                .unwrap()
+                .push(serde_json::from_str(&json).unwrap());
+            Ok(())
+        });
+        (channel, messages)
     }
 
     fn spawn_http_server(
@@ -585,6 +695,39 @@ mod tests {
             }
         });
         (format!("http://{address}/api/"), maximum, handle)
+    }
+
+    fn spawn_staggered_http_server() -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let mut workers = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                workers.push(thread::spawn(move || {
+                    let mut request = [0_u8; 2048];
+                    let read = stream.read(&mut request).unwrap_or_default();
+                    let request = String::from_utf8_lossy(&request[..read]);
+                    let delay = if request.contains("account-slow") {
+                        Duration::from_millis(100)
+                    } else {
+                        Duration::from_millis(10)
+                    };
+                    thread::sleep(delay);
+                    let body = r#"{"ok":true,"time":"2026-08-09","equip":"200","score":"250","total_score":"300","week_win":4}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    stream.write_all(response.as_bytes()).unwrap();
+                    stream.flush().unwrap();
+                }));
+            }
+            for worker in workers {
+                worker.join().unwrap();
+            }
+        });
+        (format!("http://{address}/api/"), handle)
     }
 
     async fn insert_account(
@@ -721,21 +864,26 @@ mod tests {
             )
             .await;
             let client = Client::builder().no_proxy().build().unwrap();
-            let error = prepare_account_role_data_refresh(
+            let (backup, data_dir) = test_backup_state();
+            let (channel, _) = progress_channel();
+            let error = refresh_account_role_data(
                 database.pool(),
                 &client,
                 "http://127.0.0.1:9/",
                 "   ",
                 vec!["account-without-key".into()],
+                &backup,
+                &channel,
             )
             .await
             .unwrap_err();
             assert_eq!(error, "请先配置角色数据 API 密钥");
+            fs::remove_dir_all(data_dir).unwrap();
         });
     }
 
     #[test]
-    fn limits_network_concurrency_to_three_and_preserves_input_order() {
+    fn limits_network_concurrency_and_streams_committed_progress() {
         run_async(async {
             let database = Database::in_memory().await.unwrap();
             let ids = (0..7)
@@ -751,12 +899,16 @@ mod tests {
                 r#"{"ok":true,"time":"2026-08-02","equip":"200","score":"250","total_score":"300","week_win":4}"#,
             );
             let client = Client::builder().no_proxy().build().unwrap();
-            let prepared = prepare_account_role_data_refresh(
+            let (backup, data_dir) = test_backup_state();
+            let (channel, messages) = progress_channel();
+            let result = refresh_account_role_data(
                 database.pool(),
                 &client,
                 &base_url,
                 "test-api-key",
                 ids.clone(),
+                &backup,
+                &channel,
             )
             .await
             .unwrap();
@@ -764,7 +916,7 @@ mod tests {
 
             assert_eq!(maximum.load(Ordering::SeqCst), MAX_CONCURRENT_REQUESTS);
             assert_eq!(
-                prepared
+                result
                     .items
                     .iter()
                     .map(|item| item.account_id.clone())
@@ -772,11 +924,64 @@ mod tests {
                 ids
             );
             assert!(
-                prepared
+                result
                     .items
                     .iter()
                     .all(|item| item.status == AccountRoleDataRefreshStatus::Updated)
             );
+            let messages = messages.lock().unwrap();
+            assert_eq!(messages.len(), ids.len());
+            assert_eq!(messages.last().unwrap()["completedCount"], ids.len());
+            assert!(messages.iter().all(|message| message["patch"].is_object()));
+            assert!(
+                !serde_json::to_string(&*messages)
+                    .unwrap()
+                    .contains("password")
+            );
+            drop(messages);
+            fs::remove_dir_all(data_dir).unwrap();
+        });
+    }
+
+    #[test]
+    fn streams_progress_in_completion_order_but_summarizes_in_input_order() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let ids = vec!["account-slow".to_string(), "account-fast".to_string()];
+            for id in &ids {
+                insert_account(&database, id, Some("测试服"), Some(id), 100).await;
+            }
+            let (base_url, server) = spawn_staggered_http_server();
+            let client = Client::builder().no_proxy().build().unwrap();
+            let (backup, data_dir) = test_backup_state();
+            let (channel, messages) = progress_channel();
+
+            let result = refresh_account_role_data(
+                database.pool(),
+                &client,
+                &base_url,
+                "test-api-key",
+                ids.clone(),
+                &backup,
+                &channel,
+            )
+            .await
+            .unwrap();
+            server.join().unwrap();
+
+            assert_eq!(
+                result
+                    .items
+                    .iter()
+                    .map(|item| item.account_id.clone())
+                    .collect::<Vec<_>>(),
+                ids
+            );
+            let messages = messages.lock().unwrap();
+            assert_eq!(messages[0]["item"]["accountId"], "account-fast");
+            assert_eq!(messages[1]["item"]["accountId"], "account-slow");
+            drop(messages);
+            fs::remove_dir_all(data_dir).unwrap();
         });
     }
 
@@ -836,22 +1041,33 @@ mod tests {
             insert_account(&database, "missing-server", None, Some("角色"), 100).await;
             insert_account(&database, "missing-character", Some("区服"), None, 100).await;
             let client = Client::builder().no_proxy().build().unwrap();
-            let prepared = prepare_account_role_data_refresh(
+            let (backup, data_dir) = test_backup_state();
+            let (channel, messages) = progress_channel();
+            let result = refresh_account_role_data(
                 database.pool(),
                 &client,
                 "http://127.0.0.1:9/",
                 "test-api-key",
                 vec!["missing-server".into(), "missing-character".into()],
+                &backup,
+                &channel,
             )
             .await
             .unwrap();
-            assert!(prepared.updates.is_empty());
             assert!(
-                prepared
+                result
                     .items
                     .iter()
                     .all(|item| item.status == AccountRoleDataRefreshStatus::Skipped)
             );
+            assert!(
+                messages
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|message| message["patch"].is_null())
+            );
+            fs::remove_dir_all(data_dir).unwrap();
         });
     }
 
@@ -885,25 +1101,21 @@ mod tests {
             .await
             .unwrap();
 
-            let prepared = PreparedAccountRoleDataRefresh {
-                items: vec![AccountRoleDataRefreshItem {
-                    account_id: "account-1".into(),
-                    status: AccountRoleDataRefreshStatus::Updated,
-                    message: None,
-                }],
-                updates: vec![AccountRoleDataUpdate {
+            let patch = commit_account_role_data_update(
+                database.pool(),
+                AccountRoleDataUpdate {
                     account_id: "account-1".into(),
                     gear_score: "200".into(),
                     current_score: 250,
                     highest_score: Some(280),
                     score_updated_at: "2026-08-03".into(),
                     weekly_wins: Some(7),
-                }],
-            };
-            let result = commit_account_role_data_refresh(database.pool(), prepared)
-                .await
-                .unwrap();
-            assert_eq!(result.updated_count, 1);
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(patch.highest_score, Some(300));
+            assert_eq!(patch.weekly_wins, Some(7));
 
             let row = sqlx::query("SELECT * FROM account_profiles WHERE id = ?")
                 .bind("account-1")
@@ -919,24 +1131,21 @@ mod tests {
             assert_eq!(row.get::<String, _>("notes"), "原备注");
             assert_eq!(row.get::<i64, _>("needs_review"), 1);
 
-            let prepared_without_weekly_wins = PreparedAccountRoleDataRefresh {
-                items: vec![AccountRoleDataRefreshItem {
-                    account_id: "account-1".into(),
-                    status: AccountRoleDataRefreshStatus::Updated,
-                    message: None,
-                }],
-                updates: vec![AccountRoleDataUpdate {
+            let patch = commit_account_role_data_update(
+                database.pool(),
+                AccountRoleDataUpdate {
                     account_id: "account-1".into(),
                     gear_score: "210".into(),
                     current_score: 260,
                     highest_score: Some(290),
                     score_updated_at: "2026-08-04".into(),
                     weekly_wins: None,
-                }],
-            };
-            commit_account_role_data_refresh(database.pool(), prepared_without_weekly_wins)
-                .await
-                .unwrap();
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(patch.highest_score, Some(300));
+            assert_eq!(patch.weekly_wins, Some(7));
             let row = sqlx::query("SELECT * FROM account_profiles WHERE id = ?")
                 .bind("account-1")
                 .fetch_one(database.pool())
@@ -949,47 +1158,37 @@ mod tests {
     }
 
     #[test]
-    fn rolls_back_every_update_when_any_account_disappears_before_commit() {
+    fn preserves_completed_updates_when_a_later_account_disappears() {
         run_async(async {
             let database = Database::in_memory().await.unwrap();
             insert_account(&database, "account-1", Some("区服"), Some("角色"), 300).await;
-            let prepared = PreparedAccountRoleDataRefresh {
-                items: vec![
-                    AccountRoleDataRefreshItem {
-                        account_id: "account-1".into(),
-                        status: AccountRoleDataRefreshStatus::Updated,
-                        message: None,
-                    },
-                    AccountRoleDataRefreshItem {
-                        account_id: "missing-account".into(),
-                        status: AccountRoleDataRefreshStatus::Updated,
-                        message: None,
-                    },
-                ],
-                updates: vec![
-                    AccountRoleDataUpdate {
-                        account_id: "account-1".into(),
-                        gear_score: "999".into(),
-                        current_score: 999,
-                        highest_score: Some(999),
-                        score_updated_at: "2026-08-03".into(),
-                        weekly_wins: Some(9),
-                    },
-                    AccountRoleDataUpdate {
-                        account_id: "missing-account".into(),
-                        gear_score: "999".into(),
-                        current_score: 999,
-                        highest_score: Some(999),
-                        score_updated_at: "2026-08-03".into(),
-                        weekly_wins: Some(9),
-                    },
-                ],
-            };
-            assert!(
-                commit_account_role_data_refresh(database.pool(), prepared)
-                    .await
-                    .is_err()
-            );
+            commit_account_role_data_update(
+                database.pool(),
+                AccountRoleDataUpdate {
+                    account_id: "account-1".into(),
+                    gear_score: "999".into(),
+                    current_score: 999,
+                    highest_score: Some(999),
+                    score_updated_at: "2026-08-03".into(),
+                    weekly_wins: Some(9),
+                },
+            )
+            .await
+            .unwrap();
+            let error = commit_account_role_data_update(
+                database.pool(),
+                AccountRoleDataUpdate {
+                    account_id: "missing-account".into(),
+                    gear_score: "999".into(),
+                    current_score: 999,
+                    highest_score: Some(999),
+                    score_updated_at: "2026-08-03".into(),
+                    weekly_wins: Some(9),
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(error.contains("账号档案不存在"));
             let row = sqlx::query(
                 "SELECT gear_score, current_score, highest_score FROM account_profiles WHERE id = ?",
             )
@@ -997,9 +1196,9 @@ mod tests {
             .fetch_one(database.pool())
             .await
             .unwrap();
-            assert_eq!(row.get::<String, _>("gear_score"), "100");
-            assert_eq!(row.get::<i64, _>("current_score"), 100);
-            assert_eq!(row.get::<i64, _>("highest_score"), 300);
+            assert_eq!(row.get::<String, _>("gear_score"), "999");
+            assert_eq!(row.get::<i64, _>("current_score"), 999);
+            assert_eq!(row.get::<i64, _>("highest_score"), 999);
         });
     }
 }

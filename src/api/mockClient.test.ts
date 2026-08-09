@@ -67,18 +67,26 @@ describe("browser mock API", () => {
   it("refreshes role data deterministically without a network request", async () => {
     const previousSettings = await mockApi.getSettings();
     await mockApi.updateSettings({ ...previousSettings, accountRoleDataApiKey: "demo-key" });
-    const result = await mockApi.refreshAccountProfileRoleData([
-      "account-1",
-      "account-3",
-      "missing-account",
-      "account-1",
-    ]);
+    const progress = vi.fn();
+    const result = await mockApi.refreshAccountProfileRoleData(
+      ["account-1", "account-3", "missing-account", "account-1"],
+      progress,
+    );
 
     expect(result.requestedCount).toBe(3);
     expect(result.items.map((item) => item.status)).toEqual(["updated", "noRecord", "failed"]);
     expect(result.updatedCount).toBe(1);
     expect(result.noRecordCount).toBe(1);
     expect(result.failedCount).toBe(1);
+    expect(progress).toHaveBeenCalledTimes(3);
+    expect(progress.mock.calls[0][0]).toMatchObject({
+      completedCount: 1,
+      requestedCount: 3,
+      item: { accountId: "account-1", status: "updated" },
+      patch: { accountId: "account-1" },
+    });
+    expect(progress.mock.calls[1][0].patch).toBeUndefined();
+    expect(JSON.stringify(progress.mock.calls)).not.toContain("password");
     expect((await mockApi.getAccountProfile("account-1")).scoreUpdatedAt).toMatch(
       /^\d{4}-\d{2}-\d{2}$/,
     );

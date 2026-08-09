@@ -1,6 +1,7 @@
 import type {
   AccountProfile,
   AccountProfileInput,
+  AccountRoleDataRefreshProgress,
   AccountRoleDataRefreshResult,
   AccountTableColumnWidths,
   AppAccessRecoveryProof,
@@ -61,7 +62,10 @@ export interface ApiClient {
   reorderAccountProfiles(ids: string[]): Promise<void>;
   copyAccountName(id: string): Promise<void>;
   copyAccountCharacterName(id: string): Promise<void>;
-  refreshAccountProfileRoleData(ids: string[]): Promise<AccountRoleDataRefreshResult>;
+  refreshAccountProfileRoleData(
+    ids: string[],
+    onProgress?: (progress: AccountRoleDataRefreshProgress) => void,
+  ): Promise<AccountRoleDataRefreshResult>;
 
   appAccessStatus(): Promise<AppAccessStatus>;
   initializeAppAccess(password: string, recovery: AppAccessRecoverySetup): Promise<AppAccessStatus>;

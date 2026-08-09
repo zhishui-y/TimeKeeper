@@ -1,6 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AccountProfile,
+  AccountRoleDataRefreshProgress,
   AccountRoleDataRefreshResult,
   AccountTableColumnWidths,
   AppAccessStatus,
@@ -62,8 +63,13 @@ const nativeApi: ApiClient = {
   reorderAccountProfiles: (ids) => invoke<void>("reorder_account_profiles", { ids }),
   copyAccountName: (id) => invoke<void>("copy_account_name", { id }),
   copyAccountCharacterName: (id) => invoke<void>("copy_account_character_name", { id }),
-  refreshAccountProfileRoleData: (ids) =>
-    invoke<AccountRoleDataRefreshResult>("refresh_account_profile_role_data", { ids }),
+  refreshAccountProfileRoleData: (ids, onProgress) => {
+    const channel = new Channel<AccountRoleDataRefreshProgress>(onProgress ?? (() => undefined));
+    return invoke<AccountRoleDataRefreshResult>("refresh_account_profile_role_data", {
+      ids,
+      onProgress: channel,
+    });
+  },
 
   appAccessStatus: () => invoke<AppAccessStatus>("app_access_status"),
   initializeAppAccess: (password, recovery) =>

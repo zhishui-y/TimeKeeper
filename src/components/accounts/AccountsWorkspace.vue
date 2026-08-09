@@ -32,7 +32,9 @@ import AccountTable from "./AccountTable.vue";
 import AccountToolbar from "./AccountToolbar.vue";
 
 const ui = useUiStore();
-const { items, loading, error, load } = useAccounts({ immediate: false });
+const { items, loading, error, load, applyRoleDataRefreshPatch } = useAccounts({
+  immediate: false,
+});
 const query = shallowRef("");
 const needsReviewOnly = shallowRef(false);
 const accountFilters = reactive<AccountProfileFilters>({
@@ -77,6 +79,9 @@ const visibleProfiles = computed(() =>
   ),
 );
 const roleDataRefresh = useAccountRoleDataRefresh({
+  onProgress(progress) {
+    if (progress.patch) applyRoleDataRefreshPatch(progress.patch);
+  },
   async afterRefresh() {
     await load(query.value, needsReviewOnly.value ? true : undefined);
     ui.markAccountsChanged();

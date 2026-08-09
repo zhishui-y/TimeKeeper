@@ -1,6 +1,6 @@
 import { onMounted, readonly, shallowRef } from "vue";
 import { api, errorMessage } from "../api/client";
-import type { AccountProfile } from "../types/domain";
+import type { AccountProfile, AccountRoleDataRefreshPatch } from "../types/domain";
 
 export interface UseAccountsOptions {
   immediate?: boolean;
@@ -45,6 +45,22 @@ export function useAccounts({ immediate = true }: UseAccountsOptions = {}) {
     }
   }
 
+  function applyRoleDataRefreshPatch(patch: AccountRoleDataRefreshPatch): void {
+    items.value = items.value.map((profile) =>
+      profile.id === patch.accountId
+        ? {
+            ...profile,
+            gearScore: patch.gearScore,
+            currentScore: patch.currentScore,
+            highestScore: patch.highestScore,
+            scoreUpdatedAt: patch.scoreUpdatedAt,
+            weeklyWins: patch.weeklyWins,
+            updatedAt: patch.updatedAt,
+          }
+        : profile,
+    );
+  }
+
   onMounted(() => {
     if (immediate) void load();
   });
@@ -54,5 +70,6 @@ export function useAccounts({ immediate = true }: UseAccountsOptions = {}) {
     loading: readonly(loading),
     error: readonly(error),
     load,
+    applyRoleDataRefreshPatch,
   };
 }

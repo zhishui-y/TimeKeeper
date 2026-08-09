@@ -1,12 +1,12 @@
 use chrono::{NaiveDate, Utc};
 use sqlx::{QueryBuilder, Row, Sqlite, Transaction, sqlite::SqliteRow};
-use tauri::State;
+use tauri::{State, ipc::Channel};
 use uuid::Uuid;
 
 use crate::{
     accounts_remote::{
-        AccountRoleDataRefreshResult, AccountRoleDataRefreshState,
-        commit_account_role_data_refresh, prepare_account_role_data_refresh,
+        AccountRoleDataRefreshProgress, AccountRoleDataRefreshResult, AccountRoleDataRefreshState,
+        refresh_account_role_data,
     },
     app_access::AppAccessState,
     backup::BackupState,
@@ -550,21 +550,21 @@ pub async fn refresh_account_profile_role_data(
     refresh: State<'_, AccountRoleDataRefreshState>,
     access: State<'_, AppAccessState>,
     ids: Vec<String>,
+    on_progress: Channel<AccountRoleDataRefreshProgress>,
 ) -> Result<AccountRoleDataRefreshResult, String> {
     access.require_unlocked()?;
     let _refresh_guard = refresh.try_start()?;
     let settings = settings.snapshot().map_err(|error| error.to_string())?;
-    let prepared = prepare_account_role_data_refresh(
+    refresh_account_role_data(
         database.pool(),
         refresh.client(),
         &settings.account_role_data_server_url,
         &settings.account_role_data_api_key,
         ids,
+        backup.inner(),
+        &on_progress,
     )
-    .await?;
-
-    let _operation_guard = backup.lock_data_operation().await;
-    commit_account_role_data_refresh(database.pool(), prepared).await
+    .await
 }
 
 #[cfg(test)]

@@ -315,6 +315,23 @@ export interface AccountRoleDataRefreshResult {
   items: readonly AccountRoleDataRefreshItem[];
 }
 
+export interface AccountRoleDataRefreshPatch {
+  accountId: string;
+  gearScore: string;
+  currentScore: number;
+  highestScore: number | null;
+  scoreUpdatedAt: string;
+  weeklyWins: number | null;
+  updatedAt: string;
+}
+
+export interface AccountRoleDataRefreshProgress {
+  completedCount: number;
+  requestedCount: number;
+  item: AccountRoleDataRefreshItem;
+  patch?: AccountRoleDataRefreshPatch | null;
+}
+
 export interface AppearanceSettings {
   fontFamily: string;
   baseFontSize: number;

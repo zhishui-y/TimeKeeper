@@ -1,14 +1,18 @@
 import { onScopeDispose, readonly, shallowRef } from "vue";
 import { api, errorMessage } from "../api/client";
-import type { AccountRoleDataRefreshResult } from "../types/domain";
+import type { AccountRoleDataRefreshProgress, AccountRoleDataRefreshResult } from "../types/domain";
 
 export interface UseAccountRoleDataRefreshOptions {
   afterRefresh?: (result: AccountRoleDataRefreshResult) => Promise<void> | void;
+  onProgress?: (progress: AccountRoleDataRefreshProgress) => void;
 }
 
 const SUCCESS_DISMISS_DELAY_MS = 3_000;
 
-export function useAccountRoleDataRefresh({ afterRefresh }: UseAccountRoleDataRefreshOptions = {}) {
+export function useAccountRoleDataRefresh({
+  afterRefresh,
+  onProgress,
+}: UseAccountRoleDataRefreshOptions = {}) {
   const busy = shallowRef(false);
   const targetIds = shallowRef<ReadonlySet<string>>(new Set());
   const result = shallowRef<AccountRoleDataRefreshResult | null>(null);
@@ -40,7 +44,12 @@ export function useAccountRoleDataRefresh({ afterRefresh }: UseAccountRoleDataRe
     result.value = null;
     error.value = null;
     try {
-      const nextResult = await api.refreshAccountProfileRoleData(normalizedIds);
+      const nextResult = await api.refreshAccountProfileRoleData(normalizedIds, (progress) => {
+        const pendingIds = new Set(targetIds.value);
+        pendingIds.delete(progress.item.accountId);
+        targetIds.value = pendingIds;
+        onProgress?.(progress);
+      });
       result.value = nextResult;
       await afterRefresh?.(nextResult);
       scheduleDismiss(nextResult);

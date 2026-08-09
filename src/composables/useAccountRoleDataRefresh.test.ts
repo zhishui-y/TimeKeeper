@@ -3,7 +3,11 @@
 import { effectScope } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockApi } from "../api/mockClient";
-import type { AccountRoleDataRefreshResult, AccountRoleDataRefreshStatus } from "../types/domain";
+import type {
+  AccountRoleDataRefreshProgress,
+  AccountRoleDataRefreshResult,
+  AccountRoleDataRefreshStatus,
+} from "../types/domain";
 import { useAccountRoleDataRefresh } from "./useAccountRoleDataRefresh";
 
 function resultFor(status: AccountRoleDataRefreshStatus): AccountRoleDataRefreshResult {
@@ -15,6 +19,14 @@ function resultFor(status: AccountRoleDataRefreshStatus): AccountRoleDataRefresh
     failedCount: status === "failed" ? 1 : 0,
     items: [{ accountId: "account-1", status }],
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
 }
 
 describe("useAccountRoleDataRefresh", () => {
@@ -81,5 +93,55 @@ describe("useAccountRoleDataRefresh", () => {
     vi.advanceTimersByTime(1);
     expect(refreshState.result.value).not.toBeNull();
     expect(refresh).toHaveBeenCalledTimes(3);
+  });
+
+  it("removes completed targets and forwards progress before the command resolves", async () => {
+    const pending = deferred<AccountRoleDataRefreshResult>();
+    let reportProgress: ((progress: AccountRoleDataRefreshProgress) => void) | undefined;
+    vi.spyOn(mockApi, "refreshAccountProfileRoleData").mockImplementation((_ids, onProgress) => {
+      reportProgress = onProgress!;
+      return pending.promise;
+    });
+    const onProgress = vi.fn();
+    const scope = effectScope();
+    const refreshState = scope.run(() => useAccountRoleDataRefresh({ onProgress }))!;
+
+    const refreshPromise = refreshState.refresh(["account-1", "account-2"]);
+    expect([...refreshState.targetIds.value]).toEqual(["account-1", "account-2"]);
+    await vi.waitFor(() => expect(reportProgress).toBeTypeOf("function"));
+    reportProgress!({
+      completedCount: 1,
+      requestedCount: 2,
+      item: { accountId: "account-1", status: "updated" },
+      patch: {
+        accountId: "account-1",
+        gearScore: "200000",
+        currentScore: 2500,
+        highestScore: 2600,
+        scoreUpdatedAt: "2026-08-09",
+        weeklyWins: 6,
+        updatedAt: "2026-08-09T00:00:00Z",
+      },
+    });
+
+    expect([...refreshState.targetIds.value]).toEqual(["account-2"]);
+    expect(onProgress).toHaveBeenCalledOnce();
+    expect(refreshState.busy.value).toBe(true);
+
+    pending.resolve({
+      requestedCount: 2,
+      updatedCount: 1,
+      noRecordCount: 1,
+      skippedCount: 0,
+      failedCount: 0,
+      items: [
+        { accountId: "account-1", status: "updated" },
+        { accountId: "account-2", status: "noRecord" },
+      ],
+    });
+    await refreshPromise;
+    expect(refreshState.busy.value).toBe(false);
+    expect(refreshState.targetIds.value.size).toBe(0);
+    scope.stop();
   });
 });
