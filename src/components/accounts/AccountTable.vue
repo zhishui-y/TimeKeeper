@@ -107,6 +107,16 @@ function toggleOne(profileId: string, event: unknown): void {
   selectedIds.value = [...next];
 }
 
+function toggleSelection(profileId: string): void {
+  const next = new Set(selectedIds.value);
+  if (next.has(profileId)) {
+    next.delete(profileId);
+  } else {
+    next.add(profileId);
+  }
+  selectedIds.value = [...next];
+}
+
 function toggleRow(profileId: string, event: { target: unknown }): void {
   const target = event.target as { closest?: (selector: string) => unknown } | null;
   if (
@@ -116,13 +126,18 @@ function toggleRow(profileId: string, event: { target: unknown }): void {
     return;
   }
 
-  const next = new Set(selectedIds.value);
-  if (next.has(profileId)) {
-    next.delete(profileId);
-  } else {
-    next.add(profileId);
-  }
-  selectedIds.value = [...next];
+  toggleSelection(profileId);
+}
+
+function copyAccount(profile: AccountProfile): void {
+  toggleSelection(profile.id);
+  emit("copyAccount", profile);
+}
+
+function copyPassword(profile: AccountProfile): void {
+  if (!profile.password) return;
+  toggleSelection(profile.id);
+  emit("copy", profile);
 }
 
 function ariaSort(sortKey: AccountProfileSortKey): "ascending" | "descending" | "none" {
@@ -527,7 +542,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
                 type="button"
                 title="复制账号"
                 :aria-label="`复制账号 ${profile.accountName}`"
-                @click="emit('copyAccount', profile)"
+                @click="copyAccount(profile)"
               >
                 <Copy :size="15" />
               </button>
@@ -539,7 +554,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
                 :disabled="!profile.password"
                 :title="profile.password ? `复制${profile.accountName} 的密码` : '未保存账号密码'"
                 :aria-label="`复制${profile.accountName} 的密码`"
-                @click="emit('copy', profile)"
+                @click="copyPassword(profile)"
               >
                 <ClipboardCopy :size="15" />
               </button>

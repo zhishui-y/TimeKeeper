@@ -259,7 +259,7 @@ describe("TodayWorkspace", () => {
     });
     await flushPromises();
 
-    await wrapper.get('button[aria-label="编辑结算"]').trigger("click");
+    await wrapper.get('button[aria-label="填写小北 的结算金额"]').trigger("click");
 
     expect(ui.activeAppointment?.id).toBe(target.id);
     expect(ui.appointmentDrawerInitialFocus).toBe("amount");

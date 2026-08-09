@@ -197,6 +197,68 @@ describe("AppointmentTable", () => {
     expect(wrapper.emitted("toggleOne")?.length).toBe(eventCount);
   });
 
+  it("toggles row selection when copying an account or password", async () => {
+    const target = appointment();
+    const wrapper = mount(AppointmentTable, {
+      props: {
+        appointments: [target],
+        selectedIds: [],
+        allSelected: false,
+        selectionIndeterminate: false,
+        selectingAll: false,
+        columnWidths: { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+      },
+    });
+
+    const accountButton = wrapper.get('button[aria-label="复制账号 demo-account"]');
+    const passwordButton = wrapper.get('button[aria-label="复制测试联系人 的预约密码"]');
+
+    await accountButton.trigger("click");
+    expect(wrapper.emitted("toggleOne")?.slice(-1)[0]).toEqual([target.id, true]);
+    expect(wrapper.emitted("copyAccount")).toHaveLength(1);
+
+    await wrapper.setProps({ selectedIds: [target.id] });
+    await accountButton.trigger("click");
+    expect(wrapper.emitted("toggleOne")?.slice(-1)[0]).toEqual([target.id, false]);
+    expect(wrapper.emitted("copyAccount")).toHaveLength(2);
+
+    await wrapper.setProps({ selectedIds: [] });
+    await passwordButton.trigger("click");
+    expect(wrapper.emitted("toggleOne")?.slice(-1)[0]).toEqual([target.id, true]);
+    expect(wrapper.emitted("copyPassword")).toHaveLength(1);
+
+    await wrapper.setProps({ selectedIds: [target.id] });
+    await passwordButton.trigger("click");
+    expect(wrapper.emitted("toggleOne")?.slice(-1)[0]).toEqual([target.id, false]);
+    expect(wrapper.emitted("copyPassword")).toHaveLength(2);
+  });
+
+  it("does not select an appointment from a disabled password copy button", async () => {
+    const target = appointment();
+    const withoutPassword = appointment(true, {
+      id: "appointment-without-password",
+      account: { ...target.account!, password: null },
+    });
+    const wrapper = mount(AppointmentTable, {
+      props: {
+        appointments: [withoutPassword],
+        selectedIds: [],
+        allSelected: false,
+        selectionIndeterminate: false,
+        selectingAll: false,
+        columnWidths: { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+      },
+    });
+
+    const passwordButton = wrapper.get('button[aria-label="复制测试联系人 的预约密码"]');
+    expect(passwordButton.attributes("disabled")).toBe("");
+    await passwordButton.trigger("click");
+    expect(wrapper.emitted("toggleOne")).toBeUndefined();
+    expect(wrapper.emitted("copyPassword")).toBeUndefined();
+  });
+
   it("exposes all ten resizable data columns and emits typed width actions", async () => {
     const wrapper = mount(AppointmentTable, {
       props: {

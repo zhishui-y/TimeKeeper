@@ -123,4 +123,39 @@ describe("WeekSchedule", () => {
     expect(chips[0]?.attributes("title")).toContain("下一时段");
     expect(chips[0]?.attributes("aria-label")).toContain("20:00–22:00");
   });
+
+  it("renders every appointment in an accessible per-day scroll region", async () => {
+    const appointments = Array.from({ length: 5 }, (_, index) =>
+      appointment({
+        id: `appointment-${index + 1}`,
+        contactName: `联系人${index + 1}`,
+        startsAt: `2026-07-20T${String(10 + index).padStart(2, "0")}:00:00+08:00`,
+        endsAt: `2026-07-20T${String(11 + index).padStart(2, "0")}:00:00+08:00`,
+      }),
+    );
+    const wrapper = mount(WeekSchedule, {
+      props: {
+        days: [
+          {
+            date: "2026-07-20",
+            weekday: "周一",
+            dayNumber: "20",
+            isToday: true,
+            appointments,
+          },
+        ],
+      },
+    });
+
+    const track = wrapper.get(".week-day__track");
+    expect(track.attributes("role")).toBe("region");
+    expect(track.attributes("tabindex")).toBe("0");
+    expect(track.attributes("aria-label")).toContain("可上下滚动查看更多");
+    expect(wrapper.findAll(".schedule-chip")).toHaveLength(5);
+    expect(wrapper.find(".week-day__more").exists()).toBe(false);
+
+    await wrapper.findAll(".schedule-chip")[4]!.trigger("click");
+    expect(wrapper.emitted("edit")?.[0]?.[0]).toMatchObject({ id: "appointment-5" });
+    expect(wrapper.emitted("create")).toBeUndefined();
+  });
 });

@@ -104,6 +104,64 @@ describe("AccountTable", () => {
     expect(wrapper.emitted("update:selectedIds")?.length).toBe(eventCount);
   });
 
+  it("toggles row selection when copying an account or password", async () => {
+    const wrapper = mount(AccountTable, {
+      props: {
+        profiles,
+        selectedIds: [],
+        sortKey: null,
+        sortDirection: "asc",
+        reorderEnabled: true,
+        reorderDisabledReason: "",
+        columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+      },
+    });
+
+    const accountButton = wrapper.get('button[aria-label="复制账号 账号一"]');
+    const passwordButton = wrapper.get('button[aria-label="复制账号一 的密码"]');
+
+    await accountButton.trigger("click");
+    expect(wrapper.emitted("update:selectedIds")?.slice(-1)[0]?.[0]).toEqual(["account-1"]);
+    expect(wrapper.emitted("copyAccount")).toHaveLength(1);
+
+    await wrapper.setProps({ selectedIds: ["account-1"] });
+    await accountButton.trigger("click");
+    expect(wrapper.emitted("update:selectedIds")?.slice(-1)[0]?.[0]).toEqual([]);
+    expect(wrapper.emitted("copyAccount")).toHaveLength(2);
+
+    await wrapper.setProps({ selectedIds: [] });
+    await passwordButton.trigger("click");
+    expect(wrapper.emitted("update:selectedIds")?.slice(-1)[0]?.[0]).toEqual(["account-1"]);
+    expect(wrapper.emitted("copy")).toHaveLength(1);
+
+    await wrapper.setProps({ selectedIds: ["account-1"] });
+    await passwordButton.trigger("click");
+    expect(wrapper.emitted("update:selectedIds")?.slice(-1)[0]?.[0]).toEqual([]);
+    expect(wrapper.emitted("copy")).toHaveLength(2);
+  });
+
+  it("does not select an account from a disabled password copy button", async () => {
+    const wrapper = mount(AccountTable, {
+      props: {
+        profiles,
+        selectedIds: [],
+        sortKey: null,
+        sortDirection: "asc",
+        reorderEnabled: true,
+        reorderDisabledReason: "",
+        columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+      },
+    });
+
+    const passwordButton = wrapper.get('button[aria-label="复制账号二 的密码"]');
+    expect(passwordButton.attributes("disabled")).toBe("");
+    await passwordButton.trigger("click");
+    expect(wrapper.emitted("update:selectedIds")).toBeUndefined();
+    expect(wrapper.emitted("copy")).toBeUndefined();
+  });
+
   it("keeps row actions available after the application has been unlocked", () => {
     const wrapper = mount(AccountTable, {
       props: {

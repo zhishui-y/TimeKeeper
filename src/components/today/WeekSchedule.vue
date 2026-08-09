@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { computed } from "vue";
 import type { Appointment } from "../../types/domain";
 import { formatTime, formatTimeRange } from "../../utils/formatters";
 import {
@@ -26,8 +25,6 @@ const emit = defineEmits<{
   create: [serviceDate: string];
   selectDate: [serviceDate: string];
 }>();
-
-const maxCount = computed(() => Math.max(...props.days.map((day) => day.appointments.length), 1));
 
 function appointmentTitle(appointment: Appointment): string {
   const details = [
@@ -72,11 +69,13 @@ function appointmentTitle(appointment: Appointment): string {
         </button>
         <div
           class="week-day__track"
-          :style="{ minHeight: `${76 + maxCount * 3}px` }"
+          role="region"
+          tabindex="0"
+          :aria-label="`${day.weekday}${day.dayNumber}日预约，可上下滚动查看更多`"
           @click="emit('create', day.date)"
         >
           <button
-            v-for="appointment in day.appointments.slice(0, 3)"
+            v-for="appointment in day.appointments"
             :key="appointment.id"
             class="schedule-chip"
             :class="[
@@ -99,12 +98,6 @@ function appointmentTitle(appointment: Appointment): string {
               {{ appointmentProgressStatusLabels[appointmentProgressStatus(appointment)] }}
             </span>
           </button>
-          <span v-if="day.appointments.length > 3" class="week-day__more week-day__more--regular">
-            +{{ day.appointments.length - 3 }} 条
-          </span>
-          <span v-if="day.appointments.length > 2" class="week-day__more week-day__more--compact">
-            +{{ day.appointments.length - 2 }} 条
-          </span>
           <span v-if="day.appointments.length === 0" class="week-day__empty">暂无</span>
         </div>
       </div>
@@ -154,6 +147,7 @@ function appointmentTitle(appointment: Appointment): string {
 .week-day {
   display: flex;
   min-width: 0;
+  min-height: 0;
   flex-direction: column;
   padding: 0;
   border: 0;
@@ -236,8 +230,21 @@ function appointmentTitle(appointment: Appointment): string {
   flex: 1;
   flex-direction: column;
   gap: 6px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: none;
   padding: 9px 8px;
+}
+
+.week-day__track::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.week-day__track:focus-visible {
+  outline: 2px solid var(--brand-border);
+  outline-offset: -2px;
 }
 
 .schedule-chip {
@@ -371,7 +378,6 @@ function appointmentTitle(appointment: Appointment): string {
   text-decoration: none;
 }
 
-.week-day__more,
 .week-day__empty {
   align-self: center;
   margin-top: 2px;
@@ -386,10 +392,6 @@ function appointmentTitle(appointment: Appointment): string {
   font-weight: 500;
 }
 
-.week-day__more--compact {
-  display: none;
-}
-
 @media (max-height: 760px) {
   .week-day__track {
     gap: 4px;
@@ -399,15 +401,6 @@ function appointmentTitle(appointment: Appointment): string {
   .schedule-chip {
     height: 32px;
     flex-basis: 32px;
-  }
-
-  .schedule-chip:nth-of-type(n + 3),
-  .week-day__more--regular {
-    display: none;
-  }
-
-  .week-day__more--compact {
-    display: inline;
   }
 }
 

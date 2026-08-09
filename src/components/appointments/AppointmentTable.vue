@@ -67,6 +67,10 @@ function toggleOne(appointmentId: string, event: unknown): void {
   emit("toggleOne", appointmentId, isChecked(event));
 }
 
+function toggleSelection(appointmentId: string): void {
+  emit("toggleOne", appointmentId, !selectedIdSet.value.has(appointmentId));
+}
+
 function toggleRow(appointmentId: string, event: { target: unknown }): void {
   const target = event.target as { closest?: (selector: string) => unknown } | null;
   if (
@@ -75,7 +79,18 @@ function toggleRow(appointmentId: string, event: { target: unknown }): void {
   ) {
     return;
   }
-  emit("toggleOne", appointmentId, !selectedIdSet.value.has(appointmentId));
+  toggleSelection(appointmentId);
+}
+
+function copyAccount(appointment: Appointment): void {
+  toggleSelection(appointment.id);
+  emit("copyAccount", appointment);
+}
+
+function copyPassword(appointment: Appointment): void {
+  if (!appointment.account?.password) return;
+  toggleSelection(appointment.id);
+  emit("copyPassword", appointment);
 }
 
 function previewColumnWidth(columnKey: AppointmentTableColumnKey, width: number): void {
@@ -282,8 +297,8 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
               <AppointmentAccountSummary
                 :account="appointment.account"
                 :contact-name="appointment.contactName"
-                @copy-account="emit('copyAccount', appointment)"
-                @copy-password="emit('copyPassword', appointment)"
+                @copy-account="copyAccount(appointment)"
+                @copy-password="copyPassword(appointment)"
               />
             </td>
             <td>
