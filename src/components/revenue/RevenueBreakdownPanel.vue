@@ -20,7 +20,7 @@ const props = defineProps<{
 }>();
 
 const dimension = shallowRef<BreakdownDimension>("paymentMethods");
-const chartType = shallowRef<BreakdownChartType>("bar");
+const chartType = shallowRef<BreakdownChartType>("pie");
 const sourceItems = computed(() =>
   dimension.value === "paymentMethods" ? props.paymentMethods : props.contacts,
 );

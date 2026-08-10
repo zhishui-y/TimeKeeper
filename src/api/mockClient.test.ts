@@ -737,6 +737,36 @@ describe("browser mock API", () => {
     });
   });
 
+  it("searches appointments by partial YY channel and notes", async () => {
+    const suffix = Date.now().toString();
+    const channel = suffix.slice(-8);
+    const yy = await mockApi.createAppointment({
+      ...businessInput("2099-08-10", "10:00", "11:00", "频道搜索回归", 1_000),
+      voicePlatform: "yy",
+      voiceChannel: channel,
+    });
+    const notes = await mockApi.createAppointment({
+      ...businessInput("2099-08-10", "11:00", "12:00", "备注搜索回归", 1_000),
+      notes: `赛季末冲分-${suffix}`,
+    });
+    const unrelated = await mockApi.createAppointment(
+      businessInput("2099-08-10", "12:00", "13:00", "无关预约", 1_000),
+    );
+    const ids = [yy.appointment.id, notes.appointment.id, unrelated.appointment.id];
+
+    try {
+      const yyPage = await mockApi.listAppointmentPage({ query: channel.slice(2, -2) });
+      expect(yyPage.items.map((item) => item.id)).toContain(yy.appointment.id);
+      expect(yyPage.items.map((item) => item.id)).not.toContain(unrelated.appointment.id);
+
+      const notesPage = await mockApi.listAppointmentPage({ query: `末冲分-${suffix}` });
+      expect(notesPage.items.map((item) => item.id)).toContain(notes.appointment.id);
+      expect(notesPage.items.map((item) => item.id)).not.toContain(unrelated.appointment.id);
+    } finally {
+      await mockApi.deleteAppointments({ kind: "explicit", ids });
+    }
+  });
+
   it("paginates filtered appointments and deletes a token snapshot with exclusions", async () => {
     const suffix = Date.now();
     const query = `分页-${suffix}`;

@@ -443,7 +443,9 @@ describe("AppointmentsWorkspace", () => {
     await flushPromises();
 
     expect(wrapper.findAll("button").some((button) => button.text().trim() === "筛选")).toBe(false);
-    await wrapper.get('input[placeholder="搜索联系人、内容或账号"]').setValue("  阿水  ");
+    await wrapper
+      .get('input[placeholder="搜索联系人、内容、账号、YY频道或备注"]')
+      .setValue("  阿水  ");
     await flushPromises();
     expect(router.currentRoute.value.query).toEqual({ query: "阿水" });
     expect(list).toHaveBeenLastCalledWith({ query: "阿水" }, 1, 100);
@@ -491,7 +493,7 @@ describe("AppointmentsWorkspace", () => {
     expect(router.currentRoute.value.query).toEqual({});
     expect(useUiStore(pinia).toast?.message).toBe("开始日期不能晚于结束日期");
 
-    await wrapper.get('input[placeholder="搜索联系人、内容或账号"]').setValue("阿水");
+    await wrapper.get('input[placeholder="搜索联系人、内容、账号、YY频道或备注"]').setValue("阿水");
     await flushPromises();
     expect(router.currentRoute.value.query).toEqual({ query: "阿水" });
     expect(list).toHaveBeenLastCalledWith({ query: "阿水" }, 1, 100);

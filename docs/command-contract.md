@@ -55,7 +55,9 @@
 `list_appointments` 是范围读取接口：`filters.from` 与 `filters.to` 必须同时提供，供今日工作台和
 日历可见区间使用。`list_appointment_page` 用于历史记录，页码从 1 开始，默认每页 100、最大 200；
 返回 `items`、`totalCount`、`page`、`pageSize`、`totalPages`。计数与页面行在同一只读事务取得，
-排序固定为 `serviceDate DESC, startsAt DESC, createdAt DESC, id DESC`。
+排序固定为 `serviceDate DESC, startsAt DESC, createdAt DESC, id DESC`。`filters.query` 去除首尾
+空白后，对联系人、内容、备注、YY 频道号及账号快照字段执行不区分 ASCII 大小写的部分匹配；
+输入 `YY` 本身不会作为“全部 YY 预约”的特殊关键词。
 
 `create_appointment_selection` 返回准确 ID 快照的 `token`、`totalCount`、`expiresAt`，有效 10 分钟。
 `delete_appointments.selection` 是以下 tagged union：

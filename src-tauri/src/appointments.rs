@@ -769,6 +769,8 @@ fn push_appointment_filter_clauses<'args>(
             .push_bind(pattern.clone())
             .push(" OR lower(coalesce(a.notes, '')) LIKE ")
             .push_bind(pattern.clone())
+            .push(" OR lower(coalesce(a.voice_channel, '')) LIKE ")
+            .push_bind(pattern.clone())
             .push(" OR lower(coalesce(a.account_name, '')) LIKE ")
             .push_bind(pattern.clone())
             .push(" OR lower(coalesce(a.account_server, '')) LIKE ")
@@ -2538,6 +2540,63 @@ mod tests {
                 .len(),
                 1
             );
+        });
+    }
+
+    #[test]
+    fn searches_partial_yy_channels_and_notes() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+
+            let mut yy_input = business_input("2026-08-03", "10:00", "11:00");
+            yy_input.voice_platform = Some(VoicePlatform::Yy);
+            yy_input.voice_channel = Some("794676".into());
+            let yy = create_appointment_impl(&database, yy_input)
+                .await
+                .unwrap()
+                .appointment;
+
+            let mut notes_input = business_input("2026-08-03", "11:00", "12:00");
+            notes_input.notes = Some("赛季末冲分，优先晚间".into());
+            let notes = create_appointment_impl(&database, notes_input)
+                .await
+                .unwrap()
+                .appointment;
+
+            let unrelated =
+                create_appointment_impl(&database, business_input("2026-08-03", "12:00", "13:00"))
+                    .await
+                    .unwrap()
+                    .appointment;
+
+            let yy_page = list_appointment_page_impl(
+                &database,
+                AppointmentFilters {
+                    query: Some("4676".into()),
+                    ..AppointmentFilters::default()
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(yy_page.total_count, 1);
+            assert_eq!(yy_page.items[0].id, yy.id);
+
+            let notes_page = list_appointment_page_impl(
+                &database,
+                AppointmentFilters {
+                    query: Some("末冲".into()),
+                    ..AppointmentFilters::default()
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(notes_page.total_count, 1);
+            assert_eq!(notes_page.items[0].id, notes.id);
+            assert_ne!(notes_page.items[0].id, unrelated.id);
         });
     }
 

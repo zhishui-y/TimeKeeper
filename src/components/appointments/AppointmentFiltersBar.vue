@@ -100,7 +100,7 @@ function reset(): void {
       <input
         v-model="draft.query"
         class="input"
-        placeholder="搜索联系人、内容或账号"
+        placeholder="搜索联系人、内容、账号、YY频道或备注"
         @input="applyNonDateFilters"
       />
     </label>

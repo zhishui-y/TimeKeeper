@@ -7,7 +7,7 @@ import AppointmentFiltersBar from "./AppointmentFiltersBar.vue";
 describe("AppointmentFiltersBar", () => {
   it("applies search and categorical filters as soon as they change", async () => {
     const wrapper = mount(AppointmentFiltersBar, { props: { filters: {} } });
-    const search = wrapper.get('input[placeholder="搜索联系人、内容或账号"]');
+    const search = wrapper.get('input[placeholder="搜索联系人、内容、账号、YY频道或备注"]');
     const progress = wrapper.get('select[aria-label="预约进度"]');
 
     expect(wrapper.findAll("button").some((button) => button.text().trim() === "筛选")).toBe(false);
@@ -125,7 +125,8 @@ describe("AppointmentFiltersBar", () => {
       wrapper.get<HTMLSelectElement>('select[aria-label="预约进度"]').element.selectedIndex,
     ).toBe(0);
     expect(
-      wrapper.get<HTMLInputElement>('input[placeholder="搜索联系人、内容或账号"]').element.value,
+      wrapper.get<HTMLInputElement>('input[placeholder="搜索联系人、内容、账号、YY频道或备注"]')
+        .element.value,
     ).toBe("阿水");
   });
 });

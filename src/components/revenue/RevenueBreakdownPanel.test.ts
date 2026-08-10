@@ -45,14 +45,14 @@ function mountPanel(overrides: Partial<InstanceType<typeof RevenueBreakdownPanel
 }
 
 describe("RevenueBreakdownPanel", () => {
-  it("defaults to payment methods in a bar chart", () => {
+  it("defaults to payment methods in a pie chart", () => {
     const wrapper = mountPanel();
     const chart = wrapper.getComponent(RevenueBreakdownChartStub);
 
     expect(wrapper.get("h2").text()).toBe("收款渠道");
     expect(chart.props()).toMatchObject({
       items: paymentMethods,
-      chartType: "bar",
+      chartType: "pie",
       dimensionLabel: "收款渠道",
     });
     expect(
@@ -64,7 +64,7 @@ describe("RevenueBreakdownPanel", () => {
     expect(
       wrapper
         .findAll('[aria-label="图表类型"] button')
-        .find((button) => button.text() === "柱状")
+        .find((button) => button.text() === "饼图")
         ?.attributes("aria-pressed"),
     ).toBe("true");
   });
@@ -74,22 +74,22 @@ describe("RevenueBreakdownPanel", () => {
     const contactButton = wrapper
       .findAll('[aria-label="收款分析维度"] button')
       .find((button) => button.text() === "收款对象");
-    const pieButton = wrapper
+    const barButton = wrapper
       .findAll('[aria-label="图表类型"] button')
-      .find((button) => button.text() === "饼图");
-    if (!contactButton || !pieButton) throw new Error("收款分析切换按钮未完整渲染");
+      .find((button) => button.text() === "柱状");
+    if (!contactButton || !barButton) throw new Error("收款分析切换按钮未完整渲染");
 
     await contactButton.trigger("click");
-    await pieButton.trigger("click");
+    await barButton.trigger("click");
 
     expect(wrapper.get("h2").text()).toBe("收款对象");
     expect(wrapper.getComponent(RevenueBreakdownChartStub).props()).toMatchObject({
       items: contacts,
-      chartType: "pie",
+      chartType: "bar",
       dimensionLabel: "收款对象",
     });
     expect(contactButton.attributes("aria-pressed")).toBe("true");
-    expect(pieButton.attributes("aria-pressed")).toBe("true");
+    expect(barButton.attributes("aria-pressed")).toBe("true");
     expect(paymentMethods).toHaveLength(2);
     expect(contacts).toHaveLength(2);
   });
@@ -117,20 +117,20 @@ describe("RevenueBreakdownPanel", () => {
     const contactButton = wrapper
       .findAll('[aria-label="收款分析维度"] button')
       .find((button) => button.text() === "收款对象");
-    const pieButton = wrapper
+    const barButton = wrapper
       .findAll('[aria-label="图表类型"] button')
-      .find((button) => button.text() === "饼图");
-    if (!contactButton || !pieButton) throw new Error("收款分析切换按钮未完整渲染");
+      .find((button) => button.text() === "柱状");
+    if (!contactButton || !barButton) throw new Error("收款分析切换按钮未完整渲染");
 
     await contactButton.trigger("click");
-    await pieButton.trigger("click");
+    await barButton.trigger("click");
 
     expect(wrapper.getComponent(RevenueBreakdownChartStub).props()).toMatchObject({
       items: [
         { name: "南枝", amountMinor: 20_000, appointmentCount: 4 },
         { name: "其他", amountMinor: 200, appointmentCount: 3 },
       ],
-      chartType: "pie",
+      chartType: "bar",
       dimensionLabel: "收款对象",
     });
   });

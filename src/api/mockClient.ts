@@ -396,6 +396,7 @@ function filteredAppointments(filters: AppointmentFilters = {}): Appointment[] {
         item.contactName,
         item.content,
         item.notes,
+        item.voiceChannel,
         item.account?.accountName,
         item.account?.server,
         item.account?.specialization,
