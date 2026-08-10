@@ -402,9 +402,10 @@ pub struct RevenuePoint {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PaymentMethodSummary {
+pub struct RevenueBreakdownItem {
     pub name: String,
     pub amount_minor: i64,
+    pub appointment_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -419,7 +420,8 @@ pub struct RevenueSummary {
     pub average_hourly_minor: i64,
     pub appointment_count: i64,
     pub completed_count: i64,
-    pub payment_methods: Vec<PaymentMethodSummary>,
+    pub payment_methods: Vec<RevenueBreakdownItem>,
+    pub contacts: Vec<RevenueBreakdownItem>,
     pub points: Vec<RevenuePoint>,
 }
 

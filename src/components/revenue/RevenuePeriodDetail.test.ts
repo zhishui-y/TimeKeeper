@@ -15,7 +15,8 @@ const summary: RevenueSummary = {
   averageHourlyMinor: 3_429,
   appointmentCount: 2,
   completedCount: 1,
-  paymentMethods: [{ name: "微信", amountMinor: 12_000 }],
+  paymentMethods: [{ name: "微信", amountMinor: 12_000, appointmentCount: 1 }],
+  contacts: [{ name: "小北", amountMinor: 12_000, appointmentCount: 1 }],
   points: [
     {
       period: "2026-07-29",

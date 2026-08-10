@@ -9,7 +9,7 @@ use crate::{
     appointments::get_appointment_impl,
     db::Database,
     models::{
-        DashboardSummary, PaymentMethodSummary, ReportGranularity, RevenuePoint, RevenueSummary,
+        DashboardSummary, ReportGranularity, RevenueBreakdownItem, RevenuePoint, RevenueSummary,
         ServiceStatus, SettlementStatus,
     },
 };
@@ -95,6 +95,26 @@ fn duration_hours(starts_at: Option<&str>, ends_at: Option<&str>) -> Result<f64,
 
 fn round_hours(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
+}
+
+fn revenue_contact_name(value: &str) -> String {
+    let trimmed = value.trim();
+    let Some(prefix) = trimmed.get(..2) else {
+        return trimmed.to_owned();
+    };
+    if !prefix.eq_ignore_ascii_case("qq") {
+        return trimmed.to_owned();
+    }
+
+    let Some(suffix) = trimmed[2..].trim_start().strip_prefix('|') else {
+        return trimmed.to_owned();
+    };
+    let suffix = suffix.trim();
+    if suffix.is_empty() {
+        trimmed.to_owned()
+    } else {
+        suffix.to_owned()
+    }
 }
 
 async fn sum_minor(database: &Database, sql: &str, values: &[&str]) -> Result<i64, String> {
@@ -254,7 +274,7 @@ pub(crate) async fn get_revenue_summary_impl(
     let normalized_from = from_date.format(DATE_FORMAT).to_string();
     let normalized_to = to_date.format(DATE_FORMAT).to_string();
     let rows = sqlx::query(
-        "SELECT service_date, starts_at, ends_at, service_status, settlement_status,
+        "SELECT service_date, starts_at, ends_at, contact_name, service_status, settlement_status,
                 amount_minor, payment_method
          FROM appointments
          WHERE service_date >= ? AND service_date <= ?
@@ -268,7 +288,8 @@ pub(crate) async fn get_revenue_summary_impl(
     .map_err(db_error)?;
 
     let mut points = empty_points(from_date, to_date, granularity)?;
-    let mut payment_methods = BTreeMap::<String, i64>::new();
+    let mut payment_methods = BTreeMap::<String, (i64, i64)>::new();
+    let mut contacts = BTreeMap::<String, (i64, i64)>::new();
     let mut settled_minor = 0_i64;
     let mut unsettled_minor = 0_i64;
     let mut pending_count = 0_i64;
@@ -303,7 +324,15 @@ pub(crate) async fn get_revenue_summary_impl(
                 let name = payment_method
                     .filter(|value| !value.trim().is_empty())
                     .unwrap_or_else(|| "未填写".to_string());
-                *payment_methods.entry(name).or_default() += amount_minor;
+                let payment_entry = payment_methods.entry(name).or_default();
+                payment_entry.0 += amount_minor;
+                payment_entry.1 += 1;
+
+                let contact_name: String = row.try_get("contact_name").map_err(db_error)?;
+                let contact_name = revenue_contact_name(&contact_name);
+                let contact_entry = contacts.entry(contact_name).or_default();
+                contact_entry.0 += amount_minor;
+                contact_entry.1 += 1;
             }
             SettlementStatus::Unsettled => {
                 unsettled_minor += amount_minor;
@@ -330,9 +359,31 @@ pub(crate) async fn get_revenue_summary_impl(
 
     let mut payment_methods: Vec<_> = payment_methods
         .into_iter()
-        .map(|(name, amount_minor)| PaymentMethodSummary { name, amount_minor })
+        .map(
+            |(name, (amount_minor, appointment_count))| RevenueBreakdownItem {
+                name,
+                amount_minor,
+                appointment_count,
+            },
+        )
         .collect();
     payment_methods.sort_by(|left, right| {
+        right
+            .amount_minor
+            .cmp(&left.amount_minor)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    let mut contacts: Vec<_> = contacts
+        .into_iter()
+        .map(
+            |(name, (amount_minor, appointment_count))| RevenueBreakdownItem {
+                name,
+                amount_minor,
+                appointment_count,
+            },
+        )
+        .collect();
+    contacts.sort_by(|left, right| {
         right
             .amount_minor
             .cmp(&left.amount_minor)
@@ -364,6 +415,7 @@ pub(crate) async fn get_revenue_summary_impl(
         appointment_count: rows.len() as i64,
         completed_count,
         payment_methods,
+        contacts,
         points,
     })
 }
@@ -412,6 +464,21 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_qq_contact_prefixes_for_revenue_only() {
+        for (input, expected) in [
+            ("QQ|可乐", "可乐"),
+            ("qq|可乐", "可乐"),
+            (" QQ | 可乐 ", "可乐"),
+            ("QQ|独行", "独行"),
+            ("QQ|", "QQ|"),
+            ("好友QQ|可乐", "好友QQ|可乐"),
+            ("QQ｜可乐", "QQ｜可乐"),
+        ] {
+            assert_eq!(revenue_contact_name(input), expected);
+        }
+    }
+
+    #[test]
     fn aggregates_day_week_and_month_revenue_without_mixing_pending_money() {
         run_async(async {
             let database = Database::in_memory().await.unwrap();
@@ -456,6 +523,9 @@ mod tests {
             assert_eq!(daily.average_hourly_minor, 3_333);
             assert_eq!(daily.points.len(), 3);
             assert_eq!(daily.payment_methods[0].name, "微信");
+            assert_eq!(daily.payment_methods[0].appointment_count, 1);
+            assert_eq!(daily.contacts[0].name, "测试联系人");
+            assert_eq!(daily.contacts[0].appointment_count, 1);
 
             let weekly = get_revenue_summary_impl(
                 &database,
@@ -477,6 +547,133 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(monthly.points[0].period, "2026-07");
+        });
+    }
+
+    #[test]
+    fn aggregates_settled_revenue_by_contact_and_payment_method() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+
+            let mut contact_b_first = input(
+                "2026-07-13",
+                "18:00",
+                "19:00",
+                SettlementStatus::Settled,
+                10_000,
+            );
+            contact_b_first.contact_name = "QQ|B联系人".into();
+            create_appointment_impl(&database, contact_b_first)
+                .await
+                .unwrap();
+
+            let mut contact_b_second = input(
+                "2026-07-14",
+                "18:00",
+                "19:00",
+                SettlementStatus::Settled,
+                5_000,
+            );
+            contact_b_second.contact_name = "B联系人".into();
+            contact_b_second.payment_method = Some("   ".into());
+            create_appointment_impl(&database, contact_b_second)
+                .await
+                .unwrap();
+
+            let mut contact_a = input(
+                "2026-07-15",
+                "18:00",
+                "19:00",
+                SettlementStatus::Settled,
+                15_000,
+            );
+            contact_a.contact_name = "A联系人".into();
+            contact_a.payment_method = Some("支付宝".into());
+            create_appointment_impl(&database, contact_a).await.unwrap();
+
+            let mut zero_amount =
+                input("2026-07-16", "18:00", "19:00", SettlementStatus::Settled, 0);
+            zero_amount.contact_name = "零额联系人".into();
+            create_appointment_impl(&database, zero_amount)
+                .await
+                .unwrap();
+
+            let mut pending = input(
+                "2026-07-17",
+                "18:00",
+                "19:00",
+                SettlementStatus::Unsettled,
+                8_000,
+            );
+            pending.contact_name = "待结联系人".into();
+            create_appointment_impl(&database, pending).await.unwrap();
+
+            let mut cancelled = input(
+                "2026-07-18",
+                "18:00",
+                "19:00",
+                SettlementStatus::Settled,
+                9_000,
+            );
+            cancelled.contact_name = "取消联系人".into();
+            cancelled.service_status = ServiceStatus::Cancelled;
+            create_appointment_impl(&database, cancelled).await.unwrap();
+
+            let mut entertainment = input(
+                "2026-07-19",
+                "18:00",
+                "19:00",
+                SettlementStatus::NotApplicable,
+                7_000,
+            );
+            entertainment.contact_name = "娱乐联系人".into();
+            entertainment.mode = AppointmentMode::Entertainment;
+            create_appointment_impl(&database, entertainment)
+                .await
+                .unwrap();
+
+            let summary = get_revenue_summary_impl(
+                &database,
+                "2026-07-13",
+                "2026-07-19",
+                ReportGranularity::Day,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(summary.settled_minor, 30_000);
+            assert_eq!(summary.contacts.len(), 3);
+            assert_eq!(summary.contacts[0].name, "A联系人");
+            assert_eq!(summary.contacts[0].amount_minor, 15_000);
+            assert_eq!(summary.contacts[0].appointment_count, 1);
+            assert_eq!(summary.contacts[1].name, "B联系人");
+            assert_eq!(summary.contacts[1].amount_minor, 15_000);
+            assert_eq!(summary.contacts[1].appointment_count, 2);
+            assert_eq!(summary.contacts[2].name, "零额联系人");
+            assert_eq!(summary.contacts[2].amount_minor, 0);
+            assert_eq!(summary.contacts[2].appointment_count, 1);
+            assert_eq!(
+                summary
+                    .contacts
+                    .iter()
+                    .map(|item| item.amount_minor)
+                    .sum::<i64>(),
+                summary.settled_minor
+            );
+
+            assert_eq!(summary.payment_methods.len(), 3);
+            assert_eq!(summary.payment_methods[0].name, "支付宝");
+            assert_eq!(summary.payment_methods[1].name, "微信");
+            assert_eq!(summary.payment_methods[1].appointment_count, 2);
+            assert_eq!(summary.payment_methods[2].name, "未填写");
+            assert_eq!(
+                summary
+                    .payment_methods
+                    .iter()
+                    .map(|item| item.amount_minor)
+                    .sum::<i64>(),
+                summary.settled_minor
+            );
         });
     }
 

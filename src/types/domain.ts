@@ -176,6 +176,12 @@ export interface RevenuePoint {
   appointmentCount: number;
 }
 
+export interface RevenueBreakdownItem {
+  name: string;
+  amountMinor: number;
+  appointmentCount: number;
+}
+
 export interface RevenueSummary {
   from: string;
   to: string;
@@ -186,7 +192,8 @@ export interface RevenueSummary {
   averageHourlyMinor: number;
   appointmentCount: number;
   completedCount: number;
-  paymentMethods: Array<{ name: string; amountMinor: number }>;
+  paymentMethods: RevenueBreakdownItem[];
+  contacts: RevenueBreakdownItem[];
   points: RevenuePoint[];
 }
 

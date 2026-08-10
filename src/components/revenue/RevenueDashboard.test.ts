@@ -56,6 +56,19 @@ const RevenuePeriodDetailStub = defineComponent({
   },
 });
 
+const RevenueBreakdownPanelStub = defineComponent({
+  name: "RevenueBreakdownPanel",
+  props: ["from", "to", "paymentMethods", "contacts"],
+  setup: (props) => () =>
+    h("div", {
+      class: "breakdown-panel-stub",
+      "data-from": props.from,
+      "data-to": props.to,
+      "data-payment-methods": props.paymentMethods.length,
+      "data-contacts": props.contacts.length,
+    }),
+});
+
 function revenueSummary(from: string, to: string, granularity: ReportGranularity): RevenueSummary {
   return {
     from,
@@ -67,7 +80,8 @@ function revenueSummary(from: string, to: string, granularity: ReportGranularity
     averageHourlyMinor: 5_000,
     appointmentCount: 4,
     completedCount: 3,
-    paymentMethods: [{ name: "微信", amountMinor: 20_000 }],
+    paymentMethods: [{ name: "微信", amountMinor: 20_000, appointmentCount: 3 }],
+    contacts: [{ name: "南枝", amountMinor: 20_000, appointmentCount: 3 }],
     points: [
       {
         period: granularity === "month" ? from.slice(0, 7) : from,
@@ -98,6 +112,7 @@ function mountDashboard() {
       stubs: {
         RevenueChart: RevenueChartStub,
         RevenuePeriodDetail: RevenuePeriodDetailStub,
+        RevenueBreakdownPanel: RevenueBreakdownPanelStub,
       },
     },
   });
@@ -135,6 +150,12 @@ describe("RevenueDashboard", () => {
       granularity: "day",
       from: "2026-07-27",
       to: "2026-08-02",
+    });
+    expect(wrapper.getComponent(RevenueBreakdownPanelStub).props()).toMatchObject({
+      from: "2026-07-27",
+      to: "2026-08-02",
+      paymentMethods: [{ name: "微信", amountMinor: 20_000, appointmentCount: 3 }],
+      contacts: [{ name: "南枝", amountMinor: 20_000, appointmentCount: 3 }],
     });
 
     wrapper.unmount();

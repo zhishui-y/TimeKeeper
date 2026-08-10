@@ -140,6 +140,13 @@ Dashboard 只统计非取消业务预约的已结金额，待结数量只包含�
 `RevenuePoint.pendingCount` 只统计对应范围内服务已完成但未结算的业务预约。金额始终使用
 人民币分整数，收益页面不展示待结金额。
 
+`RevenueSummary.paymentMethods` 与 `RevenueSummary.contacts` 都是
+`RevenueBreakdownItem[]`；元素为 `{ name, amountMinor, appointmentCount }`。两者只聚合范围内
+非取消、业务、已结预约，按金额降序、名称升序返回；联系人名称先去首尾空白，再将开头忽略 ASCII
+大小写和分隔空格的 `QQ|` 前缀去除后精确合并，空后缀保留原名称；空收款渠道归入“未填写”。该规则
+只影响报表聚合，不改写预约。两组 `amountMinor` 之和都必须等于 `RevenueSummary.settledMinor`，
+零金额已结预约仍计入订单数。
+
 ## Excel import
 
 - `preview_excel_import(path, baseYear) -> ExcelImportPreview`

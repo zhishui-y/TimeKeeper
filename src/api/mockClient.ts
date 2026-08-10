@@ -165,6 +165,13 @@ function normalizeRecoveryAnswer(value: string): string {
   return value.trim().split(/\s+/u).filter(Boolean).join(" ").toLocaleLowerCase();
 }
 
+function revenueContactName(value: string): string {
+  const trimmed = value.trim();
+  const prefix = /^qq\s*\|\s*/iu.exec(trimmed)?.[0];
+  if (!prefix) return trimmed;
+  return trimmed.slice(prefix.length).trim() || trimmed;
+}
+
 function makeId(prefix: string): string {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   return `${prefix}-${random}`;
@@ -1014,7 +1021,8 @@ export const mockApi: ApiClient = {
       (item) => item.serviceDate >= resolvedFrom && item.serviceDate <= resolvedTo,
     );
     const pointsMap = new Map<string, RevenuePoint>();
-    const paymentMap = new Map<string, number>();
+    const paymentMap = new Map<string, { amountMinor: number; appointmentCount: number }>();
+    const contactMap = new Map<string, { amountMinor: number; appointmentCount: number }>();
     for (const item of scoped) {
       const key = periodFor(item.serviceDate, granularity);
       const point = pointsMap.get(key) ?? createPoint(key);
@@ -1022,8 +1030,20 @@ export const mockApi: ApiClient = {
       point.businessHours += appointmentHours(item);
       if (item.settlementStatus === "settled") {
         point.settledMinor += item.amountMinor ?? 0;
-        const method = item.paymentMethod || "其他";
-        paymentMap.set(method, (paymentMap.get(method) ?? 0) + (item.amountMinor ?? 0));
+        const amountMinor = item.amountMinor ?? 0;
+        const method = item.paymentMethod?.trim() || "未填写";
+        const payment = paymentMap.get(method) ?? { amountMinor: 0, appointmentCount: 0 };
+        payment.amountMinor += amountMinor;
+        payment.appointmentCount += 1;
+        paymentMap.set(method, payment);
+        const contactName = revenueContactName(item.contactName);
+        const contact = contactMap.get(contactName) ?? {
+          amountMinor: 0,
+          appointmentCount: 0,
+        };
+        contact.amountMinor += amountMinor;
+        contact.appointmentCount += 1;
+        contactMap.set(contactName, contact);
       } else if (item.settlementStatus === "unsettled") {
         point.unsettledMinor += item.amountMinor ?? 0;
         if (item.serviceStatus === "completed") point.pendingCount += 1;
@@ -1046,8 +1066,17 @@ export const mockApi: ApiClient = {
       appointmentCount: scoped.length,
       completedCount: scoped.filter((item) => item.serviceStatus === "completed").length,
       paymentMethods: [...paymentMap.entries()]
-        .map(([name, amountMinor]) => ({ name, amountMinor }))
-        .sort((a, b) => b.amountMinor - a.amountMinor),
+        .map(([name, value]) => ({ name, ...value }))
+        .sort(
+          (a, b) =>
+            b.amountMinor - a.amountMinor || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+        ),
+      contacts: [...contactMap.entries()]
+        .map(([name, value]) => ({ name, ...value }))
+        .sort(
+          (a, b) =>
+            b.amountMinor - a.amountMinor || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+        ),
       points,
     };
   },

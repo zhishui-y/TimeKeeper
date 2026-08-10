@@ -5,6 +5,7 @@ import { appointmentToInput } from "../utils/appointment";
 import { DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS } from "../utils/accountTableColumns";
 import { DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS } from "../utils/appointmentTableColumns";
 import { appointmentProgressStatus } from "../utils/appointmentProgress";
+import { compactRevenueBreakdownItems } from "../utils/revenueBreakdown";
 import { mockApi } from "./mockClient";
 
 const allAppointmentDates = { from: "2000-01-01", to: "2100-12-31" } as const;
@@ -296,6 +297,112 @@ describe("browser mock API", () => {
         kind: "explicit",
         ids: [direct.appointment.id, pending.appointment.id],
       });
+    }
+  });
+
+  it("aggregates settled revenue by contact and payment method like the native report", async () => {
+    const date = "2099-12-28";
+    const createdIds: string[] = [];
+    try {
+      for (const input of [
+        {
+          ...businessInput(date, "10:00", "11:00", "B联系人", 10_000),
+          settlementStatus: "settled" as const,
+          paymentMethod: "微信",
+        },
+        {
+          ...businessInput(date, "11:00", "12:00", "B联系人", 5_000),
+          settlementStatus: "settled" as const,
+          paymentMethod: "   ",
+        },
+        {
+          ...businessInput(date, "12:00", "13:00", "A联系人", 15_000),
+          settlementStatus: "settled" as const,
+          paymentMethod: "支付宝",
+        },
+        {
+          ...businessInput(date, "13:00", "14:00", "零额联系人", 0),
+          settlementStatus: "settled" as const,
+          paymentMethod: "微信",
+        },
+        {
+          ...businessInput(date, "14:00", "15:00", "待结联系人", 8_000),
+          serviceStatus: "completed" as const,
+        },
+      ]) {
+        const created = await mockApi.createAppointment(input);
+        createdIds.push(created.appointment.id);
+      }
+
+      const summary = await mockApi.getRevenueSummary(date, date, "day");
+      expect(summary.settledMinor).toBe(30_000);
+      expect(summary.contacts).toEqual([
+        { name: "A联系人", amountMinor: 15_000, appointmentCount: 1 },
+        { name: "B联系人", amountMinor: 15_000, appointmentCount: 2 },
+        { name: "零额联系人", amountMinor: 0, appointmentCount: 1 },
+      ]);
+      expect(summary.paymentMethods).toEqual([
+        { name: "支付宝", amountMinor: 15_000, appointmentCount: 1 },
+        { name: "微信", amountMinor: 10_000, appointmentCount: 2 },
+        { name: "未填写", amountMinor: 5_000, appointmentCount: 1 },
+      ]);
+      expect(summary.contacts.reduce((total, item) => total + item.amountMinor, 0)).toBe(
+        summary.settledMinor,
+      );
+      expect(summary.paymentMethods.reduce((total, item) => total + item.amountMinor, 0)).toBe(
+        summary.settledMinor,
+      );
+    } finally {
+      await mockApi.deleteAppointments({ kind: "explicit", ids: createdIds });
+    }
+  });
+
+  it("normalizes QQ contact prefixes before applying the display threshold", async () => {
+    const date = "2099-12-29";
+    const createdIds: string[] = [];
+    try {
+      const contacts = [
+        ["主联系人", 9_700],
+        ["可乐", 34],
+        ["QQ|可乐", 33],
+        [" qq | 可乐 ", 33],
+        ["QQ|", 50],
+        ["好友QQ|可乐", 50],
+        ["QQ｜可乐", 50],
+        ["QQ|独行", 50],
+      ] as const;
+      for (const [index, [contactName, amountMinor]] of contacts.entries()) {
+        const startHour = 10 + index;
+        const created = await mockApi.createAppointment({
+          ...businessInput(
+            date,
+            `${startHour.toString().padStart(2, "0")}:00`,
+            `${(startHour + 1).toString().padStart(2, "0")}:00`,
+            contactName,
+            amountMinor,
+          ),
+          settlementStatus: "settled",
+        });
+        createdIds.push(created.appointment.id);
+      }
+
+      const summary = await mockApi.getRevenueSummary(date, date, "day");
+      expect(summary.settledMinor).toBe(10_000);
+      expect(summary.contacts).toEqual([
+        { name: "主联系人", amountMinor: 9_700, appointmentCount: 1 },
+        { name: "可乐", amountMinor: 100, appointmentCount: 3 },
+        { name: "QQ|", amountMinor: 50, appointmentCount: 1 },
+        { name: "QQ｜可乐", amountMinor: 50, appointmentCount: 1 },
+        { name: "好友QQ|可乐", amountMinor: 50, appointmentCount: 1 },
+        { name: "独行", amountMinor: 50, appointmentCount: 1 },
+      ]);
+      expect(compactRevenueBreakdownItems(summary.contacts)).toEqual([
+        { name: "主联系人", amountMinor: 9_700, appointmentCount: 1 },
+        { name: "其他", amountMinor: 200, appointmentCount: 4 },
+        { name: "可乐", amountMinor: 100, appointmentCount: 3 },
+      ]);
+    } finally {
+      await mockApi.deleteAppointments({ kind: "explicit", ids: createdIds });
     }
   });
 

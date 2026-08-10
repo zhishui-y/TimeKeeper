@@ -14,10 +14,11 @@ import {
   revenuePeriodRange,
   type RevenuePeriodRange,
 } from "../../utils/revenue";
+import RevenueBreakdownPanel from "./RevenueBreakdownPanel.vue";
 import RevenueRangeNavigator from "./RevenueRangeNavigator.vue";
 
 const RevenueChart = defineAsyncComponent({
-  loader: () => import("./RevenueChart.vue"),
+  loader: () => import("./RevenueCharts").then((module) => module.RevenueChart),
   delay: 180,
   timeout: 20_000,
 });
@@ -61,10 +62,6 @@ const completionRate = computed(() => {
   if (!summary.value?.appointmentCount) return 0;
   return Math.round((summary.value.completedCount / summary.value.appointmentCount) * 100);
 });
-
-const maxPayment = computed(() =>
-  Math.max(...(summary.value?.paymentMethods.map((item) => item.amountMinor) ?? [1]), 1),
-);
 
 const chartDescription = computed(
   () =>
@@ -262,26 +259,12 @@ watch(
           @period-select="showPeriodDetail"
         />
       </div>
-      <aside class="payment-panel">
-        <header class="panel-header">
-          <div>
-            <span class="section-kicker">CHANNELS</span>
-            <h2>收款渠道</h2>
-          </div>
-        </header>
-        <div v-if="summary?.paymentMethods.length" class="payment-list">
-          <div v-for="method in summary.paymentMethods" :key="method.name" class="payment-row">
-            <div class="payment-row__label">
-              <strong>{{ method.name }}</strong>
-              <span class="mono-number">{{ formatCurrency(method.amountMinor) }}</span>
-            </div>
-            <div class="payment-row__track">
-              <i :style="{ width: `${(method.amountMinor / maxPayment) * 100}%` }" />
-            </div>
-          </div>
-        </div>
-        <div v-else class="payment-empty">当前范围暂无已结收入</div>
-      </aside>
+      <RevenueBreakdownPanel
+        :from="summary?.from ?? revenueRange.displayRange.value?.from ?? ''"
+        :to="summary?.to ?? revenueRange.displayRange.value?.to ?? ''"
+        :payment-methods="summary?.paymentMethods ?? []"
+        :contacts="summary?.contacts ?? []"
+      />
     </section>
 
     <RevenuePeriodDetail
@@ -411,8 +394,7 @@ watch(
   gap: 14px;
 }
 
-.chart-panel,
-.payment-panel {
+.chart-panel {
   display: grid;
   min-height: 0;
   grid-template-rows: 68px minmax(0, 1fr);
@@ -485,62 +467,6 @@ watch(
   height: 24px;
   padding: 0;
   border-radius: 7px;
-  font-size: calc(12px + var(--app-font-size-offset, 0px));
-}
-
-.payment-list {
-  min-height: 0;
-  overflow-y: auto;
-  padding: 16px;
-}
-
-.payment-row {
-  margin-bottom: 17px;
-}
-
-.payment-row__label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 7px;
-}
-
-.payment-row__label strong {
-  color: var(--ink-strong);
-  font-size: calc(12px + var(--app-font-size-offset, 0px));
-}
-
-.payment-row__label span {
-  color: var(--ink-muted);
-  font-size: calc(12px + var(--app-font-size-offset, 0px));
-}
-
-.payment-row__track {
-  height: 7px;
-  overflow: hidden;
-  border-radius: 2px;
-  background: #edf0ec;
-}
-
-.payment-row__track i {
-  display: block;
-  height: 100%;
-  border-radius: 2px;
-  background: var(--brand);
-}
-
-.payment-row:nth-child(2) .payment-row__track i {
-  background: var(--blue);
-}
-
-.payment-row:nth-child(3) .payment-row__track i {
-  background: var(--amber);
-}
-
-.payment-empty {
-  display: grid;
-  place-items: center;
-  color: var(--ink-muted);
   font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
