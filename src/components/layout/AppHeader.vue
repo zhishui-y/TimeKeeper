@@ -4,6 +4,7 @@ import { Bell, Plus } from "@lucide/vue";
 defineProps<{
   title: string;
   subtitle: string;
+  dataOperationsDisabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -28,7 +29,12 @@ const emit = defineEmits<{
       >
         <Bell :size="17" />
       </button>
-      <button class="button button--primary" type="button" @click="emit('createAppointment')">
+      <button
+        class="button button--primary"
+        type="button"
+        :disabled="dataOperationsDisabled"
+        @click="emit('createAppointment')"
+      >
         <Plus :size="16" :stroke-width="2.2" />
         新建预约
       </button>

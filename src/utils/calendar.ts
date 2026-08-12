@@ -1,5 +1,5 @@
-import { differenceInMinutes, parseISO } from "date-fns";
 import type { Appointment } from "../types/domain";
+import { civilDurationInMinutes } from "./chinaDateTime";
 import { formatCurrency, formatTimeRange } from "./formatters";
 import { appointmentProgressStatus, appointmentProgressStatusLabels } from "./appointmentProgress";
 
@@ -44,10 +44,7 @@ export function calendarAppointmentCounts(
 
 export function isShortCalendarAppointment(appointment: Appointment): boolean {
   if (!appointment.startsAt || !appointment.endsAt) return false;
-  const durationMinutes = differenceInMinutes(
-    parseISO(appointment.endsAt),
-    parseISO(appointment.startsAt),
-  );
+  const durationMinutes = civilDurationInMinutes(appointment.startsAt, appointment.endsAt);
   return durationMinutes > 0 && durationMinutes < 60;
 }
 

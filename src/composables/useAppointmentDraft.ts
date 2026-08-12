@@ -1,4 +1,3 @@
-import { format, parseISO } from "date-fns";
 import { computed, reactive, readonly, shallowRef, toValue, watch } from "vue";
 import type { MaybeRefOrGetter } from "vue";
 import type {
@@ -20,6 +19,8 @@ import {
   appointmentProgressStatus,
   appointmentStatusesFromProgress,
 } from "../utils/appointmentProgress";
+import { chinaTime, civilTime } from "../utils/chinaDateTime";
+import { amountMinorInputValue, parseAmountMinor } from "../utils/money";
 
 export type AppointmentAccountDraftKind = "none" | "profile" | "embedded";
 export type AppointmentCredentialDraftKind = "none" | "keep" | "replace" | "copyFromAppointment";
@@ -49,7 +50,7 @@ export interface AppointmentDraft {
   account: AppointmentAccountDraft;
   rateNote: string;
   paymentMethod: string;
-  amountYuan: string | number;
+  amountYuan: string;
   reminderEnabled: boolean;
   reminderMinutes: number;
   voicePlatform: VoicePlatform | "";
@@ -145,7 +146,7 @@ function accountDraftFromInput(
 }
 
 function timeOf(value?: string | null): string {
-  return value ? format(parseISO(value), "HH:mm") : "";
+  return civilTime(value) ?? "";
 }
 
 export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
@@ -222,7 +223,7 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
         (appointment?.amountMinor ?? seedInput?.amountMinor) === null ||
         (appointment?.amountMinor ?? seedInput?.amountMinor) === undefined
           ? ""
-          : String((appointment?.amountMinor ?? seedInput?.amountMinor)! / 100),
+          : amountMinorInputValue((appointment?.amountMinor ?? seedInput?.amountMinor)!),
       reminderEnabled: appointment
         ? appointment.reminderMinutes !== null
         : seedInput
@@ -248,32 +249,14 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
   }
 
   function selectMode(mode: AppointmentMode): void {
-    const previousMode = draft.mode;
-    const previousProgressStatus = progressStatus.value;
     draft.mode = mode;
     if (mode === "entertainment") {
-      Object.assign(
-        draft,
-        appointmentStatusesFromProgress(
-          mode,
-          previousProgressStatus === "pending_settlement" ? "completed" : previousProgressStatus,
-          draft.settlementStatus,
-        ),
-      );
+      draft.settlementStatus = "not_applicable";
       draft.rateNote = "";
       draft.paymentMethod = "";
       draft.amountYuan = "";
-    } else {
-      Object.assign(
-        draft,
-        appointmentStatusesFromProgress(
-          mode,
-          previousMode === "entertainment" && previousProgressStatus === "completed"
-            ? "pending_settlement"
-            : previousProgressStatus,
-          draft.settlementStatus,
-        ),
-      );
+    } else if (draft.settlementStatus === "not_applicable") {
+      draft.settlementStatus = "unsettled";
     }
   }
 
@@ -282,7 +265,7 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
   }
 
   function setCurrentTime(field: "startTime" | "endTime"): void {
-    draft[field] = format(new Date(), "HH:mm");
+    draft[field] = chinaTime();
     markTimeModified();
   }
 
@@ -293,12 +276,10 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
 
   function applyContactPreset(preset: ContactPreset): void {
     const preserveTime = initialTimeIsFixed.value || timeModified.value;
+    const editing = Boolean(toValue(options.appointment));
     Object.assign(draft, {
       contactName: preset.contactName,
       content: preset.content ?? "",
-      mode: preset.mode,
-      serviceStatus: "scheduled",
-      settlementStatus: preset.mode === "business" ? "unsettled" : "not_applicable",
       account: preset.account
         ? embeddedAccountDraft(preset.account, {
             hasPassword: Boolean(preset.account.password),
@@ -308,19 +289,27 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
             preservesSnapshot: true,
           })
         : emptyAccountDraft(),
-      rateNote: preset.mode === "business" ? (preset.rateNote ?? "") : "",
-      paymentMethod: preset.mode === "business" ? (preset.paymentMethod ?? "") : "",
-      amountYuan:
-        preset.mode === "business" &&
-        preset.amountMinor !== null &&
-        preset.amountMinor !== undefined
-          ? String(preset.amountMinor / 100)
-          : "",
       reminderEnabled: preset.reminderMinutes !== null && preset.reminderMinutes !== undefined,
       reminderMinutes: preset.reminderMinutes ?? toValue(options.defaultReminderMinutes),
       voicePlatform: preset.voicePlatform ?? "",
       voiceChannel: preset.voicePlatform === "yy" ? (preset.voiceChannel ?? "") : "",
       notes: preset.notes ?? "",
+      ...(!editing
+        ? {
+            mode: preset.mode,
+            serviceStatus: "scheduled" as const,
+            settlementStatus:
+              preset.mode === "business" ? ("unsettled" as const) : ("not_applicable" as const),
+            rateNote: preset.mode === "business" ? (preset.rateNote ?? "") : "",
+            paymentMethod: preset.mode === "business" ? (preset.paymentMethod ?? "") : "",
+            amountYuan:
+              preset.mode === "business" &&
+              preset.amountMinor !== null &&
+              preset.amountMinor !== undefined
+                ? amountMinorInputValue(preset.amountMinor)
+                : "",
+          }
+        : {}),
     });
     if (!preserveTime) {
       draft.startTime = preset.startTime ?? "";
@@ -338,13 +327,14 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
     if (draft.startTime && draft.endTime && draft.startTime === draft.endTime) {
       nextErrors.push("开始时间和结束时间不能相同");
     }
-    const amountText = String(draft.amountYuan).trim();
-    const amount = amountText ? Number(amountText) : null;
-    if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
-      nextErrors.push("账单金额格式不正确");
+    let amountMinor: number | null = null;
+    try {
+      amountMinor = parseAmountMinor(draft.amountYuan);
+    } catch (cause) {
+      nextErrors.push(cause instanceof Error ? cause.message : "账单金额格式不正确");
     }
-    if (draft.mode === "business" && draft.settlementStatus === "settled" && amount === null) {
-      nextErrors.push("已完成预约必须填写金额");
+    if (draft.mode === "business" && draft.settlementStatus === "settled" && amountMinor === null) {
+      nextErrors.push("已结算预约必须填写金额");
     }
     if (
       draft.reminderEnabled &&
@@ -370,13 +360,12 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
     if (nextErrors.length > 0) return;
 
     const account = accountInputFromDraft(true);
-    const statuses = appointmentStatusesFromProgress(
-      draft.mode,
-      progressStatus.value,
-      draft.settlementStatus,
+    options.onSave(
+      inputFromDraft(account, {
+        serviceStatus: draft.serviceStatus,
+        settlementStatus: draft.settlementStatus,
+      }),
     );
-
-    options.onSave(inputFromDraft(account, statuses));
   }
 
   function accountInputFromDraft(trimText: boolean): AppointmentInput["account"] {
@@ -419,8 +408,7 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
     trimText = true,
   ): AppointmentInput {
     const text = (value: string) => (trimText ? value.trim() : value);
-    const amountText = String(draft.amountYuan).trim();
-    const amount = amountText ? Number(amountText) : null;
+    const amountMinor = draft.mode === "business" ? parseAmountMinor(draft.amountYuan) : null;
     return {
       serviceDate: draft.serviceDate,
       startTime: draft.startTime || null,
@@ -433,7 +421,7 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
       account,
       rateNote: draft.mode === "business" ? text(draft.rateNote) || null : null,
       paymentMethod: draft.mode === "business" ? text(draft.paymentMethod) || null : null,
-      amountMinor: draft.mode === "business" && amount !== null ? Math.round(amount * 100) : null,
+      amountMinor,
       reminderMinutes: draft.reminderEnabled ? Number(draft.reminderMinutes) : null,
       voicePlatform: draft.voicePlatform || null,
       voiceChannel: draft.voicePlatform === "yy" ? text(draft.voiceChannel) || null : null,

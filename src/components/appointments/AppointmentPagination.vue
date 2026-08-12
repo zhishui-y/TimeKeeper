@@ -8,6 +8,7 @@ const props = defineProps<{
   totalPages: number;
   totalCount: number;
   loading: boolean;
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -27,7 +28,7 @@ const lastItem = computed(() => Math.min(props.page * props.pageSize, props.tota
       <button
         class="button button--ghost button--compact"
         type="button"
-        :disabled="loading || page <= 1"
+        :disabled="disabled || loading || page <= 1"
         aria-label="上一页"
         @click="emit('changePage', page - 1)"
       >
@@ -40,7 +41,7 @@ const lastItem = computed(() => Math.min(props.page * props.pageSize, props.tota
       <button
         class="button button--ghost button--compact"
         type="button"
-        :disabled="loading || page >= totalPages"
+        :disabled="disabled || loading || page >= totalPages"
         aria-label="下一页"
         @click="emit('changePage', page + 1)"
       >

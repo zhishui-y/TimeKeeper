@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CheckCircle2, Clock3, Coins, Gauge } from "@lucide/vue";
-import { computed, defineAsyncComponent, shallowRef, watch } from "vue";
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, shallowRef, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useAppointments } from "../../composables/useAppointments";
 import { useRevenue } from "../../composables/useRevenue";
@@ -33,11 +33,14 @@ interface SelectedPeriod {
 const router = useRouter();
 const ui = useUiStore();
 const revenueRange = useRevenueRange();
-const { summary, loading, error, load } = useRevenue();
+const { summary, loading, error, stale, actionsDisabled, resolvedRange, load } = useRevenue();
 const {
   summary: detailSummary,
   loading: detailLoading,
   error: detailError,
+  stale: detailStale,
+  actionsDisabled: detailActionsDisabled,
+  resolvedRange: detailResolvedRange,
   load: loadDetail,
 } = useRevenue();
 const {
@@ -45,17 +48,23 @@ const {
   items: detailAppointments,
   loading: detailAppointmentsLoading,
   error: detailAppointmentsError,
+  stale: detailAppointmentsStale,
+  actionsDisabled: detailAppointmentsActionsDisabled,
+  resolvedKey: detailAppointmentsResolvedKey,
   load: loadDetailAppointments,
 } = useAppointments({}, { immediate: false });
 const selectedPeriod = shallowRef<SelectedPeriod | null>(null);
-const detailSummaryForView = computed(() =>
-  detailLoading.value || detailError.value ? null : detailSummary.value,
-);
-const detailAppointmentsForView = computed(() =>
-  detailAppointmentsLoading.value || detailAppointmentsError.value ? [] : detailAppointments.value,
-);
+let periodClock: ReturnType<typeof globalThis.setInterval> | undefined;
+const detailSummaryForView = computed(() => detailSummary.value);
+const detailAppointmentsForView = computed(() => detailAppointments.value);
+const detailVisiblePeriod = computed(() => {
+  const selected = selectedPeriod.value;
+  if (!selected) return null;
+  const resolved = detailResolvedRange.value;
+  return resolved ? { ...selected, from: resolved.from, to: resolved.to } : selected;
+});
 const pendingNavigationReady = computed(
-  () => !loading.value && !revenueRange.customError.value && summary.value !== null,
+  () => !actionsDisabled.value && !revenueRange.customError.value && summary.value !== null,
 );
 
 const completionRate = computed(() => {
@@ -69,7 +78,7 @@ const chartDescription = computed(
 );
 
 const summaryRangeLabel = computed(() => {
-  const visible = revenueRange.displayRange.value;
+  const visible = resolvedRange.value ?? revenueRange.displayRange.value;
   if (!visible) return "正在确认实际范围";
   return `${visible.from} — ${visible.to}`;
 });
@@ -87,7 +96,7 @@ function loadAppointmentsForDay(serviceDate: string): void {
 }
 
 function showPeriodDetail(point: RevenuePoint): void {
-  if (loading.value) return;
+  if (actionsDisabled.value) return;
   const granularity = revenueRange.granularity.value;
   const periodRange =
     granularity === "day"
@@ -108,6 +117,7 @@ function showPeriodDetail(point: RevenuePoint): void {
 }
 
 function showDayAppointments(point: RevenuePoint): void {
+  if (detailActionsDisabled.value) return;
   loadAppointmentsForDay(point.period);
 }
 
@@ -140,6 +150,14 @@ watch(
   },
   { immediate: true },
 );
+
+onMounted(() => {
+  periodClock = globalThis.setInterval(() => revenueRange.refreshCurrentPeriod(new Date()), 30_000);
+});
+
+onBeforeUnmount(() => {
+  if (periodClock !== undefined) globalThis.clearInterval(periodClock);
+});
 
 watch(summary, (nextSummary) => {
   if (revenueRange.rangeKind.value !== "all" || !nextSummary) return;
@@ -176,6 +194,10 @@ watch(
     </div>
     <div v-if="loading" class="loading-line" />
     <div v-if="error" class="error-banner">{{ error }}</div>
+    <div v-if="stale" class="stale-banner" role="status">
+      当前保留的是 {{ summary?.from }} —
+      {{ summary?.to }} 的旧数据；新范围加载失败或尚未完成，相关操作已暂停。
+    </div>
 
     <section class="revenue-metrics">
       <div class="revenue-metric revenue-metric--primary">
@@ -255,9 +277,44 @@ watch(
           :granularity="revenueRange.granularity.value"
           :from="summary?.from ?? revenueRange.displayRange.value?.from ?? ''"
           :to="summary?.to ?? revenueRange.displayRange.value?.to ?? ''"
-          :drillable="!loading"
+          :drillable="!actionsDisabled"
           @period-select="showPeriodDetail"
         />
+        <details class="chart-data-table">
+          <summary>查看数据表</summary>
+          <div class="chart-data-table__scroll">
+            <table>
+              <caption class="sr-only">
+                收益与工时趋势数据
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">周期</th>
+                  <th scope="col">已结收益</th>
+                  <th scope="col">业务工时</th>
+                  <th scope="col">预约</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="point in summary?.points ?? []" :key="point.period">
+                  <th scope="row">
+                    <button
+                      type="button"
+                      :disabled="actionsDisabled || point.appointmentCount === 0"
+                      :aria-label="`查看 ${point.period} 明细`"
+                      @click="showPeriodDetail(point)"
+                    >
+                      {{ point.period }}
+                    </button>
+                  </th>
+                  <td class="mono-number">{{ formatCurrency(point.settledMinor) }}</td>
+                  <td class="mono-number">{{ point.businessHours.toFixed(1) }}h</td>
+                  <td class="mono-number">{{ point.appointmentCount }}场</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
       </div>
       <RevenueBreakdownPanel
         :from="summary?.from ?? revenueRange.displayRange.value?.from ?? ''"
@@ -268,16 +325,21 @@ watch(
     </section>
 
     <RevenuePeriodDetail
-      v-if="selectedPeriod"
-      :granularity="selectedPeriod.granularity"
-      :from="selectedPeriod.from"
-      :to="selectedPeriod.to"
+      v-if="selectedPeriod && detailVisiblePeriod"
+      :granularity="detailVisiblePeriod.granularity"
+      :from="detailVisiblePeriod.from"
+      :to="detailVisiblePeriod.to"
       :summary="detailSummaryForView"
       :loading="detailLoading"
       :error="detailError"
+      :stale="detailStale"
+      :actions-disabled="detailActionsDisabled"
       :appointments="detailAppointmentsForView"
       :appointments-loading="detailAppointmentsLoading"
       :appointments-error="detailAppointmentsError"
+      :appointments-stale="detailAppointmentsStale"
+      :appointments-actions-disabled="detailAppointmentsActionsDisabled"
+      :appointments-resolved-date="detailAppointmentsResolvedKey?.from ?? null"
       @day-select="showDayAppointments"
       @close="closePeriodDetail"
     />
@@ -297,6 +359,15 @@ watch(
   top: 0;
   right: 4px;
   left: 0;
+}
+
+.stale-banner {
+  padding: 8px 11px;
+  border: 1px solid var(--amber-border);
+  border-radius: var(--radius-sm, 9px);
+  color: var(--ink);
+  background: var(--amber-soft);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .revenue-toolbar {
@@ -395,6 +466,7 @@ watch(
 }
 
 .chart-panel {
+  position: relative;
   display: grid;
   min-height: 0;
   grid-template-rows: 68px minmax(0, 1fr);
@@ -403,6 +475,63 @@ watch(
   border-radius: var(--radius-lg, 18px);
   background: var(--surface);
   box-shadow: var(--shadow-soft);
+}
+
+.chart-data-table {
+  position: absolute;
+  z-index: 2;
+  right: 12px;
+  bottom: 10px;
+  max-width: min(560px, calc(100% - 24px));
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm, 8px);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: var(--shadow-control, none);
+}
+
+.chart-data-table summary {
+  padding: 6px 10px;
+  color: var(--ink);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.chart-data-table__scroll {
+  max-height: 260px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+
+.chart-data-table table {
+  border-collapse: collapse;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+}
+
+.chart-data-table th,
+.chart-data-table td {
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.chart-data-table th:first-child {
+  text-align: left;
+}
+
+.chart-data-table button {
+  border: 0;
+  color: var(--brand-strong);
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.chart-data-table button:disabled {
+  color: var(--ink-muted);
+  cursor: default;
 }
 
 .panel-header {

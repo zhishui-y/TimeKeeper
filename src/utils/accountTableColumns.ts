@@ -50,7 +50,8 @@ export const MIN_ACCOUNT_TABLE_COLUMN_WIDTHS: AccountTableColumnWidths = {
 
 export const MAX_ACCOUNT_TABLE_COLUMN_WIDTH = MAX_RESIZABLE_TABLE_COLUMN_WIDTH;
 // Selection controls and sticky row actions.
-export const ACCOUNT_TABLE_FIXED_WIDTH = 58 + 108;
+export const ACCOUNT_TABLE_ACTIONS_WIDTH = 108;
+export const ACCOUNT_TABLE_FIXED_WIDTH = 58 + ACCOUNT_TABLE_ACTIONS_WIDTH;
 
 export function clampAccountTableColumnWidth(key: AccountTableColumnKey, width: number): number {
   return Math.min(

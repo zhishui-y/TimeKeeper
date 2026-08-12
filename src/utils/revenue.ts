@@ -1,15 +1,14 @@
-import {
-  addMonths,
-  addWeeks,
-  endOfMonth,
-  endOfWeek,
-  format,
-  isValid,
-  parseISO,
-  startOfMonth,
-  startOfWeek,
-} from "date-fns";
 import type { ReportGranularity } from "../types/domain";
+import {
+  addDateKeyDays,
+  addDateKeyMonths,
+  chinaDateKey,
+  endOfChinaMonth,
+  endOfChinaWeek,
+  isDateKey,
+  startOfChinaMonth,
+  startOfChinaWeek,
+} from "./chinaDateTime";
 
 export interface RevenuePeriodRange {
   from: string;
@@ -20,9 +19,7 @@ export type RevenueRangeUnit = "week" | "month";
 export type RevenueRangeKind = "all" | "custom" | RevenueRangeUnit;
 
 export function isRevenueDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const parsed = parseISO(value);
-  return isValid(parsed) && format(parsed, "yyyy-MM-dd") === value;
+  return isDateKey(value);
 }
 
 export function isRevenueRange(range: RevenuePeriodRange): boolean {
@@ -45,13 +42,16 @@ export function revenueNaturalRange(
   referenceDate: Date = new Date(),
   offset = 0,
 ): RevenuePeriodRange {
+  const referenceKey = chinaDateKey(referenceDate);
   const target =
-    unit === "week" ? addWeeks(referenceDate, offset) : addMonths(referenceDate, offset);
-  const from = unit === "week" ? startOfWeek(target, { weekStartsOn: 1 }) : startOfMonth(target);
-  const to = unit === "week" ? endOfWeek(target, { weekStartsOn: 1 }) : endOfMonth(target);
+    unit === "week"
+      ? addDateKeyDays(referenceKey, offset * 7)
+      : addDateKeyMonths(referenceKey, offset);
+  const from = unit === "week" ? startOfChinaWeek(target) : startOfChinaMonth(target);
+  const to = unit === "week" ? endOfChinaWeek(target) : endOfChinaMonth(target);
   return {
-    from: format(from, "yyyy-MM-dd"),
-    to: format(to, "yyyy-MM-dd"),
+    from,
+    to,
   };
 }
 
@@ -60,27 +60,21 @@ export function shiftRevenueRange(
   unit: RevenueRangeUnit,
   offset: number,
 ): RevenuePeriodRange | null {
-  const anchor = parseISO(from);
-  if (!isValid(anchor)) return null;
-  return revenueNaturalRange(unit, anchor, offset);
+  if (!isRevenueDate(from)) return null;
+  const target =
+    unit === "week" ? addDateKeyDays(from, offset * 7) : addDateKeyMonths(from, offset);
+  return unit === "week"
+    ? { from: startOfChinaWeek(target), to: endOfChinaWeek(target) }
+    : { from: startOfChinaMonth(target), to: endOfChinaMonth(target) };
 }
 
 export function revenuePeriodRange(
   period: string,
   granularity: Exclude<ReportGranularity, "day">,
 ): RevenuePeriodRange | null {
-  const periodDate = parseISO(granularity === "month" ? `${period}-01` : period);
-  if (!isValid(periodDate)) return null;
-
-  const from =
-    granularity === "week"
-      ? startOfWeek(periodDate, { weekStartsOn: 1 })
-      : startOfMonth(periodDate);
-  const to =
-    granularity === "week" ? endOfWeek(periodDate, { weekStartsOn: 1 }) : endOfMonth(periodDate);
-
-  return {
-    from: format(from, "yyyy-MM-dd"),
-    to: format(to, "yyyy-MM-dd"),
-  };
+  const value = granularity === "month" ? `${period}-01` : period;
+  if (!isRevenueDate(value)) return null;
+  return granularity === "week"
+    ? { from: startOfChinaWeek(value), to: endOfChinaWeek(value) }
+    : { from: startOfChinaMonth(value), to: endOfChinaMonth(value) };
 }

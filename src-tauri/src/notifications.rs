@@ -71,7 +71,7 @@ impl NotificationState {
     ) -> Result<(), NotificationError> {
         let appointment_id = appointment_id.into();
         let title = title.into();
-        let body = body.into();
+        let body = truncate_body(body.into());
         validate_notification(&appointment_id, &title, &body)?;
 
         let generation = self.inner.next_generation.fetch_add(1, Ordering::Relaxed);
@@ -206,6 +206,14 @@ fn validate_notification(
     Ok(())
 }
 
+fn truncate_body(body: String) -> String {
+    if body.chars().count() <= 1_000 {
+        body
+    } else {
+        body.chars().take(1_000).collect()
+    }
+}
+
 fn delay_until(notify_at: DateTime<Utc>) -> Duration {
     (notify_at - Utc::now()).to_std().unwrap_or(Duration::ZERO)
 }
@@ -265,6 +273,15 @@ mod tests {
             validate_notification("appointment-1", "", "即将开始"),
             Err(NotificationError::InvalidTitle)
         ));
+    }
+
+    #[test]
+    fn truncates_notification_bodies_on_unicode_boundaries() {
+        let body = "约".repeat(999) + "🙂尾部";
+        let truncated = truncate_body(body);
+        assert_eq!(truncated.chars().count(), 1_000);
+        assert!(truncated.ends_with('🙂'));
+        assert!(validate_notification("appointment-1", "预约提醒", &truncated).is_ok());
     }
 
     #[test]

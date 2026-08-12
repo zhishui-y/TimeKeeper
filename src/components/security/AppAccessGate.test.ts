@@ -20,12 +20,16 @@ describe("AppAccessGate", () => {
       unlocked: false,
       legacyMigrationPendingCount: 0,
       recoveryQuestion: "常用角色？",
+      dataRepairIssueCount: 0,
+      dataRepairIssues: [],
     };
     const reset = vi.spyOn(store, "resetPassword").mockResolvedValue({
       initialized: true,
       unlocked: true,
       legacyMigrationPendingCount: 0,
       recoveryQuestion: "常用角色？",
+      dataRepairIssueCount: 0,
+      dataRepairIssues: [],
     });
     const wrapper = mount(AppAccessGate);
 
@@ -56,6 +60,8 @@ describe("AppAccessGate", () => {
       unlocked: false,
       legacyMigrationPendingCount: 2,
       recoveryQuestion: null,
+      dataRepairIssueCount: 0,
+      dataRepairIssues: [],
     };
     const wrapper = mount(AppAccessGate);
 
@@ -74,12 +80,16 @@ describe("AppAccessGate", () => {
       unlocked: true,
       legacyMigrationPendingCount: 0,
       recoveryQuestion: null,
+      dataRepairIssueCount: 0,
+      dataRepairIssues: [],
     };
     const setRecovery = vi.spyOn(store, "setRecovery").mockResolvedValue({
       initialized: true,
       unlocked: true,
       legacyMigrationPendingCount: 0,
       recoveryQuestion: "常用角色？",
+      dataRepairIssueCount: 0,
+      dataRepairIssues: [],
     });
     const wrapper = mount(AppAccessGate);
 

@@ -62,6 +62,19 @@ function selectKind(kind: AppointmentAccountDraft["kind"]): void {
   };
 }
 
+function activateKind(kind: AppointmentAccountDraft["kind"]): void {
+  if (kind === "embedded" && model.value.kind === "embedded" && model.value.preservesSnapshot) {
+    model.value = {
+      ...model.value,
+      source: "embedded",
+      characterName: null,
+      preservesSnapshot: false,
+    };
+    return;
+  }
+  selectKind(kind);
+}
+
 function updateProfileId(profileId: string): void {
   model.value = { ...model.value, profileId, password: "" };
 }
@@ -89,37 +102,47 @@ function chooseNewPassword(): void {
 
 <template>
   <div class="account-fields">
-    <div class="account-kind" role="radiogroup" aria-label="预约账号来源">
-      <button
-        class="account-kind__item"
-        :class="{ 'is-active': model.kind === 'none' }"
-        type="button"
-        @click="selectKind('none')"
-      >
+    <div class="account-kind" aria-label="预约账号来源">
+      <label class="account-kind__item" :class="{ 'is-active': model.kind === 'none' }">
+        <input
+          type="radio"
+          name="appointment-account-kind"
+          value="none"
+          :checked="model.kind === 'none'"
+          @change="activateKind('none')"
+        />
         <UserRoundX :size="15" />不使用账号
-      </button>
-      <button
-        class="account-kind__item"
-        :class="{ 'is-active': model.kind === 'profile' }"
-        type="button"
-        @click="selectKind('profile')"
-      >
+      </label>
+      <label class="account-kind__item" :class="{ 'is-active': model.kind === 'profile' }">
+        <input
+          type="radio"
+          name="appointment-account-kind"
+          value="profile"
+          :checked="model.kind === 'profile'"
+          @change="activateKind('profile')"
+        />
         从档案选择
-      </button>
-      <button
+      </label>
+      <label
         class="account-kind__item"
         :class="{ 'is-active': model.kind === 'embedded' }"
-        type="button"
         :aria-label="
           model.preservesSnapshot && model.source === 'profile'
             ? '档案账号快照，点击改为一次性账号'
             : '一次性账号'
         "
-        @click="selectKind('embedded')"
       >
+        <input
+          type="radio"
+          name="appointment-account-kind"
+          value="embedded"
+          :checked="model.kind === 'embedded'"
+          @click="activateKind('embedded')"
+          @change="activateKind('embedded')"
+        />
         <FileKey2 :size="15" />
         {{ model.preservesSnapshot && model.source === "profile" ? "档案账号快照" : "一次性账号" }}
-      </button>
+      </label>
     </div>
 
     <div v-if="model.kind === 'profile'" class="profile-picker">
@@ -245,6 +268,7 @@ function chooseNewPassword(): void {
 }
 
 .account-kind__item {
+  position: relative;
   display: inline-flex;
   min-height: 36px;
   align-items: center;
@@ -258,6 +282,20 @@ function chooseNewPassword(): void {
   font-size: calc(12px + var(--app-font-size-offset, 0px));
   font-weight: 650;
   cursor: pointer;
+}
+
+.account-kind__item > input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.account-kind__item:has(input:focus-visible) {
+  outline: 2px solid color-mix(in srgb, var(--brand) 66%, transparent);
+  outline-offset: 2px;
 }
 
 .account-kind__item.is-active {

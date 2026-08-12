@@ -1,4 +1,7 @@
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use chrono::{DateTime, FixedOffset, NaiveDate};
 use futures_util::{StreamExt, stream};
@@ -9,12 +12,13 @@ use sqlx::{Row, SqlitePool};
 use tauri::ipc::Channel;
 use tokio::sync::{Mutex, MutexGuard};
 
-use crate::backup::BackupState;
+use crate::{backup::BackupState, db::JS_SAFE_INTEGER_MAX};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_CONCURRENT_REQUESTS: usize = 3;
+const MAX_REFRESH_IDS: usize = 1_000;
 
 pub struct AccountRoleDataRefreshState {
     client: Client,
@@ -117,6 +121,13 @@ struct AccountRoleDataFetchOutcome {
     update: Option<AccountRoleDataUpdate>,
 }
 
+#[derive(Debug)]
+struct AccountRoleDataProfile {
+    account_id: String,
+    server: Option<String>,
+    character_name: Option<String>,
+}
+
 pub async fn refresh_account_role_data(
     pool: &SqlitePool,
     client: &Client,
@@ -134,15 +145,10 @@ pub async fn refresh_account_role_data(
     let requested_count = ids.len();
     let mut slots = vec![None; ids.len()];
     let mut targets = Vec::new();
+    let mut profiles = load_account_role_data_profiles(pool, &ids).await?;
 
     for (position, account_id) in ids.iter().enumerate() {
-        let row = sqlx::query("SELECT server, character_name FROM account_profiles WHERE id = ?")
-            .bind(account_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(db_error)?;
-
-        let Some(row) = row else {
+        let Some(profile) = profiles.remove(account_id) else {
             slots[position] = Some(AccountRoleDataFetchOutcome {
                 position,
                 item: result_item(
@@ -155,8 +161,8 @@ pub async fn refresh_account_role_data(
             continue;
         };
 
-        let server = optional_text(row.try_get("server").map_err(db_error)?);
-        let character_name = optional_text(row.try_get("character_name").map_err(db_error)?);
+        let server = optional_text(profile.server);
+        let character_name = optional_text(profile.character_name);
         let (server, character_name) = match (server, character_name) {
             (Some(server), Some(character_name)) => (server, character_name),
             (server, character_name) => {
@@ -240,6 +246,33 @@ pub async fn refresh_account_role_data(
     Ok(summarize(items))
 }
 
+async fn load_account_role_data_profiles(
+    pool: &SqlitePool,
+    ids: &[String],
+) -> Result<HashMap<String, AccountRoleDataProfile>, String> {
+    let placeholders = std::iter::repeat_n("?", ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        "SELECT id, server, character_name FROM account_profiles WHERE id IN ({placeholders})"
+    );
+    let mut query = sqlx::query(&query);
+    for id in ids {
+        query = query.bind(id);
+    }
+    let rows = query.fetch_all(pool).await.map_err(db_error)?;
+    rows.into_iter()
+        .map(|row| {
+            let profile = AccountRoleDataProfile {
+                account_id: row.try_get("id").map_err(db_error)?,
+                server: row.try_get("server").map_err(db_error)?,
+                character_name: row.try_get("character_name").map_err(db_error)?,
+            };
+            Ok((profile.account_id.clone(), profile))
+        })
+        .collect()
+}
+
 async fn commit_account_role_data_update(
     pool: &SqlitePool,
     update: AccountRoleDataUpdate,
@@ -275,6 +308,21 @@ async fn commit_account_role_data_update(
     if result.rows_affected() == 0 {
         return Err(format!("账号档案不存在: {}", update.account_id));
     }
+    sqlx::query(
+        "UPDATE legacy_numeric_repair_issues
+         SET resolved_at = COALESCE(resolved_at, ?)
+         WHERE entity_kind = 'account_profile' AND entity_id = ?
+           AND (field_name = 'current_score'
+                OR (field_name = 'highest_score' AND ? IS NOT NULL)
+                OR (field_name = 'weekly_wins' AND ? IS NOT NULL))",
+    )
+    .bind(&updated_at)
+    .bind(&update.account_id)
+    .bind(update.highest_score)
+    .bind(update.weekly_wins)
+    .execute(&mut *transaction)
+    .await
+    .map_err(db_error)?;
 
     let row = sqlx::query(
         "SELECT gear_score, current_score, highest_score, score_updated_at,
@@ -439,27 +487,17 @@ fn parse_account_role_data_response(bytes: &[u8]) -> Result<ParsedAccountRoleDat
             .get("equip")
             .ok_or_else(|| "服务器响应缺少 equip 字段".to_string())?,
     )?;
-    let current_score = parse_non_negative_integer(
-        object
-            .get("score")
-            .ok_or_else(|| "服务器响应缺少 score 字段".to_string())?,
-        "score",
-    )?;
-    let highest_score = object
-        .get("total_score")
-        .filter(|value| !value.is_null())
-        .map(|value| parse_non_negative_integer(value, "total_score"))
-        .transpose()?;
+    let current_score = parse_nullable_non_negative_safe_integer(object.get("score"), "score")?
+        .ok_or_else(|| "服务器响应缺少有效的 score 字段".to_string())?;
+    let highest_score =
+        parse_nullable_non_negative_safe_integer(object.get("total_score"), "total_score")?;
     let score_updated_at = parse_score_updated_at(
         object
             .get("time")
             .and_then(Value::as_str)
             .ok_or_else(|| "服务器响应缺少有效的 time 字段".to_string())?,
     )?;
-    let weekly_wins = object
-        .get("week_win")
-        .filter(|value| !value.is_null())
-        .and_then(|value| parse_non_negative_integer(value, "week_win").ok());
+    let weekly_wins = parse_nullable_non_negative_safe_integer(object.get("week_win"), "week_win")?;
 
     Ok(ParsedAccountRoleData::Updated {
         gear_score,
@@ -485,6 +523,22 @@ fn parse_non_negative_integer(value: &Value, field: &str) -> Result<i64, String>
         return Err(format!("服务器响应的 {field} 字段不能为负数"));
     }
     Ok(parsed)
+}
+
+fn parse_nullable_non_negative_safe_integer(
+    value: Option<&Value>,
+    field: &str,
+) -> Result<Option<i64>, String> {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let parsed = parse_non_negative_integer(value, field)?;
+    if parsed > JS_SAFE_INTEGER_MAX {
+        return Err(format!(
+            "服务器响应的 {field} 字段超出 JavaScript 安全整数范围"
+        ));
+    }
+    Ok(Some(parsed))
 }
 
 fn parse_score_updated_at(value: &str) -> Result<String, String> {
@@ -553,6 +607,9 @@ fn normalize_ids(ids: Vec<String>) -> Result<Vec<String>, String> {
     }
     if normalized.is_empty() {
         return Err("请至少选择一个账号更新角色数据".into());
+    }
+    if normalized.len() > MAX_REFRESH_IDS {
+        return Err(format!("单次最多更新 {MAX_REFRESH_IDS} 个账号的角色数据"));
     }
     Ok(normalized)
 }
@@ -789,6 +846,75 @@ mod tests {
             .unwrap(),
             vec!["account-1", "account-2"]
         );
+        assert_eq!(
+            normalize_ids(
+                (0..MAX_REFRESH_IDS)
+                    .map(|index| format!("account-{index}"))
+                    .collect()
+            )
+            .unwrap()
+            .len(),
+            MAX_REFRESH_IDS
+        );
+        let too_many_ids = (0..=MAX_REFRESH_IDS)
+            .map(|index| format!("account-{index}"))
+            .collect();
+        assert_eq!(
+            normalize_ids(too_many_ids).unwrap_err(),
+            "单次最多更新 1000 个账号的角色数据"
+        );
+    }
+
+    #[test]
+    fn batch_loads_requested_profiles_without_passwords() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            insert_account(
+                &database,
+                "account-1",
+                Some("  梦江南  "),
+                Some("角色一"),
+                100,
+            )
+            .await;
+            insert_account(&database, "account-2", None, Some("角色二"), 100).await;
+            sqlx::query(
+                "INSERT INTO account_profile_credentials (profile_id, password) VALUES (?, ?)",
+            )
+            .bind("account-1")
+            .bind("never-prefetch-this-secret")
+            .execute(database.pool())
+            .await
+            .unwrap();
+
+            let profiles = load_account_role_data_profiles(
+                database.pool(),
+                &[
+                    "account-2".into(),
+                    "missing-account".into(),
+                    "account-1".into(),
+                ],
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(profiles.len(), 2);
+            assert_eq!(profiles["account-1"].server.as_deref(), Some("  梦江南  "));
+            assert_eq!(profiles["account-2"].server, None);
+            assert!(!profiles.contains_key("missing-account"));
+            let debug = format!("{profiles:?}");
+            assert!(!debug.contains("never-prefetch-this-secret"));
+
+            let maximum_ids = (0..MAX_REFRESH_IDS)
+                .map(|index| format!("missing-{index}"))
+                .collect::<Vec<_>>();
+            assert!(
+                load_account_role_data_profiles(database.pool(), &maximum_ids)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        });
     }
 
     #[test]
@@ -828,10 +954,10 @@ mod tests {
     }
 
     #[test]
-    fn missing_or_invalid_week_win_keeps_the_legacy_response_compatible() {
+    fn missing_or_null_week_win_keeps_the_legacy_response_compatible() {
         for body in [
             br#"{"ok":true,"time":"2026-08-02","equip":100,"score":1,"total_score":2}"#.as_slice(),
-            br#"{"ok":true,"time":"2026-08-02","equip":100,"score":1,"total_score":2,"week_win":"invalid"}"#.as_slice(),
+            br#"{"ok":true,"time":"2026-08-02","equip":100,"score":1,"total_score":2,"week_win":null}"#.as_slice(),
         ] {
             let ParsedAccountRoleData::Updated { weekly_wins, .. } =
                 parse_account_role_data_response(body).unwrap()
@@ -839,6 +965,57 @@ mod tests {
                 panic!("expected an updated response");
             };
             assert_eq!(weekly_wins, None);
+        }
+    }
+
+    #[test]
+    fn role_scores_accept_only_nullable_non_negative_javascript_safe_integers() {
+        let accepted = parse_account_role_data_response(
+            br#"{"ok":true,"time":"2026-08-02","equip":100,"score":"9007199254740991","total_score":null,"week_win":"0"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            accepted,
+            ParsedAccountRoleData::Updated {
+                gear_score: "100".into(),
+                current_score: JS_SAFE_INTEGER_MAX,
+                highest_score: None,
+                score_updated_at: "2026-08-02".into(),
+                weekly_wins: Some(0),
+            }
+        );
+
+        for (field, invalid) in [
+            ("score", "-1"),
+            ("score", "1.5"),
+            ("score", "9007199254740992"),
+            ("score", "true"),
+            ("total_score", "-1"),
+            ("total_score", "1.5"),
+            ("total_score", "9007199254740992"),
+            ("total_score", "{}"),
+            ("week_win", "-1"),
+            ("week_win", "1.5"),
+            ("week_win", "9007199254740992"),
+            ("week_win", "\"invalid\""),
+        ] {
+            let body = format!(
+                r#"{{"ok":true,"time":"2026-08-02","equip":100,"score":1,"total_score":2,"week_win":3,"{field}":{invalid}}}"#
+            );
+            let error = parse_account_role_data_response(body.as_bytes()).unwrap_err();
+            assert!(error.contains(field), "{field}={invalid}: {error}");
+        }
+
+        for score in ["null", "missing"] {
+            let body = if score == "missing" {
+                r#"{"ok":true,"time":"2026-08-02","equip":100}"#.to_string()
+            } else {
+                r#"{"ok":true,"time":"2026-08-02","equip":100,"score":null}"#.to_string()
+            };
+            assert_eq!(
+                parse_account_role_data_response(body.as_bytes()).unwrap_err(),
+                "服务器响应缺少有效的 score 字段"
+            );
         }
     }
 

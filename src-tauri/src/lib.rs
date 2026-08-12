@@ -3,6 +3,7 @@ mod accounts_remote;
 mod app_access;
 mod appointments;
 mod backup;
+mod data_dir_lock;
 mod db;
 mod importer;
 mod models;
@@ -24,7 +25,6 @@ fn setup_error(error: impl std::fmt::Display) -> io::Error {
 }
 
 fn app_data_dir(app: &tauri::App) -> Result<PathBuf, io::Error> {
-    #[cfg(debug_assertions)]
     if let Some(configured) = std::env::var_os("TIMEKEEPER_DATA_DIR") {
         let path = PathBuf::from(configured);
         if !path.is_absolute() {
@@ -86,7 +86,6 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(notifications::plugin())
         .on_window_event(|window, event| {
@@ -100,6 +99,8 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app_data_dir(app)?;
             std::fs::create_dir_all(&data_dir).map_err(setup_error)?;
+            let data_directory_lock =
+                data_dir_lock::DataDirectoryLock::acquire(&data_dir).map_err(setup_error)?;
 
             let backup = backup::BackupState::new(&data_dir, data_dir.join(db::DATABASE_FILE_NAME))
                 .map_err(setup_error)?;
@@ -121,6 +122,7 @@ pub fn run() {
             .map_err(setup_error)?;
 
             app.manage(database);
+            app.manage(data_directory_lock);
             app.manage(backup);
             app.manage(settings);
             app.manage(vault);
@@ -245,7 +247,7 @@ mod access_boundary_tests {
                     continue;
                 }
                 let body_start = block.find('{').expect("command must have a body");
-                let guard_prefix = &block[body_start..block.len().min(body_start + 1_200)];
+                let guard_prefix = block[body_start..].chars().take(1_200).collect::<String>();
                 assert!(
                     guard_prefix.contains("require_unlocked()?"),
                     "命令分组 {group} 的 {name} 缺少 Rust 入口锁检查"

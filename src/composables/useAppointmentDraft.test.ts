@@ -104,6 +104,36 @@ describe("useAppointmentDraft", () => {
     expect(draft.endTime).toBe("");
   });
 
+  it("keeps mode, unified status and billing fields when applying a preset while editing", () => {
+    const appointment: Appointment = {
+      id: "editing-preset",
+      serviceDate: "2026-08-20",
+      contactName: "原联系人",
+      mode: "business",
+      serviceStatus: "completed",
+      settlementStatus: "settled",
+      amountMinor: 12_345,
+      paymentMethod: "支付宝",
+      rateNote: "保留费率",
+      createdAt: "2026-08-01T00:00:00Z",
+      updatedAt: "2026-08-01T00:00:00Z",
+    };
+    const { draft, applyContactPreset } = setup({ appointment });
+
+    applyContactPreset({ ...preset(), mode: "entertainment", amountMinor: null });
+
+    expect(draft).toMatchObject({
+      contactName: "南枝",
+      content: "赛季冲分",
+      mode: "business",
+      serviceStatus: "completed",
+      settlementStatus: "settled",
+      amountYuan: "123.45",
+      paymentMethod: "支付宝",
+      rateNote: "保留费率",
+    });
+  });
+
   it("requires a password for a newly entered one-time account", () => {
     const onSave = vi.fn();
     const { draft, errors, submit } = setup({ onSave });
@@ -143,11 +173,11 @@ describe("useAppointmentDraft", () => {
       characterName: null,
       preservesSnapshot: false,
     };
-    draft.amountYuan = -1;
+    draft.amountYuan = "-1";
 
     submit();
 
-    expect(errors.value).toContain("账单金额格式不正确");
+    expect(errors.value).toContain("账单金额最多保留两位小数");
     expect(onSave).not.toHaveBeenCalled();
   });
 

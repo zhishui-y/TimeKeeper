@@ -12,6 +12,9 @@ export interface AccountProfileFilters {
   specialization: string;
 }
 
+export type AccountScoreParseResult =
+  { ok: true; value: number | null } | { ok: false; value: null };
+
 const textCollator = new Intl.Collator("zh-CN", {
   numeric: true,
   sensitivity: "base",
@@ -39,6 +42,18 @@ export function parseGearScore(value?: string | null): number | null {
 
   const number = Number(normalized);
   return Number.isFinite(number) ? number : null;
+}
+
+export function parseOptionalAccountScore(
+  value: string | number | null | undefined,
+): AccountScoreParseResult {
+  if (value === null || value === undefined) return { ok: true, value: null };
+  if (typeof value === "string" && value.trim() === "") return { ok: true, value: null };
+
+  const score = typeof value === "number" ? value : Number(value);
+  return Number.isSafeInteger(score) && score >= 0
+    ? { ok: true, value: score }
+    : { ok: false, value: null };
 }
 
 function compareOptional<T>(

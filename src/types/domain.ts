@@ -152,6 +152,9 @@ export interface AccountProfile {
   updatedAt: string;
 }
 
+export type AccountProfileCredentialInput =
+  { kind: "keep" } | { kind: "replace"; password: string } | { kind: "remove" };
+
 export interface AccountProfileInput {
   contactName?: string | null;
   server?: string | null;
@@ -159,7 +162,7 @@ export interface AccountProfileInput {
   specialization?: string | null;
   gearScore?: string | null;
   accountName: string;
-  password?: string | null;
+  credential: AccountProfileCredentialInput;
   currentScore?: number | null;
   highestScore?: number | null;
   scoreUpdatedAt?: string | null;
@@ -238,6 +241,17 @@ export interface AppAccessStatus {
   unlocked: boolean;
   legacyMigrationPendingCount: number;
   recoveryQuestion: string | null;
+  dataRepairIssueCount: number;
+  dataRepairIssues: DataRepairIssue[];
+}
+
+export interface DataRepairIssue {
+  id: string;
+  entityKind: "account_profile" | "appointment";
+  entityId: string;
+  displayName: string;
+  fieldName: "current_score" | "highest_score" | "weekly_wins" | "amount_minor";
+  originalValue: string;
 }
 
 export interface AppAccessRecoverySetup {
@@ -358,4 +372,22 @@ export interface BackupResult {
   path: string;
   createdAt: string;
   sizeBytes: number;
+}
+
+export type AppOperationKind =
+  "excelPreview" | "excelCommit" | "backupExport" | "backupRestore" | "accountRoleRefresh";
+
+export type AppOperationStatus = "running" | "completed" | "failed";
+
+export interface AppOperationState {
+  id: number;
+  kind: AppOperationKind;
+  status: AppOperationStatus;
+  title: string;
+  detail: string;
+  startedAt: string;
+  completedAt?: string | null;
+  completedCount?: number | null;
+  totalCount?: number | null;
+  error?: string | null;
 }

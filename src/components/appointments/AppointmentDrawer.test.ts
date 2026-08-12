@@ -107,20 +107,14 @@ describe("AppointmentDrawer", () => {
 
   it("clears a one-time password when switching away from the embedded account", async () => {
     const wrapper = mountDrawer();
-    const oneTimeButton = wrapper
-      .findAll("button")
-      .find((button) => button.text().includes("一次性账号"));
-    expect(oneTimeButton).toBeDefined();
-    await oneTimeButton?.trigger("click");
+    const oneTimeRadio = wrapper.get('input[type="radio"][value="embedded"]');
+    await oneTimeRadio.setValue(true);
     await wrapper
       .get('input[placeholder="仅保存到本条预约，不跟随账号档案更新"]')
       .setValue("secret");
 
-    const noneButton = wrapper
-      .findAll("button")
-      .find((button) => button.text().includes("不使用账号"));
-    await noneButton?.trigger("click");
-    await oneTimeButton?.trigger("click");
+    await wrapper.get('input[type="radio"][value="none"]').setValue(true);
+    await oneTimeRadio.setValue(true);
 
     expect(
       (
@@ -134,14 +128,11 @@ describe("AppointmentDrawer", () => {
     const wrapper = mountDrawer();
 
     expect(wrapper.text()).toContain("账单信息");
-    const entertainmentButton = wrapper
-      .findAll("button")
-      .find((button) => button.text().includes("娱乐模式"));
-    expect(entertainmentButton).toBeDefined();
-    await entertainmentButton?.trigger("click");
+    const entertainmentRadio = wrapper.get('input[type="radio"][value="entertainment"]');
+    await entertainmentRadio.setValue(true);
     expect(wrapper.text()).not.toContain("账单信息");
-    expect(wrapper.get('select[aria-label="预约进度"]').findAll("option")).toHaveLength(4);
-    expect(wrapper.get('select[aria-label="预约进度"]').text()).not.toContain("待结算");
+    expect(wrapper.get('select[aria-label="预约状态"]').findAll("option")).toHaveLength(4);
+    expect(wrapper.find('select[aria-label="结算状态"]').exists()).toBe(false);
   });
 
   it("rejects equal start and end times", async () => {
@@ -170,10 +161,7 @@ describe("AppointmentDrawer", () => {
     await wrapper.get('button[aria-label="清空结束时间"]').trigger("click");
     expect((timeInputs[1]?.element as HTMLInputElement).value).toBe("");
     await wrapper.get('input[placeholder="谁约的"]').setValue("结束时间待定");
-    const noneButton = wrapper
-      .findAll("button")
-      .find((button) => button.text().includes("不使用账号"));
-    await noneButton?.trigger("click");
+    await wrapper.get('input[type="radio"][value="none"]').setValue(true);
     await wrapper.get('button.button--primary[type="submit"]').trigger("click");
 
     expect(wrapper.emitted("save")?.[0]?.[0]).toMatchObject({
@@ -182,26 +170,25 @@ describe("AppointmentDrawer", () => {
     });
   });
 
-  it("requires an amount before a business appointment can be completed", async () => {
+  it("requires an amount before a business appointment can be settled", async () => {
     const wrapper = mountDrawer();
-    const progressSelect = wrapper.get('select[aria-label="预约进度"]');
-    expect(progressSelect.findAll("option")).toHaveLength(5);
-    expect(wrapper.text()).not.toContain("结算状态");
-    await progressSelect.setValue("completed");
+    const statusSelect = wrapper.get('select[aria-label="预约状态"]');
+    expect(statusSelect.findAll("option")).toHaveLength(5);
+    await statusSelect.setValue("completed");
 
     await wrapper.get('button.button--primary[type="submit"]').trigger("click");
 
-    expect(wrapper.text()).toContain("已完成预约必须填写金额");
+    expect(wrapper.text()).toContain("已结算预约必须填写金额");
     expect(wrapper.emitted("save")).toBeUndefined();
   });
 
   it("places account before progress and keeps progress next to billing", () => {
     const wrapper = mountDrawer();
     const accountFields = wrapper.get(".account-fields").element;
-    const progressSelect = wrapper.get('select[aria-label="预约进度"]').element;
-    const amountInput = wrapper.get('input[type="number"][step="0.01"]').element;
+    const progressSelect = wrapper.get('select[aria-label="预约状态"]').element;
+    const amountInput = wrapper.get('input[inputmode="decimal"]').element;
 
-    expect(wrapper.text()).toContain("账号与进度");
+    expect(wrapper.text()).toContain("账号与状态");
     expect(accountFields.compareDocumentPosition(progressSelect)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
@@ -213,14 +200,14 @@ describe("AppointmentDrawer", () => {
   it("accepts zero as an explicit amount for a completed business appointment", async () => {
     const wrapper = mountDrawer();
     await wrapper.get('input[placeholder="谁约的"]').setValue("零元预约");
-    const noneButton = wrapper
-      .findAll("button")
-      .find((button) => button.text().includes("不使用账号"));
-    await noneButton?.trigger("click");
-    await wrapper.get('select[aria-label="预约进度"]').setValue("completed");
-    await wrapper.get('input[type="number"][step="0.01"]').setValue("0");
-
+    await wrapper.get('input[type="radio"][value="none"]').setValue(true);
+    await wrapper.get('select[aria-label="预约状态"]').setValue("completed");
+    await wrapper.get('input[inputmode="decimal"]').setValue("0");
     await wrapper.get('button.button--primary[type="submit"]').trigger("click");
+
+    expect(wrapper.find(".form-errors").exists() ? wrapper.find(".form-errors").text() : "").toBe(
+      "",
+    );
 
     expect(wrapper.emitted("save")?.[0]?.[0]).toMatchObject({
       serviceStatus: "completed",
@@ -233,7 +220,7 @@ describe("AppointmentDrawer", () => {
     const wrapper = mountDrawer(30, completedAppointment(), "amount");
     await flushPromises();
 
-    const amountInput = wrapper.get('input[type="number"][step="0.01"]');
+    const amountInput = wrapper.get('input[inputmode="decimal"]');
     expect(document.activeElement).toBe(amountInput.element);
   });
 
@@ -329,6 +316,25 @@ describe("AppointmentDrawer", () => {
       settlementStatus: "settled",
       amountMinor: 18_000,
     });
+  });
+
+  it("confirms before changing a settled appointment back to pending settlement", async () => {
+    const confirm = vi
+      .spyOn(globalThis, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true);
+    const wrapper = mountDrawer(30, {
+      ...completedAppointment(),
+      serviceStatus: "completed",
+      settlementStatus: "settled",
+    });
+    const status = wrapper.get('select[aria-label="预约状态"]');
+
+    await status.setValue("pending_settlement");
+    expect((status.element as HTMLSelectElement).value).toBe("completed");
+    await status.setValue("pending_settlement");
+    expect((status.element as HTMLSelectElement).value).toBe("pending_settlement");
+    expect(confirm).toHaveBeenCalledTimes(2);
   });
 
   it("only shows the delete action while editing and emits a delete request", async () => {

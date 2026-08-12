@@ -32,8 +32,13 @@ export function useContactPresets(
       requestVersion += 1;
       if (!isEnabled) {
         loading.value = false;
+        items.value = [];
+        error.value = null;
         return;
       }
+      items.value = [];
+      error.value = null;
+      loading.value = true;
       const timer = globalThis.setTimeout(() => void load(value), 200);
       onCleanup(() => globalThis.clearTimeout(timer));
     },

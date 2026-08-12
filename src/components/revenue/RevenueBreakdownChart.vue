@@ -3,9 +3,13 @@ import { BarChart as EChartsBarChart, PieChart as EChartsPieChart } from "echart
 import { GridComponent, TooltipComponent } from "echarts/components";
 import { use } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
-import { computed, onBeforeUnmount, onMounted, shallowRef, useTemplateRef } from "vue";
+import { computed, useTemplateRef } from "vue";
 import VChart from "vue-echarts";
 import { useAppAppearance } from "../../composables/useAppAppearance";
+import {
+  useEChartsLifecycle,
+  type ResizableEChartsInstance,
+} from "../../composables/useEChartsLifecycle";
 import type { RevenueBreakdownItem } from "../../types/domain";
 import { formatCurrency } from "../../utils/formatters";
 
@@ -26,12 +30,8 @@ const props = defineProps<{
 }>();
 
 const appearance = useAppAppearance();
-const chartInstance = useTemplateRef<{ resize?: () => void }>("chartInstance");
-const reducedMotionQuery =
-  typeof globalThis.matchMedia === "function"
-    ? globalThis.matchMedia("(prefers-reduced-motion: reduce)")
-    : null;
-const prefersReducedMotion = shallowRef(reducedMotionQuery?.matches ?? false);
+const chartInstance = useTemplateRef<ResizableEChartsInstance>("chartInstance");
+const { prefersReducedMotion } = useEChartsLifecycle(chartInstance);
 const palette = ["#2d6854", "#4e7184", "#a86f26", "#b5523e", "#759288", "#7b6a9a"];
 
 const totalAmount = computed(() =>
@@ -43,14 +43,6 @@ const chartDescription = computed(
   () =>
     `${props.dimensionLabel}${props.chartType === "bar" ? "横向柱状图" : "饼图"}，共${props.items.length}项，合计${formatCurrency(totalAmount.value)}`,
 );
-
-function updateReducedMotion(): void {
-  prefersReducedMotion.value = reducedMotionQuery?.matches ?? false;
-}
-
-function refreshChartSize(): void {
-  globalThis.requestAnimationFrame(() => chartInstance.value?.resize?.());
-}
 
 function tooltipText(params: TooltipParams | TooltipParams[]): string {
   const item = Array.isArray(params) ? params[0] : params;
@@ -64,13 +56,6 @@ function percentage(amountMinor: number): string {
   if (totalAmount.value <= 0) return "0%";
   return `${((amountMinor / totalAmount.value) * 100).toFixed(1)}%`;
 }
-
-onMounted(() => reducedMotionQuery?.addEventListener("change", updateReducedMotion));
-onMounted(() => globalThis.addEventListener("timekeeper-appearance-changed", refreshChartSize));
-onBeforeUnmount(() => {
-  reducedMotionQuery?.removeEventListener("change", updateReducedMotion);
-  globalThis.removeEventListener("timekeeper-appearance-changed", refreshChartSize);
-});
 
 const option = computed(() => {
   const shared = {

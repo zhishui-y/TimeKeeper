@@ -23,6 +23,7 @@ import type {
   LegacyCredentialMigrationResult,
 } from "../types/domain";
 import type { ApiClient } from "./types";
+import { chinaDateKey } from "../utils/chinaDateTime";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -118,7 +119,7 @@ const nativeApi: ApiClient = {
   },
   async selectBackupDestination() {
     const { save } = await import("@tauri-apps/plugin-dialog");
-    const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const date = chinaDateKey().replace(/-/g, "");
     const selected = await save({
       defaultPath: `TimeKeeper-${date}.tkbackup`,
       filters: [{ name: "时约管家备份", extensions: ["tkbackup"] }],

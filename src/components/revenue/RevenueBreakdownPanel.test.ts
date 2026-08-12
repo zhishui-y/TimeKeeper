@@ -45,20 +45,20 @@ function mountPanel(overrides: Partial<InstanceType<typeof RevenueBreakdownPanel
 }
 
 describe("RevenueBreakdownPanel", () => {
-  it("defaults to payment methods in a pie chart", () => {
+  it("defaults to contacts in a pie chart", () => {
     const wrapper = mountPanel();
     const chart = wrapper.getComponent(RevenueBreakdownChartStub);
 
-    expect(wrapper.get("h2").text()).toBe("收款渠道");
+    expect(wrapper.get("h2").text()).toBe("收款对象");
     expect(chart.props()).toMatchObject({
-      items: paymentMethods,
+      items: contacts,
       chartType: "pie",
-      dimensionLabel: "收款渠道",
+      dimensionLabel: "收款对象",
     });
     expect(
       wrapper
         .findAll('[aria-label="收款分析维度"] button')
-        .find((button) => button.text() === "收款渠道")
+        .find((button) => button.text() === "收款对象")
         ?.attributes("aria-pressed"),
     ).toBe("true");
     expect(
@@ -69,26 +69,26 @@ describe("RevenueBreakdownPanel", () => {
     ).toBe("true");
   });
 
-  it("switches contacts and chart types without mutating the source data", async () => {
+  it("switches payment methods and chart types without mutating the source data", async () => {
     const wrapper = mountPanel();
-    const contactButton = wrapper
+    const paymentMethodButton = wrapper
       .findAll('[aria-label="收款分析维度"] button')
-      .find((button) => button.text() === "收款对象");
+      .find((button) => button.text() === "收款渠道");
     const barButton = wrapper
       .findAll('[aria-label="图表类型"] button')
       .find((button) => button.text() === "柱状");
-    if (!contactButton || !barButton) throw new Error("收款分析切换按钮未完整渲染");
+    if (!paymentMethodButton || !barButton) throw new Error("收款分析切换按钮未完整渲染");
 
-    await contactButton.trigger("click");
+    await paymentMethodButton.trigger("click");
     await barButton.trigger("click");
 
-    expect(wrapper.get("h2").text()).toBe("收款对象");
+    expect(wrapper.get("h2").text()).toBe("收款渠道");
     expect(wrapper.getComponent(RevenueBreakdownChartStub).props()).toMatchObject({
-      items: contacts,
+      items: paymentMethods,
       chartType: "bar",
-      dimensionLabel: "收款对象",
+      dimensionLabel: "收款渠道",
     });
-    expect(contactButton.attributes("aria-pressed")).toBe("true");
+    expect(paymentMethodButton.attributes("aria-pressed")).toBe("true");
     expect(barButton.attributes("aria-pressed")).toBe("true");
     expect(paymentMethods).toHaveLength(2);
     expect(contacts).toHaveLength(2);
@@ -110,43 +110,37 @@ describe("RevenueBreakdownPanel", () => {
     });
 
     expect(wrapper.getComponent(RevenueBreakdownChartStub).props("items")).toEqual([
-      { name: "微信", amountMinor: 10_000, appointmentCount: 3 },
-      { name: "其他", amountMinor: 99, appointmentCount: 2 },
+      { name: "南枝", amountMinor: 20_000, appointmentCount: 4 },
+      { name: "其他", amountMinor: 200, appointmentCount: 3 },
     ]);
 
-    const contactButton = wrapper
+    const paymentMethodButton = wrapper
       .findAll('[aria-label="收款分析维度"] button')
-      .find((button) => button.text() === "收款对象");
+      .find((button) => button.text() === "收款渠道");
     const barButton = wrapper
       .findAll('[aria-label="图表类型"] button')
       .find((button) => button.text() === "柱状");
-    if (!contactButton || !barButton) throw new Error("收款分析切换按钮未完整渲染");
+    if (!paymentMethodButton || !barButton) throw new Error("收款分析切换按钮未完整渲染");
 
-    await contactButton.trigger("click");
+    await paymentMethodButton.trigger("click");
     await barButton.trigger("click");
 
     expect(wrapper.getComponent(RevenueBreakdownChartStub).props()).toMatchObject({
       items: [
-        { name: "南枝", amountMinor: 20_000, appointmentCount: 4 },
-        { name: "其他", amountMinor: 200, appointmentCount: 3 },
+        { name: "微信", amountMinor: 10_000, appointmentCount: 3 },
+        { name: "其他", amountMinor: 99, appointmentCount: 2 },
       ],
       chartType: "bar",
-      dimensionLabel: "收款对象",
+      dimensionLabel: "收款渠道",
     });
   });
 
-  it("shows the empty state when all selected amounts are zero", async () => {
+  it("shows the empty state when all default contact amounts are zero", () => {
     const zeroContacts = [
       { name: "零额一", amountMinor: 0, appointmentCount: 2 },
       { name: "零额二", amountMinor: 0, appointmentCount: 1 },
     ];
     const wrapper = mountPanel({ contacts: zeroContacts });
-    const contactButton = wrapper
-      .findAll('[aria-label="收款分析维度"] button')
-      .find((button) => button.text() === "收款对象");
-    if (!contactButton) throw new Error("未找到收款对象按钮");
-
-    await contactButton.trigger("click");
 
     expect(wrapper.findComponent(RevenueBreakdownChartStub).exists()).toBe(false);
     expect(wrapper.get(".breakdown-panel__empty").text()).toBe("当前范围暂无已结收入");

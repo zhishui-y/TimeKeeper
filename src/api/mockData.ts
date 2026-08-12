@@ -1,16 +1,22 @@
-import { addDays, addHours, endOfWeek, format, startOfWeek, subDays } from "date-fns";
 import type { AccountProfile, Appointment } from "../types/domain";
+import {
+  addDateKeyDays,
+  chinaCivilDateTime,
+  chinaDateKey,
+  endOfChinaWeek,
+  startOfChinaWeek,
+} from "../utils/chinaDateTime";
 
 const now = new Date();
-const today = format(now, "yyyy-MM-dd");
-const weekStart = startOfWeek(now, { weekStartsOn: 1 });
+const today = chinaDateKey(now);
+const weekStart = startOfChinaWeek(today);
+const currentChinaHour = Number(chinaCivilDateTime(now).slice(11, 13));
 
-function at(date: Date | string, time: string): string {
-  const day = typeof date === "string" ? date : format(date, "yyyy-MM-dd");
-  return new Date(`${day}T${time}:00`).toISOString();
+function at(date: string, time: string): string {
+  return `${date}T${time}:00`;
 }
 
-const createdAt = subDays(now, 36).toISOString();
+const createdAt = new Date(now.getTime() - 36 * 86_400_000).toISOString();
 
 export const demoAccounts: AccountProfile[] = [
   {
@@ -42,12 +48,12 @@ export const demoAccounts: AccountProfile[] = [
     password: "LateCloud@77",
     currentScore: 2415,
     highestScore: 2630,
-    scoreUpdatedAt: format(subDays(now, 2), "yyyy-MM-dd"),
+    scoreUpdatedAt: addDateKeyDays(today, -2),
     weeklyWins: 3,
     notes: "不接凌晨时段",
     needsReview: false,
     createdAt,
-    updatedAt: subDays(now, 2).toISOString(),
+    updatedAt: new Date(now.getTime() - 2 * 86_400_000).toISOString(),
   },
   {
     id: "account-3",
@@ -60,12 +66,12 @@ export const demoAccounts: AccountProfile[] = [
     password: "BeiBei-Game",
     currentScore: 1980,
     highestScore: 2120,
-    scoreUpdatedAt: format(subDays(now, 8), "yyyy-MM-dd"),
+    scoreUpdatedAt: addDateKeyDays(today, -8),
     weeklyWins: null,
     notes: "由旧账本导入，角色信息待确认",
     needsReview: true,
     createdAt,
-    updatedAt: subDays(now, 8).toISOString(),
+    updatedAt: new Date(now.getTime() - 8 * 86_400_000).toISOString(),
   },
   {
     id: "account-4",
@@ -78,18 +84,18 @@ export const demoAccounts: AccountProfile[] = [
     password: "Qinghe_09!",
     currentScore: 3050,
     highestScore: 3186,
-    scoreUpdatedAt: format(subDays(now, 1), "yyyy-MM-dd"),
+    scoreUpdatedAt: addDateKeyDays(today, -1),
     weeklyWins: 1,
     notes: null,
     needsReview: false,
     createdAt,
-    updatedAt: subDays(now, 1).toISOString(),
+    updatedAt: new Date(now.getTime() - 86_400_000).toISOString(),
   },
 ];
 
 interface DemoAppointmentInput {
   id: string;
-  day: Date | string;
+  day: string;
   start?: string;
   end?: string;
   contact: string;
@@ -104,12 +110,12 @@ interface DemoAppointmentInput {
 }
 
 function appointment(input: DemoAppointmentInput): Appointment {
-  const serviceDate = typeof input.day === "string" ? input.day : format(input.day, "yyyy-MM-dd");
+  const serviceDate = input.day;
   const account = demoAccounts.find((item) => item.id === input.accountId);
   const mode = input.mode ?? "business";
   const endDate =
     input.start && input.end && input.end <= input.start
-      ? addDays(new Date(`${serviceDate}T00:00:00`), 1)
+      ? addDateKeyDays(serviceDate, 1)
       : serviceDate;
   return {
     id: input.id,
@@ -161,7 +167,7 @@ export const demoAppointments: Appointment[] = [
   }),
   appointment({
     id: "appt-2",
-    day: addDays(weekStart, 1),
+    day: addDateKeyDays(weekStart, 1),
     start: "19:30",
     end: "22:00",
     contact: "南枝",
@@ -174,7 +180,7 @@ export const demoAppointments: Appointment[] = [
   }),
   appointment({
     id: "appt-3",
-    day: addDays(weekStart, 2),
+    day: addDateKeyDays(weekStart, 2),
     start: "21:00",
     end: "23:30",
     contact: "阿迟",
@@ -194,7 +200,7 @@ export const demoAppointments: Appointment[] = [
     content: "日常清体力",
     accountId: "account-3",
     serviceStatus:
-      now.getHours() >= 15 ? "completed" : now.getHours() >= 13 ? "in_progress" : "scheduled",
+      currentChinaHour >= 15 ? "completed" : currentChinaHour >= 13 ? "in_progress" : "scheduled",
     settlementStatus: "unsettled",
     amount: 18000,
   }),
@@ -221,7 +227,7 @@ export const demoAppointments: Appointment[] = [
   }),
   appointment({
     id: "appt-7",
-    day: addDays(now, 1),
+    day: addDateKeyDays(today, 1),
     start: "15:00",
     end: "17:00",
     contact: "阿迟",
@@ -231,7 +237,7 @@ export const demoAppointments: Appointment[] = [
   }),
   appointment({
     id: "appt-8",
-    day: addDays(now, 2),
+    day: addDateKeyDays(today, 2),
     start: "20:00",
     end: "23:00",
     contact: "南枝",
@@ -241,7 +247,7 @@ export const demoAppointments: Appointment[] = [
   }),
   appointment({
     id: "appt-9",
-    day: addDays(now, 3),
+    day: addDateKeyDays(today, 3),
     contact: "小北",
     content: "时间待确认",
     accountId: "account-3",
@@ -249,7 +255,7 @@ export const demoAppointments: Appointment[] = [
   }),
   appointment({
     id: "appt-10",
-    day: addDays(now, 4),
+    day: addDateKeyDays(today, 4),
     start: "23:00",
     end: "01:00",
     contact: "青禾",
@@ -260,7 +266,7 @@ export const demoAppointments: Appointment[] = [
   }),
   appointment({
     id: "appt-11",
-    day: subDays(weekStart, 3),
+    day: addDateKeyDays(weekStart, -3),
     start: "18:00",
     end: "20:00",
     contact: "南枝",
@@ -273,7 +279,7 @@ export const demoAppointments: Appointment[] = [
   }),
   appointment({
     id: "appt-12",
-    day: format(endOfWeek(now, { weekStartsOn: 1 }), "yyyy-MM-dd"),
+    day: endOfChinaWeek(today),
     start: "20:30",
     end: "23:30",
     contact: "阿迟",
@@ -284,13 +290,13 @@ export const demoAppointments: Appointment[] = [
 ];
 
 // Ensure the next appointment is visible even when the demo is opened late at night.
-if (!demoAppointments.some((item) => item.startsAt && new Date(item.startsAt) > now)) {
+if (!demoAppointments.some((item) => item.serviceDate > today)) {
   demoAppointments.push(
     appointment({
       id: "appt-next",
-      day: format(addDays(now, 1), "yyyy-MM-dd"),
-      start: format(addHours(now, 2), "HH:mm"),
-      end: format(addHours(now, 4), "HH:mm"),
+      day: addDateKeyDays(today, 1),
+      start: "15:00",
+      end: "17:00",
       contact: "南枝",
       content: "预约提醒演示",
       accountId: "account-1",

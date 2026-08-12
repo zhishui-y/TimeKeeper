@@ -1,0 +1,11 @@
+# `rsa` is locked only as an optional SQLx MySQL dependency. TimeKeeper enables
+# SQLite exclusively, and the Windows release dependency tree does not contain
+# `rsa`. CI verifies that invariant before applying this no-fixed-version
+# advisory exception; if `rsa` ever becomes reachable, the build fails first.
+[advisories]
+ignore = ["RUSTSEC-2023-0071"]
+severity_threshold = "medium"
+
+[target]
+arch = ["x86_64"]
+os = ["windows"]

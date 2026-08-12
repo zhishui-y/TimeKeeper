@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Clock3, Search } from "@lucide/vue";
-import { computed, shallowRef } from "vue";
+import { computed, nextTick, shallowRef, watch } from "vue";
 import { useContactPresets } from "../../composables/useContactPresets";
 import type { ContactPreset } from "../../types/domain";
 
@@ -10,7 +10,11 @@ const emit = defineEmits<{
 }>();
 
 const focused = shallowRef(false);
+const activeIndex = shallowRef(-1);
 const suggestionsOpen = computed(() => focused.value);
+const activeOptionId = computed(() =>
+  activeIndex.value >= 0 ? `contact-preset-${activeIndex.value}` : undefined,
+);
 const { items, loading, error } = useContactPresets(contactName, suggestionsOpen);
 
 function focus(): void {
@@ -18,7 +22,10 @@ function focus(): void {
 }
 
 function blur(): void {
-  focused.value = false;
+  globalThis.setTimeout(() => {
+    focused.value = false;
+    activeIndex.value = -1;
+  }, 0);
 }
 
 function select(preset: ContactPreset): void {
@@ -26,6 +33,41 @@ function select(preset: ContactPreset): void {
   focused.value = false;
   emit("select", preset);
 }
+
+function moveActive(direction: 1 | -1): void {
+  if (!focused.value) focused.value = true;
+  if (items.value.length === 0) return;
+  activeIndex.value =
+    activeIndex.value < 0
+      ? direction === 1
+        ? 0
+        : items.value.length - 1
+      : (activeIndex.value + direction + items.value.length) % items.value.length;
+  void nextTick(() =>
+    globalThis.document
+      .getElementById(activeOptionId.value ?? "")
+      ?.scrollIntoView?.({ block: "nearest" }),
+  );
+}
+
+function selectActive(): void {
+  if (loading.value || error.value) return;
+  const preset = items.value[activeIndex.value];
+  if (preset) select(preset);
+}
+
+function closeSuggestions(): void {
+  focused.value = false;
+  activeIndex.value = -1;
+}
+
+watch(contactName, () => {
+  activeIndex.value = -1;
+});
+
+watch(items, () => {
+  activeIndex.value = -1;
+});
 </script>
 
 <template>
@@ -41,10 +83,15 @@ function select(preset: ContactPreset): void {
         aria-label="联系人"
         aria-autocomplete="list"
         :aria-expanded="suggestionsOpen"
+        :aria-activedescendant="activeOptionId"
         aria-controls="contact-preset-list"
         autocomplete="off"
         @focus="focus"
         @blur="blur"
+        @keydown.down.prevent="moveActive(1)"
+        @keydown.up.prevent="moveActive(-1)"
+        @keydown.enter.prevent="selectActive"
+        @keydown.esc.prevent="closeSuggestions"
       />
     </span>
     <div v-if="suggestionsOpen" id="contact-preset-list" class="contact-presets" role="listbox">
@@ -54,11 +101,15 @@ function select(preset: ContactPreset): void {
       </p>
       <template v-else>
         <button
-          v-for="preset in items"
+          v-for="(preset, index) in items"
+          :id="`contact-preset-${index}`"
           :key="preset.sourceAppointmentId"
           class="contact-preset"
           type="button"
           role="option"
+          :aria-selected="activeIndex === index"
+          :class="{ 'is-active': activeIndex === index }"
+          @mousemove="activeIndex = index"
           @mousedown.prevent="select(preset)"
         >
           <span>
@@ -137,7 +188,8 @@ function select(preset: ContactPreset): void {
   border-bottom: 0;
 }
 
-.contact-preset:hover {
+.contact-preset:hover,
+.contact-preset.is-active {
   background: var(--brand-soft);
 }
 

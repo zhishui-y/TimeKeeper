@@ -125,6 +125,19 @@ describe("RevenueDashboard", () => {
     vi.useRealTimers();
   });
 
+  it("exposes an expandable data table with keyboard-operable period drill-down", async () => {
+    mockRevenueSummaryRequests();
+    const wrapper = mountDashboard();
+    await flushPromises();
+
+    expect(wrapper.get(".chart-data-table summary").text()).toBe("查看数据表");
+    const periodButton = wrapper.get(".chart-data-table tbody button");
+    expect(periodButton.attributes("aria-label")).toContain("查看");
+    await periodButton.trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".period-detail-stub").exists()).toBe(true);
+  });
+
   it("starts on the current Monday-to-Sunday week with daily trend grouping", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 1, 12, 0, 0));

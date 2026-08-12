@@ -149,7 +149,7 @@ function reset(): void {
       <option value="scheduled">已预约</option>
       <option value="in_progress">进行中</option>
       <option v-if="draft.mode !== 'entertainment'" value="pending_settlement">待结算</option>
-      <option value="completed">已完成</option>
+      <option value="completed">完成</option>
       <option value="cancelled">已取消</option>
     </select>
     <button

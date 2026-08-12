@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { DatabaseZap, LockKeyhole } from "@lucide/vue";
 import { shallowRef } from "vue";
+import { api, errorMessage } from "../../api/client";
+import { useLockApplication } from "../../composables/useLockApplication";
+import { router } from "../../router";
 import { useAppAccessStore } from "../../stores/appAccess";
 import { useUiStore } from "../../stores/ui";
 import AppAccessPasswordChangeForm from "./AppAccessPasswordChangeForm.vue";
@@ -8,26 +11,48 @@ import AppAccessRecoverySettingsForm from "./AppAccessRecoverySettingsForm.vue";
 
 const access = useAppAccessStore();
 const ui = useUiStore();
+const { lockApplication } = useLockApplication();
 const legacyPassword = shallowRef("");
+const passwordError = shallowRef<string | null>(null);
+const recoveryError = shallowRef<string | null>(null);
+const migrationError = shallowRef<string | null>(null);
 
 async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  passwordError.value = null;
   const result = await access.changePassword(currentPassword, newPassword);
-  if (result) ui.notify("入口密码已修改", "success");
+  if (result) {
+    ui.notify("入口密码已修改", "success");
+  } else {
+    passwordError.value = access.error;
+  }
 }
 
 async function migrateLegacyCredentials(): Promise<void> {
   if (!legacyPassword.value || access.loading) return;
+  migrationError.value = null;
   const result = await access.migrateLegacyCredentials(legacyPassword.value);
   legacyPassword.value = "";
-  if (!result) return;
+  if (!result) {
+    migrationError.value = access.error;
+    return;
+  }
   ui.notify(
     `已迁移 ${result.migratedCount} 条旧密码，缺失 ${result.missingCount} 条，仍待处理 ${result.pendingCount} 条`,
     result.pendingCount > 0 ? "warning" : "success",
   );
 }
 
-async function lockApplication(): Promise<void> {
-  await access.lock();
+async function openRepairIssue(entityKind: "account_profile" | "appointment", entityId: string) {
+  try {
+    if (entityKind === "appointment") {
+      ui.openEditAppointment(await api.getAppointment(entityId));
+      return;
+    }
+    ui.requestAccountProfile(entityId);
+    await router.push({ name: "accounts" });
+  } catch (cause) {
+    ui.notify(errorMessage(cause), "danger");
+  }
 }
 
 async function setRecovery(
@@ -35,8 +60,13 @@ async function setRecovery(
   question: string,
   answer: string,
 ): Promise<void> {
+  recoveryError.value = null;
   const result = await access.setRecovery(currentPassword, { question, answer });
-  if (result) ui.notify("恢复问题已保存", "success");
+  if (result) {
+    ui.notify("恢复问题已保存", "success");
+  } else {
+    recoveryError.value = access.error;
+  }
 }
 </script>
 
@@ -75,18 +105,41 @@ async function setRecovery(
       >
         继续迁移
       </button>
+      <span v-if="migrationError" class="field-error" role="alert">{{ migrationError }}</span>
     </div>
+
+    <section
+      v-if="access.dataRepairIssueCount > 0"
+      id="data-repair-issues"
+      class="access-settings__repairs"
+    >
+      <div>
+        <strong>旧数据修复（{{ access.dataRepairIssueCount }} 项）</strong>
+        <span>原始数值已保留在修复记录中；修正对应档案后会自动标记为已解决。</span>
+      </div>
+      <button
+        v-for="issue in access.dataRepairIssues"
+        :key="issue.id"
+        class="access-settings__repair"
+        type="button"
+        @click="openRepairIssue(issue.entityKind, issue.entityId)"
+      >
+        <strong>{{ issue.displayName }}</strong>
+        <span>{{ issue.fieldName }}：{{ issue.originalValue }}</span>
+        <small>{{ issue.entityKind === "appointment" ? "打开预约" : "打开账号档案" }}</small>
+      </button>
+    </section>
 
     <AppAccessPasswordChangeForm
       :loading="access.loading"
-      :error="access.error"
+      :error="passwordError"
       @submit="changePassword"
     />
 
     <AppAccessRecoverySettingsForm
       :current-question="access.recoveryQuestion"
       :loading="access.loading"
-      :error="access.error"
+      :error="recoveryError"
       @submit="setRecovery"
     />
   </div>
@@ -136,5 +189,44 @@ async function setRecovery(
 
 .access-settings__migration .input {
   width: 170px;
+}
+
+.access-settings__repairs {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--amber-border);
+  border-radius: var(--radius, 12px);
+  background: var(--amber-soft);
+}
+
+.access-settings__repairs > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.access-settings__repair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 8px);
+  color: var(--ink);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.access-settings__repair span {
+  grid-column: 1;
+}
+
+.access-settings__repair small {
+  grid-row: 1 / 3;
+  grid-column: 2;
+  align-self: center;
+  color: var(--brand-strong);
 }
 </style>

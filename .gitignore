@@ -15,8 +15,10 @@ playwright-report
 .playwright-cli/
 output/
 *.timekeeper-backup
+*.tkbackup
 dist-ssr
 *.local
+*.tsbuildinfo
 
 # Local application data and user workbooks
 *.db
@@ -26,7 +28,12 @@ dist-ssr
 *.sqlite3
 *.hold
 *.salt
+*.xls
+*.xlsx
 *.xlsm
+
+# Deliberately sanitized import fixture used by Rust regression tests.
+!src-tauri/tests/fixtures/legacy_import.xlsx
 
 # Editor directories and files
 .vscode/*

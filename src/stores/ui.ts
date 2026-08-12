@@ -21,6 +21,7 @@ export const useUiStore = defineStore("ui", () => {
   const dataRevision = shallowRef(0);
   const accountRevision = shallowRef(0);
   const appointmentDefaultReminderMinutes = shallowRef(30);
+  const requestedAccountProfileId = shallowRef<string | null>(null);
   const toast = shallowRef<ToastMessage | null>(null);
   const queuedToasts: Array<Omit<ToastMessage, "id">> = [];
   let toastTimer: number | undefined;
@@ -81,6 +82,16 @@ export const useUiStore = defineStore("ui", () => {
     appointmentDefaultReminderMinutes.value = minutes;
   }
 
+  function requestAccountProfile(id: string): void {
+    requestedAccountProfileId.value = id;
+  }
+
+  function consumeRequestedAccountProfileId(): string | null {
+    const id = requestedAccountProfileId.value;
+    requestedAccountProfileId.value = null;
+    return id;
+  }
+
   function showToast(message: string, tone: ToastTone): void {
     window.clearTimeout(toastTimer);
     toastSequence += 1;
@@ -121,6 +132,7 @@ export const useUiStore = defineStore("ui", () => {
     dataRevision,
     accountRevision,
     appointmentDefaultReminderMinutes,
+    requestedAccountProfileId,
     toast,
     openCreateAppointment,
     openEditAppointment,
@@ -130,6 +142,8 @@ export const useUiStore = defineStore("ui", () => {
     markDataChanged,
     markAccountsChanged,
     setAppointmentDefaultReminderMinutes,
+    requestAccountProfile,
+    consumeRequestedAccountProfileId,
     notify,
     notifyAfterCurrent,
     dismissToast,

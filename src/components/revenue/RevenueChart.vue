@@ -1,15 +1,32 @@
 <script setup lang="ts">
 import { BarChart, LineChart } from "echarts/charts";
-import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
+import {
+  GridComponent,
+  LegendComponent,
+  MarkPointComponent,
+  TooltipComponent,
+} from "echarts/components";
 import { use } from "echarts/core";
 import type { ECElementEvent } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
-import { computed, onBeforeUnmount, onMounted, shallowRef, useTemplateRef } from "vue";
+import { computed, shallowRef, useTemplateRef, watch } from "vue";
 import VChart from "vue-echarts";
 import { useAppAppearance } from "../../composables/useAppAppearance";
+import {
+  useEChartsLifecycle,
+  type ResizableEChartsInstance,
+} from "../../composables/useEChartsLifecycle";
 import type { ReportGranularity, RevenuePoint } from "../../types/domain";
 
-use([BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
+use([
+  BarChart,
+  LineChart,
+  GridComponent,
+  LegendComponent,
+  MarkPointComponent,
+  TooltipComponent,
+  CanvasRenderer,
+]);
 
 const props = defineProps<{
   points: readonly RevenuePoint[];
@@ -26,22 +43,24 @@ const emit = defineEmits<{
 const appearance = useAppAppearance();
 
 const chartRef = useTemplateRef("chart");
-const chartInstance = useTemplateRef<{ resize?: () => void }>("chartInstance");
-
-const reducedMotionQuery =
-  typeof globalThis.matchMedia === "function"
-    ? globalThis.matchMedia("(prefers-reduced-motion: reduce)")
-    : null;
-const prefersReducedMotion = shallowRef(reducedMotionQuery?.matches ?? false);
-
-function updateReducedMotion(): void {
-  prefersReducedMotion.value = reducedMotionQuery?.matches ?? false;
-}
+const chartInstance = useTemplateRef<ResizableEChartsInstance>("chartInstance");
+const { prefersReducedMotion } = useEChartsLifecycle(chartInstance);
+const activePointIndex = shallowRef(0);
+const activePoint = computed(() => props.points[activePointIndex.value] ?? null);
+const activePointLabel = computed(() => {
+  const point = activePoint.value;
+  return point
+    ? `${point.period}，已结收益 ${(point.settledMinor / 100).toFixed(2)} 元，业务工时 ${point.businessHours.toFixed(1)} 小时`
+    : "暂无收益数据";
+});
 
 function handleChartClick(event: ECElementEvent): void {
   if (!props.drillable || event.componentType !== "series") return;
   const point = props.points[event.dataIndex];
-  if (point) emit("periodSelect", point);
+  if (point) {
+    activePointIndex.value = event.dataIndex;
+    emit("periodSelect", point);
+  }
 }
 
 function focusChart(): void {
@@ -51,20 +70,29 @@ function focusChart(): void {
 
 function selectKeyboardPoint(): void {
   if (!props.drillable) return;
-  const point = props.points.find((item) => item.appointmentCount > 0) ?? props.points[0];
+  const point = activePoint.value;
   if (point) emit("periodSelect", point);
 }
 
-function refreshChartSize(): void {
-  globalThis.requestAnimationFrame(() => chartInstance.value?.resize?.());
+function moveKeyboardPoint(key: "ArrowLeft" | "ArrowRight" | "Home" | "End"): void {
+  if (!props.drillable || props.points.length === 0) return;
+  if (key === "Home") activePointIndex.value = 0;
+  else if (key === "End") activePointIndex.value = props.points.length - 1;
+  else {
+    const offset = key === "ArrowLeft" ? -1 : 1;
+    activePointIndex.value = Math.min(
+      props.points.length - 1,
+      Math.max(0, activePointIndex.value + offset),
+    );
+  }
 }
 
-onMounted(() => reducedMotionQuery?.addEventListener("change", updateReducedMotion));
-onMounted(() => globalThis.addEventListener("timekeeper-appearance-changed", refreshChartSize));
-onBeforeUnmount(() => {
-  reducedMotionQuery?.removeEventListener("change", updateReducedMotion);
-  globalThis.removeEventListener("timekeeper-appearance-changed", refreshChartSize);
-});
+watch(
+  () => props.points.length,
+  (length) => {
+    activePointIndex.value = Math.min(activePointIndex.value, Math.max(0, length - 1));
+  },
+);
 
 const spansMultipleYears = computed(() => props.from.slice(0, 4) !== props.to.slice(0, 4));
 
@@ -158,6 +186,15 @@ const option = computed(() => ({
       cursor: props.drillable ? "pointer" : "default",
       barMaxWidth: 28,
       data: props.points.map((point) => point.settledMinor),
+      markPoint: activePoint.value
+        ? {
+            silent: true,
+            symbol: "circle",
+            symbolSize: 14,
+            label: { show: false },
+            data: [{ coord: [activePoint.value.period, activePoint.value.settledMinor] }],
+          }
+        : undefined,
       itemStyle: { borderRadius: [3, 3, 0, 0] },
       tooltip: { valueFormatter: (value: number) => `¥${(value / 100).toFixed(0)}` },
     },
@@ -184,6 +221,10 @@ const option = computed(() => ({
     @pointerdown="focusChart"
     @keydown.enter.prevent="selectKeyboardPoint"
     @keydown.space.prevent="selectKeyboardPoint"
+    @keydown.left.prevent="moveKeyboardPoint('ArrowLeft')"
+    @keydown.right.prevent="moveKeyboardPoint('ArrowRight')"
+    @keydown.home.prevent="moveKeyboardPoint('Home')"
+    @keydown.end.prevent="moveKeyboardPoint('End')"
   >
     <VChart
       ref="chartInstance"
@@ -193,6 +234,7 @@ const option = computed(() => ({
       :autoresize="{ throttle: 120 }"
       @click="handleChartClick"
     />
+    <span class="sr-only" aria-live="polite">{{ activePointLabel }}</span>
   </div>
 </template>
 

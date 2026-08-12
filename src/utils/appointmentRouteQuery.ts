@@ -3,6 +3,7 @@ import type {
   AppointmentMode,
   AppointmentProgressStatus,
 } from "../types/domain";
+import { parseDateKey } from "./chinaDateTime";
 
 export type AppointmentRouteQuery = Readonly<Record<string, unknown>>;
 
@@ -39,9 +40,7 @@ function isAppointmentProgressStatus(
 }
 
 function isDateKey(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  return parseDateKey(value) !== null;
 }
 
 function queryIsCanonical(

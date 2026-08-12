@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    str::FromStr,
-    sync::{LazyLock, Mutex},
-};
+use std::str::FromStr;
 
 use chrono::{
     DateTime, Days, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc,
@@ -15,7 +11,7 @@ use uuid::Uuid;
 use crate::{
     app_access::AppAccessState,
     backup::BackupState,
-    db::{Database, ImportWriteResult},
+    db::{Database, ImportWriteResult, JS_SAFE_INTEGER_MAX, literal_like_pattern},
     importer::LegacyAppointment,
     models::{
         Appointment, AppointmentAccount, AppointmentAccountCredentialInput,
@@ -37,9 +33,10 @@ const DATE_TIME_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
 const DEFAULT_PAGE_SIZE: i64 = 100;
 const MAX_PAGE_SIZE: i64 = 200;
 const DELETE_CHUNK_SIZE: usize = 500;
-const SELECTION_TTL_MINUTES: i64 = 10;
 const STATUS_SYNC_INTERVAL_SECONDS: u64 = 30;
 const STATUS_SYNCED_EVENT: &str = "appointment-statuses-synced";
+const OPERATION_WARNING_EVENT: &str = "operation-warning";
+const MAX_REMINDER_MINUTES: i64 = 1_440;
 const APPOINTMENT_WITH_CREDENTIAL_SELECT: &str =
     "SELECT a.id, a.service_date, a.starts_at, a.ends_at, a.contact_name, a.content,
             a.mode, a.service_status, a.settlement_status,
@@ -51,24 +48,23 @@ const APPOINTMENT_WITH_CREDENTIAL_SELECT: &str =
      FROM appointments a
      LEFT JOIN appointment_credentials c ON c.appointment_id = a.id";
 
-#[derive(Debug, Clone)]
-struct StoredAppointmentSelection {
-    ids: Vec<String>,
-    expires_at: DateTime<Utc>,
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OperationWarning {
+    operation: &'static str,
+    message: String,
 }
 
-type ConsumedAppointmentSelection = (String, StoredAppointmentSelection);
-type ResolvedAppointmentSelection = (Vec<String>, Option<ConsumedAppointmentSelection>);
-
-static APPOINTMENT_SELECTIONS: LazyLock<Mutex<HashMap<String, StoredAppointmentSelection>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+mod selection;
 
 fn sync_notification<R: Runtime>(
     app: &AppHandle<R>,
     notifications: &NotificationState,
     appointment: &Appointment,
 ) {
-    let _ = cancel_appointment_notification(notifications, &appointment.id);
+    if cancel_appointment_notification(notifications, &appointment.id).is_err() {
+        emit_notification_warning(app, "无法取消旧的预约提醒");
+    }
     if matches!(
         appointment.service_status,
         ServiceStatus::Completed | ServiceStatus::Cancelled
@@ -81,7 +77,7 @@ fn sync_notification<R: Runtime>(
     ) else {
         return;
     };
-    schedule_reminder(
+    if schedule_reminder(
         app,
         notifications,
         &appointment.id,
@@ -89,7 +85,19 @@ fn sync_notification<R: Runtime>(
         reminder_minutes,
         &appointment.contact_name,
         appointment.content.as_deref(),
-    );
+    )
+    .is_err()
+    {
+        emit_notification_warning(app, "预约已保存，但提醒调度失败");
+    }
+}
+
+fn emit_notification_warning<R: Runtime>(app: &AppHandle<R>, message: impl Into<String>) {
+    let warning = OperationWarning {
+        operation: "appointmentNotification",
+        message: message.into(),
+    };
+    let _ = app.emit(OPERATION_WARNING_EVENT, warning);
 }
 
 fn schedule_reminder<R: Runtime>(
@@ -100,34 +108,39 @@ fn schedule_reminder<R: Runtime>(
     reminder_minutes: i64,
     contact_name: &str,
     content: Option<&str>,
-) {
-    let Ok(naive) = NaiveDateTime::parse_from_str(starts_at, DATE_TIME_FORMAT) else {
-        return;
-    };
-    let Some(offset) = FixedOffset::east_opt(8 * 60 * 60) else {
-        return;
-    };
-    let Some(local_start) = offset.from_local_datetime(&naive).single() else {
-        return;
-    };
-    if local_start.with_timezone(&Utc) <= Utc::now() {
-        return;
+) -> Result<(), String> {
+    if !(0..=MAX_REMINDER_MINUTES).contains(&reminder_minutes) {
+        return Err("提醒分钟数必须在 0 到 1440 之间".into());
     }
-    let notify_at = (local_start - Duration::minutes(reminder_minutes)).with_timezone(&Utc);
+    let naive = NaiveDateTime::parse_from_str(starts_at, DATE_TIME_FORMAT)
+        .map_err(|_| "预约提醒时间数据不合法".to_string())?;
+    let offset = FixedOffset::east_opt(8 * 60 * 60).ok_or("无法创建东八区时区")?;
+    let local_start = offset
+        .from_local_datetime(&naive)
+        .single()
+        .ok_or("预约提醒时间数据不合法")?;
+    if local_start.with_timezone(&Utc) <= Utc::now() {
+        return Ok(());
+    }
+    let notify_at = local_start
+        .checked_sub_signed(Duration::minutes(reminder_minutes))
+        .ok_or("预约提醒时间超出支持范围")?
+        .with_timezone(&Utc);
     let body = match content {
         Some(content) if !content.trim().is_empty() => {
             format!("{} · {}", contact_name, content.trim())
         }
         _ => contact_name.to_owned(),
     };
-    let _ = schedule_appointment_notification(
+    schedule_appointment_notification(
         notifications,
         app.clone(),
         appointment_id,
         notify_at,
         "预约即将开始",
         &body,
-    );
+    )
+    .map_err(|error| error.to_string())
 }
 
 pub(crate) async fn restore_pending_notifications<R: Runtime>(
@@ -155,18 +168,24 @@ pub(crate) async fn restore_pending_notifications<R: Runtime>(
     .await
     .map_err(db_error)?;
     for row in rows {
-        let starts_at: String = row.try_get("starts_at").map_err(db_error)?;
-        schedule_reminder(
+        let Ok(starts_at) = row.try_get::<String, _>("starts_at") else {
+            emit_notification_warning(&app, "跳过一条无法读取的预约提醒");
+            continue;
+        };
+        let result = schedule_reminder(
             &app,
             notifications,
-            &row.try_get::<String, _>("id").map_err(db_error)?,
+            &row.try_get::<String, _>("id").unwrap_or_default(),
             &starts_at,
-            row.try_get("reminder_minutes").map_err(db_error)?,
-            &row.try_get::<String, _>("contact_name").map_err(db_error)?,
+            row.try_get("reminder_minutes").unwrap_or(-1),
+            &row.try_get::<String, _>("contact_name").unwrap_or_default(),
             row.try_get::<Option<String>, _>("content")
-                .map_err(db_error)?
+                .unwrap_or_default()
                 .as_deref(),
         );
+        if result.is_err() {
+            emit_notification_warning(&app, "跳过一条无效的预约提醒");
+        }
     }
     Ok(())
 }
@@ -177,7 +196,7 @@ pub(crate) async fn restore_notifications_for_ids<R: Runtime>(
     notifications: &NotificationState,
     ids: &[String],
 ) -> Result<(), String> {
-    let ids = normalized_ids(ids);
+    let ids = selection::normalized_ids(ids);
     if ids.is_empty() {
         return Ok(());
     }
@@ -221,18 +240,24 @@ pub(crate) async fn restore_notifications_for_ids<R: Runtime>(
             .await
             .map_err(db_error)?;
         for row in rows {
-            let starts_at: String = row.try_get("starts_at").map_err(db_error)?;
-            schedule_reminder(
+            let Ok(starts_at) = row.try_get::<String, _>("starts_at") else {
+                emit_notification_warning(&app, "跳过一条无法读取的预约提醒");
+                continue;
+            };
+            let result = schedule_reminder(
                 &app,
                 notifications,
-                &row.try_get::<String, _>("id").map_err(db_error)?,
+                &row.try_get::<String, _>("id").unwrap_or_default(),
                 &starts_at,
-                row.try_get("reminder_minutes").map_err(db_error)?,
-                &row.try_get::<String, _>("contact_name").map_err(db_error)?,
+                row.try_get("reminder_minutes").unwrap_or(-1),
+                &row.try_get::<String, _>("contact_name").unwrap_or_default(),
                 row.try_get::<Option<String>, _>("content")
-                    .map_err(db_error)?
+                    .unwrap_or_default()
                     .as_deref(),
             );
+            if result.is_err() {
+                emit_notification_warning(&app, "跳过一条无效的预约提醒");
+            }
         }
     }
     Ok(())
@@ -446,11 +471,17 @@ fn normalize_input(input: AppointmentInput) -> Result<NormalizedAppointment, Str
         return Err("联系人不能为空".into());
     }
 
-    if input.amount_minor.is_some_and(|amount| amount < 0) {
-        return Err("金额不能为负数".into());
+    if input
+        .amount_minor
+        .is_some_and(|amount| !(0..=JS_SAFE_INTEGER_MAX).contains(&amount))
+    {
+        return Err("金额必须是非负安全整数".into());
     }
-    if input.reminder_minutes.is_some_and(|minutes| minutes < 0) {
-        return Err("提醒分钟数不能为负数".into());
+    if input
+        .reminder_minutes
+        .is_some_and(|minutes| !(0..=MAX_REMINDER_MINUTES).contains(&minutes))
+    {
+        return Err("提醒分钟数必须在 0 到 1440 之间".into());
     }
 
     let (starts_at, ends_at) = resolve_time_range(
@@ -478,13 +509,7 @@ fn normalize_input(input: AppointmentInput) -> Result<NormalizedAppointment, Str
                 return Err("已完成预约必须填写金额".into());
             }
             (
-                if input.settlement_status == SettlementStatus::Settled
-                    && input.service_status != ServiceStatus::Cancelled
-                {
-                    ServiceStatus::Completed
-                } else {
-                    input.service_status
-                },
+                input.service_status,
                 input.settlement_status,
                 optional_text(input.rate_note),
                 optional_text(input.payment_method),
@@ -556,9 +581,7 @@ pub(crate) fn appointment_from_row(row: &SqliteRow) -> Result<Appointment, Strin
                 gear_score: row.try_get("account_gear_score").map_err(db_error)?,
                 server: row.try_get("account_server").map_err(db_error)?,
                 account_name,
-                password: row
-                    .try_get::<Option<String>, _>("account_password")
-                    .unwrap_or(None),
+                password: row.try_get("account_password").map_err(db_error)?,
             })
         })
         .transpose()?;
@@ -676,7 +699,7 @@ async fn load_profile_account_details(
 }
 
 async fn find_conflicts(
-    database: &Database,
+    transaction: &mut Transaction<'_, Sqlite>,
     starts_at: Option<&str>,
     ends_at: Option<&str>,
     excluded_id: Option<&str>,
@@ -700,7 +723,7 @@ async fn find_conflicts(
     .bind(starts_at)
     .bind(excluded_id)
     .bind(excluded_id)
-    .fetch_all(database.pool())
+    .fetch_all(&mut **transaction)
     .await
     .map_err(db_error)?;
 
@@ -761,27 +784,27 @@ fn push_appointment_filter_clauses<'args>(
         .clone()
         .and_then(|value| optional_text(Some(value)))
     {
-        let pattern = format!("%{}%", query.to_lowercase());
+        let pattern = literal_like_pattern(&query.to_lowercase());
         builder
             .push(" AND (lower(a.contact_name) LIKE ")
             .push_bind(pattern.clone())
-            .push(" OR lower(coalesce(a.content, '')) LIKE ")
+            .push(" ESCAPE '\\' OR lower(coalesce(a.content, '')) LIKE ")
             .push_bind(pattern.clone())
-            .push(" OR lower(coalesce(a.notes, '')) LIKE ")
+            .push(" ESCAPE '\\' OR lower(coalesce(a.notes, '')) LIKE ")
             .push_bind(pattern.clone())
-            .push(" OR lower(coalesce(a.voice_channel, '')) LIKE ")
+            .push(" ESCAPE '\\' OR lower(coalesce(a.voice_channel, '')) LIKE ")
             .push_bind(pattern.clone())
-            .push(" OR lower(coalesce(a.account_name, '')) LIKE ")
+            .push(" ESCAPE '\\' OR lower(coalesce(a.account_name, '')) LIKE ")
             .push_bind(pattern.clone())
-            .push(" OR lower(coalesce(a.account_server, '')) LIKE ")
+            .push(" ESCAPE '\\' OR lower(coalesce(a.account_server, '')) LIKE ")
             .push_bind(pattern.clone())
-            .push(" OR lower(coalesce(a.account_character_name, '')) LIKE ")
+            .push(" ESCAPE '\\' OR lower(coalesce(a.account_character_name, '')) LIKE ")
             .push_bind(pattern.clone())
-            .push(" OR lower(coalesce(a.account_specialization, '')) LIKE ")
+            .push(" ESCAPE '\\' OR lower(coalesce(a.account_specialization, '')) LIKE ")
             .push_bind(pattern.clone())
-            .push(" OR lower(coalesce(a.account_gear_score, '')) LIKE ")
+            .push(" ESCAPE '\\' OR lower(coalesce(a.account_gear_score, '')) LIKE ")
             .push_bind(pattern)
-            .push(")");
+            .push(" ESCAPE '\\')");
     }
     if let Some(mode) = filters.mode {
         builder.push(" AND a.mode = ").push_bind(mode.as_str());
@@ -789,16 +812,10 @@ fn push_appointment_filter_clauses<'args>(
     if let Some(status) = filters.progress_status {
         match status {
             AppointmentProgressStatus::Scheduled => {
-                builder.push(
-                    " AND a.service_status = 'scheduled'
-                      AND (a.mode = 'entertainment' OR a.settlement_status = 'unsettled')",
-                );
+                builder.push(" AND a.service_status = 'scheduled'");
             }
             AppointmentProgressStatus::InProgress => {
-                builder.push(
-                    " AND a.service_status = 'in_progress'
-                      AND (a.mode = 'entertainment' OR a.settlement_status = 'unsettled')",
-                );
+                builder.push(" AND a.service_status = 'in_progress'");
             }
             AppointmentProgressStatus::PendingSettlement => {
                 builder.push(
@@ -809,7 +826,7 @@ fn push_appointment_filter_clauses<'args>(
             AppointmentProgressStatus::Completed => {
                 builder.push(
                     " AND ((a.mode = 'entertainment' AND a.service_status = 'completed')
-                      OR (a.mode = 'business' AND a.service_status != 'cancelled'
+                      OR (a.mode = 'business' AND a.service_status = 'completed'
                           AND a.settlement_status = 'settled'))",
                 );
             }
@@ -955,17 +972,8 @@ pub(crate) async fn create_appointment_selection_impl(
         .await
         .map_err(db_error)?;
 
-    let token = Uuid::now_v7().to_string();
-    let expires_at = Utc::now() + Duration::minutes(SELECTION_TTL_MINUTES);
     let total_count = ids.len() as i64;
-    let mut selections = APPOINTMENT_SELECTIONS
-        .lock()
-        .map_err(|_| "预约批量选择状态不可用".to_string())?;
-    selections.retain(|_, selection| selection.expires_at > Utc::now());
-    selections.insert(
-        token.clone(),
-        StoredAppointmentSelection { ids, expires_at },
-    );
+    let (token, expires_at) = selection::store(ids)?;
     Ok(AppointmentSelectionSnapshot {
         token,
         total_count,
@@ -994,7 +1002,9 @@ pub(crate) async fn list_contact_presets_impl(
         return Err("联系人模板数量必须在 1 到 50 之间".into());
     }
     let query = optional_text(query);
-    let pattern = query.as_ref().map(|query| format!("%{query}%"));
+    let pattern = query
+        .as_ref()
+        .map(|query| literal_like_pattern(&query.to_lowercase()));
     let rows = sqlx::query(
         "WITH ranked AS (
             SELECT appointments.*,
@@ -1008,7 +1018,7 @@ pub(crate) async fn list_contact_presets_impl(
                    ) AS contact_rank
             FROM appointments
             WHERE service_status != 'cancelled'
-              AND (? IS NULL OR contact_name LIKE ?)
+              AND (? IS NULL OR lower(contact_name) LIKE ? ESCAPE '\\')
          )
          SELECT ranked.*, c.password AS account_password
          FROM ranked
@@ -1419,12 +1429,19 @@ async fn insert_normalized_appointment(
 }
 
 async fn finish_mutation_result(
-    database: &Database,
+    transaction: &mut Transaction<'_, Sqlite>,
     id: &str,
 ) -> Result<AppointmentMutationResult, String> {
-    let appointment = get_appointment_impl(database, id).await?;
+    let query = format!("{APPOINTMENT_WITH_CREDENTIAL_SELECT} WHERE a.id = ?");
+    let row = sqlx::query(&query)
+        .bind(id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(db_error)?
+        .ok_or_else(|| format!("预约不存在: {id}"))?;
+    let appointment = appointment_from_selected_row(&row)?;
     let conflicts = find_conflicts(
-        database,
+        transaction,
         appointment.starts_at.as_deref(),
         appointment.ends_at.as_deref(),
         Some(id),
@@ -1473,8 +1490,9 @@ async fn create_prepared_appointment(
     )
     .await?;
     apply_secret_action(&mut transaction, &id, &prepared.secret_action).await?;
+    let result = finish_mutation_result(&mut transaction, &id).await?;
     transaction.commit().await.map_err(db_error)?;
-    finish_mutation_result(database, &id).await
+    Ok(result)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1546,9 +1564,23 @@ pub(crate) async fn update_appointment_impl(
     if result.rows_affected() == 0 {
         return Err(format!("预约不存在: {id}"));
     }
+    if input.amount_minor.is_some() {
+        sqlx::query(
+            "UPDATE legacy_numeric_repair_issues
+             SET resolved_at = COALESCE(resolved_at, ?)
+             WHERE entity_kind = 'appointment' AND entity_id = ?
+               AND field_name = 'amount_minor'",
+        )
+        .bind(&now)
+        .bind(id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(db_error)?;
+    }
     apply_secret_action(&mut transaction, id, &prepared.secret_action).await?;
+    let result = finish_mutation_result(&mut transaction, id).await?;
     transaction.commit().await.map_err(db_error)?;
-    finish_mutation_result(database, id).await
+    Ok(result)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1652,7 +1684,7 @@ pub async fn delete_appointment(
 ) -> Result<(), String> {
     access.require_unlocked()?;
     let _operation_guard = backup.lock_data_operation().await;
-    let ids = normalized_ids(std::slice::from_ref(&id));
+    let ids = selection::normalized_ids(std::slice::from_ref(&id));
     let result = delete_appointments_impl(database.inner(), &ids).await?;
     if result.deleted_count == 0 {
         return Err(format!("预约不存在: {id}"));
@@ -1671,7 +1703,7 @@ pub async fn delete_appointments(
 ) -> Result<AppointmentDeleteResult, String> {
     access.require_unlocked()?;
     let _operation_guard = backup.lock_data_operation().await;
-    let (ids, consumed_token) = resolve_delete_selection(selection)?;
+    let (ids, consumed_token) = selection::resolve(selection)?;
 
     match delete_appointments_impl(database.inner(), &ids).await {
         Ok(result) => {
@@ -1679,63 +1711,10 @@ pub async fn delete_appointments(
             Ok(result)
         }
         Err(error) => {
-            if let Some((token, stored)) = consumed_token
-                && stored.expires_at > Utc::now()
-                && let Ok(mut selections) = APPOINTMENT_SELECTIONS.lock()
-            {
-                selections.entry(token).or_insert(stored);
+            if let Some(consumed) = consumed_token {
+                selection::restore_if_valid(consumed);
             }
             Err(error)
-        }
-    }
-}
-
-fn normalized_ids(ids: &[String]) -> Vec<String> {
-    let mut ids = ids
-        .iter()
-        .filter_map(|id| {
-            let id = id.trim();
-            (!id.is_empty()).then(|| id.to_owned())
-        })
-        .collect::<Vec<_>>();
-    ids.sort_unstable();
-    ids.dedup();
-    ids
-}
-
-fn resolve_delete_selection(
-    selection: AppointmentDeleteSelection,
-) -> Result<ResolvedAppointmentSelection, String> {
-    match selection {
-        AppointmentDeleteSelection::Explicit { ids } => Ok((normalized_ids(&ids), None)),
-        AppointmentDeleteSelection::Token {
-            token,
-            excluded_ids,
-        } => {
-            let token = token.trim().to_owned();
-            if token.is_empty() {
-                return Err("预约批量选择 token 不能为空".into());
-            }
-            let now = Utc::now();
-            let mut selections = APPOINTMENT_SELECTIONS
-                .lock()
-                .map_err(|_| "预约批量选择状态不可用".to_string())?;
-            let Some(stored) = selections.remove(&token) else {
-                return Err("预约批量选择已过期、不存在或已使用".into());
-            };
-            if stored.expires_at <= now {
-                return Err("预约批量选择已过期，请重新全选".into());
-            }
-            let excluded = normalized_ids(&excluded_ids)
-                .into_iter()
-                .collect::<HashSet<_>>();
-            let ids = stored
-                .ids
-                .iter()
-                .filter(|id| !excluded.contains(*id))
-                .cloned()
-                .collect();
-            Ok((ids, Some((token, stored))))
         }
     }
 }
@@ -1744,7 +1723,7 @@ pub(crate) async fn delete_appointments_impl(
     database: &Database,
     ids: &[String],
 ) -> Result<AppointmentDeleteResult, String> {
-    let ids = normalized_ids(ids);
+    let ids = selection::normalized_ids(ids);
     let matched_count = ids.len() as i64;
     if ids.is_empty() {
         return Ok(AppointmentDeleteResult {
@@ -1870,12 +1849,6 @@ pub(crate) async fn sync_appointment_service_statuses_impl(
                WHEN ends_at IS NOT NULL AND ends_at <= ? THEN 'completed'
                ELSE 'in_progress'
              END,
-             settlement_status = CASE
-               WHEN ends_at IS NOT NULL AND ends_at <= ? AND mode = 'business' THEN 'unsettled'
-               WHEN ends_at IS NOT NULL AND ends_at <= ? AND mode = 'entertainment'
-                 THEN 'not_applicable'
-               ELSE settlement_status
-             END,
              updated_at = ?
          WHERE service_status IN ('scheduled', 'in_progress')
            AND starts_at IS NOT NULL
@@ -1886,8 +1859,6 @@ pub(crate) async fn sync_appointment_service_statuses_impl(
            )
          RETURNING *",
     )
-    .bind(&local_time)
-    .bind(&local_time)
     .bind(&local_time)
     .bind(Utc::now().to_rfc3339())
     .bind(&local_time)
@@ -1978,8 +1949,8 @@ pub(crate) async fn settle_appointment_impl(
     amount_minor: i64,
     payment_method: Option<String>,
 ) -> Result<Appointment, String> {
-    if amount_minor < 0 {
-        return Err("结算金额不能为负数".into());
+    if !(0..=JS_SAFE_INTEGER_MAX).contains(&amount_minor) {
+        return Err("结算金额必须是非负安全整数".into());
     }
     let appointment = get_appointment_impl(database, id).await?;
     if appointment.mode != AppointmentMode::Business {
@@ -1988,8 +1959,7 @@ pub(crate) async fn settle_appointment_impl(
 
     sqlx::query(
         "UPDATE appointments
-         SET service_status = 'completed', settlement_status = 'settled',
-             amount_minor = ?, payment_method = ?, updated_at = ?
+         SET settlement_status = 'settled', amount_minor = ?, payment_method = ?, updated_at = ?
          WHERE id = ?",
     )
     .bind(amount_minor)
@@ -2026,9 +1996,12 @@ pub(crate) async fn insert_imported_appointment(
         });
     }
 
-    if appointment.amount_minor.is_some_and(|amount| amount < 0) {
+    if appointment
+        .amount_minor
+        .is_some_and(|amount| !(0..=JS_SAFE_INTEGER_MAX).contains(&amount))
+    {
         return Err(format!(
-            "联系人 {} 的导入金额不能为负数",
+            "联系人 {} 的导入金额必须是非负安全整数",
             appointment.contact_name
         ));
     }
@@ -2111,1069 +2084,5 @@ pub(crate) async fn insert_imported_appointment(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(not(debug_assertions))]
-    use std::{
-        future::Future,
-        hint::black_box,
-        path::{Path, PathBuf},
-        time::{Duration as StdDuration, Instant},
-    };
-
-    #[cfg(not(debug_assertions))]
-    use crate::{
-        models::ReportGranularity,
-        reports::{get_dashboard_summary_impl, get_revenue_summary_impl},
-    };
-
-    fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap()
-            .block_on(future)
-    }
-
-    fn business_input(date: &str, start: &str, end: &str) -> AppointmentInput {
-        AppointmentInput {
-            service_date: date.into(),
-            start_time: Some(start.into()),
-            end_time: Some(end.into()),
-            contact_name: "小林".into(),
-            content: Some("竞技场".into()),
-            mode: AppointmentMode::Business,
-            service_status: ServiceStatus::Scheduled,
-            settlement_status: SettlementStatus::Unsettled,
-            account: None,
-            voice_platform: None,
-            voice_channel: None,
-            rate_note: Some("80/小时".into()),
-            payment_method: None,
-            amount_minor: Some(8_000),
-            reminder_minutes: Some(30),
-            notes: None,
-        }
-    }
-
-    fn embedded_account_input(
-        account_name: &str,
-        credential: AppointmentAccountCredentialInput,
-    ) -> AppointmentAccountInput {
-        AppointmentAccountInput::Embedded {
-            details: AppointmentAccountDetails {
-                specialization: Some("治疗".into()),
-                gear_score: Some("8888".into()),
-                server: Some("测试区".into()),
-                account_name: account_name.into(),
-            },
-            credential,
-        }
-    }
-
-    async fn seed_performance_appointments(database: &Database) {
-        sqlx::query(
-            "WITH RECURSIVE seq(x) AS (
-                SELECT 1
-                UNION ALL
-                SELECT x + 1 FROM seq WHERE x < 10000
-             )
-             INSERT INTO appointments (
-                id, service_date, starts_at, contact_name, mode,
-                service_status, settlement_status, created_at, updated_at
-             )
-             SELECT printf('perf-%05d', x), '2026-08-03', '2026-08-03T10:00:00',
-                    printf('批量-%05d', x), 'business', 'scheduled', 'unsettled',
-                    '2026-08-03T00:00:00Z', '2026-08-03T00:00:00Z'
-             FROM seq",
-        )
-        .execute(database.pool())
-        .await
-        .unwrap();
-    }
-
-    #[cfg(not(debug_assertions))]
-    struct PerformanceDatabaseDir {
-        path: PathBuf,
-    }
-
-    #[cfg(not(debug_assertions))]
-    impl PerformanceDatabaseDir {
-        fn create(label: &str) -> Self {
-            let path = std::env::temp_dir().join(format!("timekeeper-{label}-{}", Uuid::now_v7()));
-            std::fs::create_dir_all(&path).unwrap();
-            Self { path }
-        }
-
-        fn database_path(&self) -> PathBuf {
-            self.path.join("performance.db")
-        }
-    }
-
-    #[cfg(not(debug_assertions))]
-    impl Drop for PerformanceDatabaseDir {
-        fn drop(&mut self) {
-            for attempt in 0..20 {
-                match std::fs::remove_dir_all(&self.path) {
-                    Ok(()) => return,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-                    Err(_) if attempt < 19 => {
-                        std::thread::sleep(StdDuration::from_millis(25));
-                    }
-                    Err(error) => {
-                        eprintln!(
-                            "failed to clean performance test directory {}: {error}",
-                            self.path.display()
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[cfg(not(debug_assertions))]
-    fn assert_test_path(path: &Path) {
-        assert!(path.starts_with(std::env::temp_dir()));
-        assert!(
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("timekeeper-"))
-        );
-    }
-
-    #[cfg(not(debug_assertions))]
-    fn percentile_95(mut samples: Vec<StdDuration>) -> StdDuration {
-        assert_eq!(samples.len(), 20);
-        samples.sort_unstable();
-        samples[18]
-    }
-
-    #[cfg(not(debug_assertions))]
-    async fn measure_release_p95<F, Fut, T>(
-        label: &str,
-        limit: StdDuration,
-        mut operation: F,
-    ) -> StdDuration
-    where
-        F: FnMut() -> Fut,
-        Fut: Future<Output = T>,
-    {
-        black_box(operation().await);
-        let mut samples = Vec::with_capacity(20);
-        for _ in 0..20 {
-            let started = Instant::now();
-            black_box(operation().await);
-            samples.push(started.elapsed());
-        }
-        let p95 = percentile_95(samples);
-        println!("PERF {label}: p95={:.2}ms", p95.as_secs_f64() * 1_000.0);
-        assert!(
-            p95 <= limit,
-            "{label} p95 {:.2}ms exceeded {:.2}ms",
-            p95.as_secs_f64() * 1_000.0,
-            limit.as_secs_f64() * 1_000.0
-        );
-        p95
-    }
-
-    #[cfg(not(debug_assertions))]
-    fn remove_selection_token(token: &str) {
-        APPOINTMENT_SELECTIONS.lock().unwrap().remove(token);
-    }
-
-    #[test]
-    fn resolves_cross_midnight_range_and_validates_voice() {
-        let (start, end) = resolve_time_range("2026-07-13", Some("23:30"), Some("01:00")).unwrap();
-        assert_eq!(start.as_deref(), Some("2026-07-13T23:30:00"));
-        assert_eq!(end.as_deref(), Some("2026-07-14T01:00:00"));
-
-        let mut yy = business_input("2026-08-03", "10:00", "11:00");
-        yy.voice_platform = Some(VoicePlatform::Yy);
-        yy.voice_channel = Some(" 123456 ".into());
-        assert_eq!(
-            normalize_input(yy).unwrap().voice_channel.as_deref(),
-            Some("123456")
-        );
-
-        let mut invalid = business_input("2026-08-03", "10:00", "11:00");
-        invalid.voice_platform = Some(VoicePlatform::Yy);
-        invalid.voice_channel = Some("12A34".into());
-        assert!(
-            normalize_input(invalid)
-                .unwrap_err()
-                .contains("只能包含数字")
-        );
-    }
-
-    #[test]
-    fn appointment_credentials_are_transactional_sqlite_snapshots() {
-        run_async(async {
-            let database = Database::in_memory().await.unwrap();
-            sqlx::query(
-                "INSERT INTO account_profiles (
-                    id, server, character_name, specialization, gear_score, account_name,
-                    needs_review, sort_order, created_at, updated_at
-                 ) VALUES (
-                    'profile-1', '档案区', '档案角色', '输出', '9999', 'profile-account',
-                    0, 0, '2026-08-03T00:00:00Z', '2026-08-03T00:00:00Z'
-                 )",
-            )
-            .execute(database.pool())
-            .await
-            .unwrap();
-            sqlx::query(
-                "INSERT INTO account_profile_credentials (profile_id, password)
-                 VALUES ('profile-1', 'profile-password')",
-            )
-            .execute(database.pool())
-            .await
-            .unwrap();
-
-            let mut from_profile = business_input("2026-08-03", "08:00", "09:00");
-            from_profile.account = Some(AppointmentAccountInput::Profile {
-                profile_id: "profile-1".into(),
-            });
-            let profile_appointment = create_appointment_impl(&database, from_profile)
-                .await
-                .unwrap()
-                .appointment;
-            assert_eq!(
-                profile_appointment
-                    .account
-                    .as_ref()
-                    .and_then(|account| account.password.as_deref()),
-                Some("profile-password")
-            );
-            let profile_snapshot = profile_appointment.account.as_ref().unwrap();
-            assert_eq!(profile_snapshot.source, AppointmentAccountSource::Profile);
-            assert_eq!(profile_snapshot.character_name.as_deref(), Some("档案角色"));
-
-            sqlx::query(
-                "UPDATE account_profile_credentials SET password = 'changed-profile'
-                 WHERE profile_id = 'profile-1'",
-            )
-            .execute(database.pool())
-            .await
-            .unwrap();
-            assert_eq!(
-                get_appointment_impl(&database, &profile_appointment.id)
-                    .await
-                    .unwrap()
-                    .account
-                    .and_then(|account| account.password),
-                Some("profile-password".into())
-            );
-
-            let mut snapshot_update = business_input("2026-08-04", "08:00", "09:00");
-            snapshot_update.account = Some(AppointmentAccountInput::Snapshot {
-                source: AppointmentAccountSource::Profile,
-                character_name: Some("档案角色".into()),
-                details: AppointmentAccountDetails {
-                    specialization: Some("输出".into()),
-                    gear_score: Some("10000".into()),
-                    server: Some("档案区".into()),
-                    account_name: "profile-account".into(),
-                },
-                credential: AppointmentAccountCredentialInput::Keep,
-            });
-            let updated_profile_snapshot =
-                update_appointment_impl(&database, &profile_appointment.id, snapshot_update)
-                    .await
-                    .unwrap()
-                    .appointment;
-            let updated_profile_account = updated_profile_snapshot.account.as_ref().unwrap();
-            assert_eq!(
-                updated_profile_account.source,
-                AppointmentAccountSource::Profile
-            );
-            assert_eq!(
-                updated_profile_account.character_name.as_deref(),
-                Some("档案角色")
-            );
-            assert_eq!(
-                updated_profile_account.password.as_deref(),
-                Some("profile-password")
-            );
-
-            let mut passwordless_input = business_input("2026-08-03", "07:00", "08:00");
-            passwordless_input.account = Some(AppointmentAccountInput::Snapshot {
-                source: AppointmentAccountSource::Embedded,
-                character_name: None,
-                details: AppointmentAccountDetails {
-                    specialization: None,
-                    gear_score: None,
-                    server: None,
-                    account_name: "passwordless-account".into(),
-                },
-                credential: AppointmentAccountCredentialInput::None,
-            });
-            let passwordless = create_appointment_impl(&database, passwordless_input)
-                .await
-                .unwrap()
-                .appointment;
-            assert_eq!(
-                passwordless.account.and_then(|account| account.password),
-                None
-            );
-
-            let mut source_input = business_input("2026-08-03", "09:00", "10:00");
-            source_input.account = Some(embedded_account_input(
-                "source-account",
-                AppointmentAccountCredentialInput::Replace {
-                    password: "source-password".into(),
-                },
-            ));
-            let source = create_appointment_impl(&database, source_input)
-                .await
-                .unwrap()
-                .appointment;
-
-            let mut copied_input = business_input("2026-08-03", "10:00", "11:00");
-            copied_input.account = Some(embedded_account_input(
-                "copied-account",
-                AppointmentAccountCredentialInput::CopyFromAppointment {
-                    source_appointment_id: source.id.clone(),
-                },
-            ));
-            let copied = create_appointment_impl(&database, copied_input)
-                .await
-                .unwrap()
-                .appointment;
-            assert_eq!(
-                copied
-                    .account
-                    .as_ref()
-                    .and_then(|account| account.password.as_deref()),
-                Some("source-password")
-            );
-            assert_eq!(
-                source.account.as_ref().map(|account| account.source),
-                Some(AppointmentAccountSource::Embedded)
-            );
-
-            let mut keep_input = business_input("2026-08-04", "10:00", "11:00");
-            keep_input.account = Some(embedded_account_input(
-                "renamed-account",
-                AppointmentAccountCredentialInput::Keep,
-            ));
-            let kept = update_appointment_impl(&database, &copied.id, keep_input)
-                .await
-                .unwrap()
-                .appointment;
-            assert_eq!(
-                kept.account
-                    .as_ref()
-                    .and_then(|account| account.password.as_deref()),
-                Some("source-password")
-            );
-            let duplicate =
-                duplicate_appointment_impl(&database, &source.id, Some("2026-08-05".into()))
-                    .await
-                    .unwrap()
-                    .appointment;
-            assert_eq!(
-                duplicate
-                    .account
-                    .as_ref()
-                    .and_then(|account| account.password.as_deref()),
-                Some("source-password")
-            );
-            assert_eq!(
-                duplicate.account.as_ref().map(|account| account.source),
-                Some(AppointmentAccountSource::Embedded)
-            );
-
-            delete_appointment_impl(&database, &source.id)
-                .await
-                .unwrap();
-            assert_eq!(
-                sqlx::query_scalar::<_, i64>(
-                    "SELECT COUNT(*) FROM appointment_credentials WHERE appointment_id = ?",
-                )
-                .bind(&source.id)
-                .fetch_one(database.pool())
-                .await
-                .unwrap(),
-                0
-            );
-        });
-    }
-
-    #[test]
-    fn range_list_requires_both_bounds() {
-        run_async(async {
-            let database = Database::in_memory().await.unwrap();
-            create_appointment_impl(&database, business_input("2026-08-03", "10:00", "11:00"))
-                .await
-                .unwrap();
-
-            assert!(
-                list_appointments_impl(&database, AppointmentFilters::default())
-                    .await
-                    .unwrap_err()
-                    .contains("同时提供")
-            );
-            assert!(
-                list_appointments_impl(
-                    &database,
-                    AppointmentFilters {
-                        from: Some("2026-08-01".into()),
-                        ..AppointmentFilters::default()
-                    },
-                )
-                .await
-                .unwrap_err()
-                .contains("同时提供")
-            );
-            assert_eq!(
-                list_appointments_impl(
-                    &database,
-                    AppointmentFilters {
-                        from: Some("2026-08-01".into()),
-                        to: Some("2026-08-07".into()),
-                        ..AppointmentFilters::default()
-                    },
-                )
-                .await
-                .unwrap()
-                .len(),
-                1
-            );
-        });
-    }
-
-    #[test]
-    fn searches_partial_yy_channels_and_notes() {
-        run_async(async {
-            let database = Database::in_memory().await.unwrap();
-
-            let mut yy_input = business_input("2026-08-03", "10:00", "11:00");
-            yy_input.voice_platform = Some(VoicePlatform::Yy);
-            yy_input.voice_channel = Some("794676".into());
-            let yy = create_appointment_impl(&database, yy_input)
-                .await
-                .unwrap()
-                .appointment;
-
-            let mut notes_input = business_input("2026-08-03", "11:00", "12:00");
-            notes_input.notes = Some("赛季末冲分，优先晚间".into());
-            let notes = create_appointment_impl(&database, notes_input)
-                .await
-                .unwrap()
-                .appointment;
-
-            let unrelated =
-                create_appointment_impl(&database, business_input("2026-08-03", "12:00", "13:00"))
-                    .await
-                    .unwrap()
-                    .appointment;
-
-            let yy_page = list_appointment_page_impl(
-                &database,
-                AppointmentFilters {
-                    query: Some("4676".into()),
-                    ..AppointmentFilters::default()
-                },
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-            assert_eq!(yy_page.total_count, 1);
-            assert_eq!(yy_page.items[0].id, yy.id);
-
-            let notes_page = list_appointment_page_impl(
-                &database,
-                AppointmentFilters {
-                    query: Some("末冲".into()),
-                    ..AppointmentFilters::default()
-                },
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-            assert_eq!(notes_page.total_count, 1);
-            assert_eq!(notes_page.items[0].id, notes.id);
-            assert_ne!(notes_page.items[0].id, unrelated.id);
-        });
-    }
-
-    #[test]
-    fn zero_amount_is_valid_for_completed_and_settled_appointments() {
-        run_async(async {
-            let database = Database::in_memory().await.unwrap();
-            let mut direct_input = business_input("2026-08-03", "10:00", "11:00");
-            direct_input.settlement_status = SettlementStatus::Settled;
-            direct_input.amount_minor = Some(0);
-            let direct = create_appointment_impl(&database, direct_input)
-                .await
-                .unwrap()
-                .appointment;
-            assert_eq!(direct.service_status, ServiceStatus::Completed);
-            assert_eq!(direct.settlement_status, SettlementStatus::Settled);
-            assert_eq!(direct.amount_minor, Some(0));
-
-            let mut negative_input = business_input("2026-08-03", "11:00", "12:00");
-            negative_input.amount_minor = Some(-1);
-            assert_eq!(
-                normalize_input(negative_input).unwrap_err(),
-                "金额不能为负数"
-            );
-
-            let pending =
-                create_appointment_impl(&database, business_input("2026-08-03", "12:00", "13:00"))
-                    .await
-                    .unwrap()
-                    .appointment;
-            assert_eq!(
-                settle_appointment_impl(&database, &pending.id, -1, None)
-                    .await
-                    .unwrap_err(),
-                "结算金额不能为负数"
-            );
-            let settled = settle_appointment_impl(&database, &pending.id, 0, Some("其他".into()))
-                .await
-                .unwrap();
-            assert_eq!(settled.service_status, ServiceStatus::Completed);
-            assert_eq!(settled.settlement_status, SettlementStatus::Settled);
-            assert_eq!(settled.amount_minor, Some(0));
-        });
-    }
-
-    #[test]
-    fn timed_appointments_advance_to_mode_specific_completion_states() {
-        run_async(async {
-            let database = Database::in_memory().await.unwrap();
-            let business =
-                create_appointment_impl(&database, business_input("2026-08-08", "10:00", "11:00"))
-                    .await
-                    .unwrap()
-                    .appointment;
-            let mut entertainment_input = business_input("2026-08-08", "10:00", "11:00");
-            entertainment_input.mode = AppointmentMode::Entertainment;
-            entertainment_input.settlement_status = SettlementStatus::NotApplicable;
-            entertainment_input.rate_note = None;
-            entertainment_input.amount_minor = None;
-            let entertainment = create_appointment_impl(&database, entertainment_input)
-                .await
-                .unwrap()
-                .appointment;
-
-            assert!(
-                sync_appointment_service_statuses_impl(
-                    &database,
-                    NaiveDate::from_ymd_opt(2026, 8, 8)
-                        .unwrap()
-                        .and_hms_opt(9, 59, 59)
-                        .unwrap(),
-                )
-                .await
-                .unwrap()
-                .is_empty()
-            );
-
-            let started = sync_appointment_service_statuses_impl(
-                &database,
-                NaiveDate::from_ymd_opt(2026, 8, 8)
-                    .unwrap()
-                    .and_hms_opt(10, 0, 0)
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-            assert_eq!(started.len(), 2);
-            assert!(
-                started
-                    .iter()
-                    .all(|appointment| appointment.service_status == ServiceStatus::InProgress)
-            );
-
-            let completed = sync_appointment_service_statuses_impl(
-                &database,
-                NaiveDate::from_ymd_opt(2026, 8, 8)
-                    .unwrap()
-                    .and_hms_opt(11, 0, 0)
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-            assert_eq!(completed.len(), 2);
-
-            let business = get_appointment_impl(&database, &business.id).await.unwrap();
-            assert_eq!(business.service_status, ServiceStatus::Completed);
-            assert_eq!(business.settlement_status, SettlementStatus::Unsettled);
-
-            let entertainment = get_appointment_impl(&database, &entertainment.id)
-                .await
-                .unwrap();
-            assert_eq!(entertainment.service_status, ServiceStatus::Completed);
-            assert_eq!(
-                entertainment.settlement_status,
-                SettlementStatus::NotApplicable
-            );
-        });
-    }
-
-    #[test]
-    fn paginates_ten_thousand_rows_with_stable_order() {
-        run_async(async {
-            let database = Database::in_memory().await.unwrap();
-            seed_performance_appointments(&database).await;
-
-            let first =
-                list_appointment_page_impl(&database, AppointmentFilters::default(), None, None)
-                    .await
-                    .unwrap();
-            assert_eq!(first.total_count, 10_000);
-            assert_eq!(first.total_pages, 100);
-            assert_eq!(first.items.len(), 100);
-            assert_eq!(first.items[0].id, "perf-10000");
-            assert_eq!(first.items[99].id, "perf-09901");
-
-            let second = list_appointment_page_impl(
-                &database,
-                AppointmentFilters::default(),
-                Some(2),
-                Some(100),
-            )
-            .await
-            .unwrap();
-            assert_eq!(second.items[0].id, "perf-09900");
-            let clamped = list_appointment_page_impl(
-                &database,
-                AppointmentFilters::default(),
-                Some(101),
-                Some(100),
-            )
-            .await
-            .unwrap();
-            assert_eq!(clamped.page, 100);
-            assert_eq!(clamped.items.len(), 100);
-            assert_eq!(clamped.items[0].id, "perf-00100");
-            assert!(
-                list_appointment_page_impl(
-                    &database,
-                    AppointmentFilters::default(),
-                    Some(1),
-                    Some(MAX_PAGE_SIZE + 1),
-                )
-                .await
-                .unwrap_err()
-                .contains("每页数量")
-            );
-        });
-    }
-
-    #[test]
-    fn range_and_notification_queries_use_v5_indexes() {
-        run_async(async {
-            let database = Database::in_memory().await.unwrap();
-            let history_details = sqlx::query(
-                "EXPLAIN QUERY PLAN
-                 SELECT id FROM appointments
-                 WHERE service_date >= '2026-08-01' AND service_date <= '2026-08-31'
-                 ORDER BY service_date DESC, starts_at DESC, created_at DESC, id DESC
-                 LIMIT 100",
-            )
-            .fetch_all(database.pool())
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|row| row.get::<String, _>("detail"))
-            .collect::<Vec<_>>()
-            .join("；");
-            assert!(
-                history_details.contains("idx_appointments_history_sort"),
-                "unexpected history plan: {history_details}"
-            );
-
-            let notification_details = sqlx::query(
-                "EXPLAIN QUERY PLAN
-                 SELECT id FROM appointments
-                 WHERE service_status != 'cancelled'
-                   AND service_status != 'completed'
-                   AND service_date >= '2026-08-03'
-                   AND reminder_minutes IS NOT NULL
-                   AND starts_at IS NOT NULL
-                   AND starts_at > '2026-08-03T00:00:00'
-                 ORDER BY starts_at, id",
-            )
-            .fetch_all(database.pool())
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|row| row.get::<String, _>("detail"))
-            .collect::<Vec<_>>()
-            .join("；");
-            assert!(
-                notification_details.contains("idx_appointments_pending_notifications"),
-                "unexpected notification plan: {notification_details}"
-            );
-        });
-    }
-
-    #[test]
-    fn selection_token_deletes_exact_snapshot_with_exclusions() {
-        run_async(async {
-            let database = Database::in_memory().await.unwrap();
-            seed_performance_appointments(&database).await;
-            sqlx::query(
-                "INSERT INTO appointment_credentials (appointment_id, password)
-                 VALUES ('perf-10000', 'password')",
-            )
-            .execute(database.pool())
-            .await
-            .unwrap();
-            sqlx::query(
-                "INSERT INTO legacy_credential_migration (
-                    target_kind, target_id, source_kind, source_id
-                 ) VALUES ('appointment', 'perf-10000', 'appointment', 'perf-10000')",
-            )
-            .execute(database.pool())
-            .await
-            .unwrap();
-
-            let snapshot = create_appointment_selection_impl(
-                &database,
-                AppointmentFilters {
-                    query: Some("批量".into()),
-                    ..AppointmentFilters::default()
-                },
-            )
-            .await
-            .unwrap();
-            assert_eq!(snapshot.total_count, 10_000);
-
-            let (ids, consumed) = resolve_delete_selection(AppointmentDeleteSelection::Token {
-                token: snapshot.token.clone(),
-                excluded_ids: vec!["perf-00001".into()],
-            })
-            .unwrap();
-            assert!(consumed.is_some());
-            assert_eq!(ids.len(), 9_999);
-            let result = delete_appointments_impl(&database, &ids).await.unwrap();
-            assert_eq!(result.matched_count, 9_999);
-            assert_eq!(result.deleted_count, 9_999);
-            assert_eq!(
-                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM appointments")
-                    .fetch_one(database.pool())
-                    .await
-                    .unwrap(),
-                1
-            );
-            assert_eq!(
-                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM appointment_credentials")
-                    .fetch_one(database.pool())
-                    .await
-                    .unwrap(),
-                0
-            );
-            assert_eq!(
-                sqlx::query_scalar::<_, i64>(
-                    "SELECT COUNT(*) FROM legacy_credential_migration
-                     WHERE target_kind = 'appointment'",
-                )
-                .fetch_one(database.pool())
-                .await
-                .unwrap(),
-                0
-            );
-            assert!(
-                resolve_delete_selection(AppointmentDeleteSelection::Token {
-                    token: snapshot.token,
-                    excluded_ids: Vec::new(),
-                })
-                .unwrap_err()
-                .contains("已使用")
-            );
-        });
-    }
-
-    #[test]
-    fn expired_selection_is_rejected_without_deleting() {
-        let token = format!("expired-{}", Uuid::now_v7());
-        APPOINTMENT_SELECTIONS.lock().unwrap().insert(
-            token.clone(),
-            StoredAppointmentSelection {
-                ids: vec!["appointment-1".into()],
-                expires_at: Utc::now() - Duration::seconds(1),
-            },
-        );
-        assert!(
-            resolve_delete_selection(AppointmentDeleteSelection::Token {
-                token,
-                excluded_ids: Vec::new(),
-            })
-            .unwrap_err()
-            .contains("已过期")
-        );
-    }
-
-    #[test]
-    fn batch_delete_rolls_back_on_database_failure() {
-        run_async(async {
-            let database = Database::in_memory().await.unwrap();
-            for id in ["atomic-1", "atomic-2", "atomic-3"] {
-                sqlx::query(
-                    "INSERT INTO appointments (
-                        id, service_date, contact_name, mode, service_status,
-                        settlement_status, created_at, updated_at
-                     ) VALUES (?, '2026-08-03', ?, 'business', 'scheduled',
-                               'unsettled', '2026-08-03T00:00:00Z',
-                               '2026-08-03T00:00:00Z')",
-                )
-                .bind(id)
-                .bind(id)
-                .execute(database.pool())
-                .await
-                .unwrap();
-                sqlx::query(
-                    "INSERT INTO appointment_credentials (appointment_id, password)
-                     VALUES (?, 'password')",
-                )
-                .bind(id)
-                .execute(database.pool())
-                .await
-                .unwrap();
-                sqlx::query(
-                    "INSERT INTO legacy_credential_migration (
-                        target_kind, target_id, source_kind, source_id
-                     ) VALUES ('appointment', ?, 'appointment', ?)",
-                )
-                .bind(id)
-                .bind(id)
-                .execute(database.pool())
-                .await
-                .unwrap();
-            }
-            sqlx::raw_sql(
-                "CREATE TRIGGER reject_atomic_delete
-                 BEFORE DELETE ON appointments
-                 WHEN OLD.id = 'atomic-2'
-                 BEGIN
-                     SELECT RAISE(ABORT, 'forced delete failure');
-                 END;",
-            )
-            .execute(database.pool())
-            .await
-            .unwrap();
-
-            let ids = vec![
-                "atomic-1".to_string(),
-                "atomic-2".to_string(),
-                "atomic-3".to_string(),
-            ];
-            assert!(delete_appointments_impl(&database, &ids).await.is_err());
-            assert_eq!(
-                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM appointments")
-                    .fetch_one(database.pool())
-                    .await
-                    .unwrap(),
-                3
-            );
-            assert_eq!(
-                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM appointment_credentials")
-                    .fetch_one(database.pool())
-                    .await
-                    .unwrap(),
-                3
-            );
-            assert_eq!(
-                sqlx::query_scalar::<_, i64>(
-                    "SELECT COUNT(*) FROM legacy_credential_migration
-                     WHERE target_kind = 'appointment'",
-                )
-                .fetch_one(database.pool())
-                .await
-                .unwrap(),
-                3
-            );
-        });
-    }
-
-    #[cfg(not(debug_assertions))]
-    #[test]
-    #[ignore = "run explicitly as an isolated Windows Release performance acceptance test"]
-    fn release_ten_thousand_appointment_performance_targets() {
-        run_async(async {
-            let query_directory = PerformanceDatabaseDir::create("query-performance");
-            assert_test_path(&query_directory.path);
-            let database = Database::initialize(query_directory.database_path())
-                .await
-                .unwrap();
-            seed_performance_appointments(&database).await;
-            sqlx::query(
-                "UPDATE appointments
-                 SET ends_at = '2026-08-03T11:00:00',
-                     service_status = 'completed',
-                     settlement_status = 'settled',
-                     amount_minor = 8000,
-                     payment_method = '微信'",
-            )
-            .execute(database.pool())
-            .await
-            .unwrap();
-
-            measure_release_p95("history-page", StdDuration::from_millis(300), || async {
-                list_appointment_page_impl(
-                    &database,
-                    AppointmentFilters::default(),
-                    Some(1),
-                    Some(100),
-                )
-                .await
-                .unwrap()
-            })
-            .await;
-            measure_release_p95("like-search", StdDuration::from_millis(300), || async {
-                list_appointment_page_impl(
-                    &database,
-                    AppointmentFilters {
-                        query: Some("批量-09".into()),
-                        ..AppointmentFilters::default()
-                    },
-                    Some(1),
-                    Some(100),
-                )
-                .await
-                .unwrap()
-            })
-            .await;
-
-            let warm_selection =
-                create_appointment_selection_impl(&database, AppointmentFilters::default())
-                    .await
-                    .unwrap();
-            remove_selection_token(&warm_selection.token);
-            let mut selection_samples = Vec::with_capacity(20);
-            for _ in 0..20 {
-                let started = Instant::now();
-                let snapshot =
-                    create_appointment_selection_impl(&database, AppointmentFilters::default())
-                        .await
-                        .unwrap();
-                selection_samples.push(started.elapsed());
-                assert_eq!(snapshot.total_count, 10_000);
-                remove_selection_token(&snapshot.token);
-            }
-            let selection_p95 = percentile_95(selection_samples);
-            println!(
-                "PERF selection-token: p95={:.2}ms",
-                selection_p95.as_secs_f64() * 1_000.0
-            );
-            assert!(selection_p95 <= StdDuration::from_millis(300));
-
-            measure_release_p95("today-range", StdDuration::from_millis(250), || async {
-                list_appointments_impl(
-                    &database,
-                    AppointmentFilters {
-                        from: Some("2026-08-03".into()),
-                        to: Some("2026-08-03".into()),
-                        ..AppointmentFilters::default()
-                    },
-                )
-                .await
-                .unwrap()
-            })
-            .await;
-            measure_release_p95("calendar-range", StdDuration::from_millis(250), || async {
-                list_appointments_impl(
-                    &database,
-                    AppointmentFilters {
-                        from: Some("2026-08-01".into()),
-                        to: Some("2026-08-31".into()),
-                        ..AppointmentFilters::default()
-                    },
-                )
-                .await
-                .unwrap()
-            })
-            .await;
-            measure_release_p95("dashboard", StdDuration::from_millis(250), || async {
-                get_dashboard_summary_impl(&database, "2026-08-03")
-                    .await
-                    .unwrap()
-            })
-            .await;
-            measure_release_p95("all-revenue", StdDuration::from_millis(300), || async {
-                get_revenue_summary_impl(&database, "", "", ReportGranularity::Day)
-                    .await
-                    .unwrap()
-            })
-            .await;
-
-            database.pool().close().await;
-            drop(database);
-            let query_directory_path = query_directory.path.clone();
-            drop(query_directory);
-            assert!(!query_directory_path.exists());
-
-            let delete_directory = PerformanceDatabaseDir::create("delete-performance");
-            assert_test_path(&delete_directory.path);
-            let delete_database = Database::initialize(delete_directory.database_path())
-                .await
-                .unwrap();
-            seed_performance_appointments(&delete_database).await;
-            sqlx::query(
-                "INSERT INTO appointment_credentials (appointment_id, password)
-                 SELECT id, 'performance-password' FROM appointments",
-            )
-            .execute(delete_database.pool())
-            .await
-            .unwrap();
-            sqlx::query(
-                "INSERT INTO legacy_credential_migration (
-                    target_kind, target_id, source_kind, source_id
-                 )
-                 SELECT 'appointment', id, 'appointment', id FROM appointments",
-            )
-            .execute(delete_database.pool())
-            .await
-            .unwrap();
-            let snapshot =
-                create_appointment_selection_impl(&delete_database, AppointmentFilters::default())
-                    .await
-                    .unwrap();
-            let (ids, consumed) = resolve_delete_selection(AppointmentDeleteSelection::Token {
-                token: snapshot.token,
-                excluded_ids: Vec::new(),
-            })
-            .unwrap();
-            assert!(consumed.is_some());
-            assert_eq!(ids.len(), 10_000);
-
-            let delete_started = Instant::now();
-            let result = delete_appointments_impl(&delete_database, &ids)
-                .await
-                .unwrap();
-            let delete_elapsed = delete_started.elapsed();
-            println!(
-                "PERF delete-10000: elapsed={:.2}ms",
-                delete_elapsed.as_secs_f64() * 1_000.0
-            );
-            assert!(delete_elapsed <= StdDuration::from_secs(2));
-            assert_eq!(result.matched_count, 10_000);
-            assert_eq!(result.deleted_count, 10_000);
-            for table in [
-                "appointments",
-                "appointment_credentials",
-                "legacy_credential_migration",
-            ] {
-                let sql = format!("SELECT COUNT(*) FROM {table}");
-                let remaining = sqlx::query_scalar::<_, i64>(&sql)
-                    .fetch_one(delete_database.pool())
-                    .await
-                    .unwrap();
-                assert_eq!(remaining, 0, "{table} should be empty after delete");
-            }
-
-            delete_database.pool().close().await;
-            drop(delete_database);
-            let delete_directory_path = delete_directory.path.clone();
-            drop(delete_directory);
-            assert!(!delete_directory_path.exists());
-        });
-    }
-}
+#[path = "appointments/tests.rs"]
+mod tests;

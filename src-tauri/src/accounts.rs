@@ -10,9 +10,9 @@ use crate::{
     },
     app_access::AppAccessState,
     backup::BackupState,
-    db::{Database, ImportWriteResult},
+    db::{Database, ImportWriteResult, JS_SAFE_INTEGER_MAX, literal_like_pattern},
     importer::LegacyAccountProfile,
-    models::{AccountProfile, AccountProfileInput},
+    models::{AccountProfile, AccountProfileCredentialInput, AccountProfileInput},
     settings::SettingsState,
     vault::{copy_sensitive_text_to_clipboard, copy_text_to_clipboard},
 };
@@ -30,10 +30,14 @@ fn validate_input(mut input: AccountProfileInput) -> Result<AccountProfileInput,
         return Err("账号不能为空".into());
     }
 
-    if input.current_score.is_some_and(|score| score < 0)
-        || input.highest_score.is_some_and(|score| score < 0)
+    if input
+        .current_score
+        .is_some_and(|score| !(0..=JS_SAFE_INTEGER_MAX).contains(&score))
+        || input
+            .highest_score
+            .is_some_and(|score| !(0..=JS_SAFE_INTEGER_MAX).contains(&score))
     {
-        return Err("分数不能为负数".into());
+        return Err("分数必须是非负安全整数".into());
     }
 
     input.contact_name = optional_text(input.contact_name);
@@ -42,7 +46,12 @@ fn validate_input(mut input: AccountProfileInput) -> Result<AccountProfileInput,
     input.specialization = optional_text(input.specialization);
     input.gear_score = optional_text(input.gear_score);
     input.notes = optional_text(input.notes);
-    input.password = input.password.filter(|password| !password.is_empty());
+    if matches!(
+        &input.credential,
+        AccountProfileCredentialInput::Replace { password } if password.is_empty()
+    ) {
+        return Err("账号密码不能为空".into());
+    }
     input.score_updated_at = optional_text(input.score_updated_at);
     if let Some(date) = input.score_updated_at.as_deref() {
         NaiveDate::parse_from_str(date, "%Y-%m-%d")
@@ -61,7 +70,7 @@ pub(crate) fn profile_from_row(row: &SqliteRow) -> Result<AccountProfile, String
         specialization: row.try_get("specialization").map_err(db_error)?,
         gear_score: row.try_get("gear_score").map_err(db_error)?,
         account_name: row.try_get("account_name").map_err(db_error)?,
-        password: row.try_get::<Option<String>, _>("password").unwrap_or(None),
+        password: row.try_get("password").map_err(db_error)?,
         current_score: row.try_get("current_score").map_err(db_error)?,
         highest_score: row.try_get("highest_score").map_err(db_error)?,
         score_updated_at: row.try_get("score_updated_at").map_err(db_error)?,
@@ -114,17 +123,17 @@ pub(crate) async fn list_account_profiles_impl(
     );
 
     if let Some(query) = optional_text(query) {
-        let pattern = format!("%{}%", query.to_lowercase());
+        let pattern = literal_like_pattern(&query.to_lowercase());
         builder
             .push(" AND (lower(profile.account_name) LIKE ")
             .push_bind(pattern.clone())
-            .push(" OR lower(coalesce(profile.contact_name, '')) LIKE ")
+            .push(" ESCAPE '\\' OR lower(coalesce(profile.contact_name, '')) LIKE ")
             .push_bind(pattern.clone())
-            .push(" OR lower(coalesce(profile.server, '')) LIKE ")
+            .push(" ESCAPE '\\' OR lower(coalesce(profile.server, '')) LIKE ")
             .push_bind(pattern.clone())
-            .push(" OR lower(coalesce(profile.character_name, '')) LIKE ")
+            .push(" ESCAPE '\\' OR lower(coalesce(profile.character_name, '')) LIKE ")
             .push_bind(pattern)
-            .push(")");
+            .push(" ESCAPE '\\')");
     }
     if let Some(needs_review) = needs_review {
         builder
@@ -181,9 +190,6 @@ pub async fn create_account_profile(
 ) -> Result<AccountProfile, String> {
     access.require_unlocked()?;
     let _operation_guard = backup.lock_data_operation().await;
-    if input.password.as_deref().is_none_or(str::is_empty) {
-        return Err("新建账号档案时密码不能为空".into());
-    }
     let mut transaction = database.pool().begin().await.map_err(db_error)?;
     let profile = match insert_account_profile(&mut transaction, input).await {
         Ok(profile) => profile,
@@ -220,8 +226,13 @@ async fn insert_account_profile(
     transaction: &mut Transaction<'_, Sqlite>,
     input: AccountProfileInput,
 ) -> Result<AccountProfile, String> {
-    let mut input = validate_input(input)?;
-    let password = input.password.take();
+    let input = validate_input(input)?;
+    let password = match input.credential {
+        AccountProfileCredentialInput::Replace { password } => password,
+        AccountProfileCredentialInput::Keep | AccountProfileCredentialInput::Remove => {
+            return Err("新建账号档案必须提供密码".into());
+        }
+    };
     let id = Uuid::now_v7().to_string();
     let now = Utc::now().to_rfc3339();
 
@@ -258,14 +269,12 @@ async fn insert_account_profile(
     .await
     .map_err(db_error)?;
 
-    if let Some(password) = password {
-        sqlx::query("INSERT INTO account_profile_credentials (profile_id, password) VALUES (?, ?)")
-            .bind(&id)
-            .bind(password)
-            .execute(&mut **transaction)
-            .await
-            .map_err(db_error)?;
-    }
+    sqlx::query("INSERT INTO account_profile_credentials (profile_id, password) VALUES (?, ?)")
+        .bind(&id)
+        .bind(password)
+        .execute(&mut **transaction)
+        .await
+        .map_err(db_error)?;
 
     let row = sqlx::query(
         "SELECT profile.*, credential.password AS password
@@ -325,8 +334,8 @@ async fn update_account_profile_in_transaction(
     id: &str,
     input: AccountProfileInput,
 ) -> Result<AccountProfile, String> {
-    let mut input = validate_input(input)?;
-    let password = input.password.take();
+    let input = validate_input(input)?;
+    let credential = input.credential;
     let now = Utc::now().to_rfc3339();
     let result = sqlx::query(
         "UPDATE account_profiles SET
@@ -350,7 +359,7 @@ async fn update_account_profile_in_transaction(
     } else {
         0_i64
     })
-    .bind(now)
+    .bind(&now)
     .bind(id)
     .execute(&mut **transaction)
     .await
@@ -359,25 +368,40 @@ async fn update_account_profile_in_transaction(
     if result.rows_affected() == 0 {
         return Err(format!("账号档案不存在: {id}"));
     }
-    if let Some(password) = password {
-        sqlx::query(
-            "INSERT INTO account_profile_credentials (profile_id, password)
-             VALUES (?, ?)
-             ON CONFLICT(profile_id) DO UPDATE SET password = excluded.password",
-        )
-        .bind(id)
-        .bind(password)
-        .execute(&mut **transaction)
-        .await
-        .map_err(db_error)?;
-        sqlx::query(
-            "DELETE FROM legacy_credential_migration
-             WHERE target_kind = 'account_profile' AND target_id = ?",
-        )
-        .bind(id)
-        .execute(&mut **transaction)
-        .await
-        .map_err(db_error)?;
+    sqlx::query(
+        "UPDATE legacy_numeric_repair_issues
+         SET resolved_at = COALESCE(resolved_at, ?)
+         WHERE entity_kind = 'account_profile' AND entity_id = ?
+           AND field_name IN ('current_score', 'highest_score')",
+    )
+    .bind(&now)
+    .bind(id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(db_error)?;
+    match credential {
+        AccountProfileCredentialInput::Keep => {}
+        AccountProfileCredentialInput::Replace { password } => {
+            sqlx::query(
+                "INSERT INTO account_profile_credentials (profile_id, password)
+                 VALUES (?, ?)
+                 ON CONFLICT(profile_id) DO UPDATE SET password = excluded.password",
+            )
+            .bind(id)
+            .bind(password)
+            .execute(&mut **transaction)
+            .await
+            .map_err(db_error)?;
+            clear_legacy_profile_credential(transaction, id).await?;
+        }
+        AccountProfileCredentialInput::Remove => {
+            sqlx::query("DELETE FROM account_profile_credentials WHERE profile_id = ?")
+                .bind(id)
+                .execute(&mut **transaction)
+                .await
+                .map_err(db_error)?;
+            clear_legacy_profile_credential(transaction, id).await?;
+        }
     }
     let row = sqlx::query(
         "SELECT profile.*, credential.password AS password
@@ -391,6 +415,21 @@ async fn update_account_profile_in_transaction(
     .await
     .map_err(db_error)?;
     profile_from_row(&row)
+}
+
+async fn clear_legacy_profile_credential(
+    transaction: &mut Transaction<'_, Sqlite>,
+    id: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "DELETE FROM legacy_credential_migration
+         WHERE target_kind = 'account_profile' AND target_id = ?",
+    )
+    .bind(id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(db_error)?;
+    Ok(())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -702,10 +741,17 @@ pub(crate) async fn insert_imported_account_profile(
         });
     }
 
-    if profile.current_score.is_some_and(|score| score < 0)
-        || profile.highest_score.is_some_and(|score| score < 0)
+    if profile
+        .current_score
+        .is_some_and(|score| !(0..=JS_SAFE_INTEGER_MAX).contains(&score))
+        || profile
+            .highest_score
+            .is_some_and(|score| !(0..=JS_SAFE_INTEGER_MAX).contains(&score))
     {
-        return Err(format!("账号 {} 的分数不能为负数", profile.account_name));
+        return Err(format!(
+            "账号 {} 的分数必须是非负安全整数",
+            profile.account_name
+        ));
     }
 
     let id = Uuid::now_v7().to_string();
@@ -769,7 +815,9 @@ mod tests {
             specialization: Some("冰心".into()),
             gear_score: Some("128000".into()),
             account_name: name.into(),
-            password: None,
+            credential: AccountProfileCredentialInput::Replace {
+                password: "test-password".into(),
+            },
             current_score: Some(2100),
             highest_score: Some(2300),
             score_updated_at: Some("2026-07-13".into()),
@@ -943,7 +991,9 @@ mod tests {
         run_async(async {
             let database = Database::in_memory().await.unwrap();
             let mut profile_input = input("secure-account");
-            profile_input.password = Some("secret".into());
+            profile_input.credential = AccountProfileCredentialInput::Replace {
+                password: "secret".into(),
+            };
             let profile = create_account_profile_impl(&database, profile_input)
                 .await
                 .unwrap();
@@ -962,11 +1012,128 @@ mod tests {
     }
 
     #[test]
+    fn account_profile_credentials_support_keep_replace_and_remove() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let created = create_account_profile_impl(&database, input("credential-actions"))
+                .await
+                .unwrap();
+            assert_eq!(created.password.as_deref(), Some("test-password"));
+
+            let mut keep = input("credential-actions-kept");
+            keep.credential = AccountProfileCredentialInput::Keep;
+            let kept = update_account_profile_impl(&database, &created.id, keep)
+                .await
+                .unwrap();
+            assert_eq!(kept.password.as_deref(), Some("test-password"));
+
+            let mut replace = input("credential-actions-replaced");
+            replace.credential = AccountProfileCredentialInput::Replace {
+                password: "replacement".into(),
+            };
+            let replaced = update_account_profile_impl(&database, &created.id, replace)
+                .await
+                .unwrap();
+            assert_eq!(replaced.password.as_deref(), Some("replacement"));
+
+            sqlx::query(
+                "INSERT INTO legacy_credential_migration (
+                    target_kind, target_id, source_kind, source_id
+                 ) VALUES ('account_profile', ?, 'account_profile', ?)",
+            )
+            .bind(&created.id)
+            .bind(&created.id)
+            .execute(database.pool())
+            .await
+            .unwrap();
+
+            let mut remove = input("credential-actions-removed");
+            remove.credential = AccountProfileCredentialInput::Remove;
+            let removed = update_account_profile_impl(&database, &created.id, remove)
+                .await
+                .unwrap();
+            assert_eq!(removed.password, None);
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM legacy_credential_migration
+                     WHERE target_kind = 'account_profile' AND target_id = ?",
+                )
+                .bind(&created.id)
+                .fetch_one(database.pool())
+                .await
+                .unwrap(),
+                0
+            );
+        });
+    }
+
+    #[test]
+    fn creating_a_profile_requires_a_non_empty_replacement_credential() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let mut keep = input("create-keep");
+            keep.credential = AccountProfileCredentialInput::Keep;
+            assert!(
+                create_account_profile_impl(&database, keep)
+                    .await
+                    .unwrap_err()
+                    .contains("必须提供密码")
+            );
+
+            let mut empty = input("create-empty");
+            empty.credential = AccountProfileCredentialInput::Replace {
+                password: String::new(),
+            };
+            assert_eq!(
+                create_account_profile_impl(&database, empty)
+                    .await
+                    .unwrap_err(),
+                "账号密码不能为空"
+            );
+        });
+    }
+
+    #[test]
+    fn account_search_treats_like_metacharacters_as_literals() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            create_account_profile_impl(&database, input("literal%_\\account"))
+                .await
+                .unwrap();
+            create_account_profile_impl(&database, input("ordinary-account"))
+                .await
+                .unwrap();
+
+            for query in ["%", "_", "\\"] {
+                let found = list_account_profiles_impl(&database, Some(query.into()), None)
+                    .await
+                    .unwrap();
+                assert_eq!(found.len(), 1, "query {query:?} must be literal");
+                assert_eq!(found[0].account_name, "literal%_\\account");
+            }
+        });
+    }
+
+    #[test]
+    fn rejects_scores_outside_the_javascript_safe_integer_range() {
+        for score in [-1, JS_SAFE_INTEGER_MAX + 1] {
+            let mut invalid = input("invalid-score");
+            invalid.current_score = Some(score);
+            assert_eq!(
+                validate_input(invalid).unwrap_err(),
+                "分数必须是非负安全整数"
+            );
+        }
+    }
+
+    #[test]
     fn deleting_a_profile_cascades_its_credential_and_clears_legacy_queue() {
         run_async(async {
             let database = Database::in_memory().await.unwrap();
             let mut profile_input = input("delete-secret-account");
-            profile_input.password = Some("secret".into());
+            profile_input.credential = AccountProfileCredentialInput::Replace {
+                password: "secret".into(),
+            };
             let profile = create_account_profile_impl(&database, profile_input)
                 .await
                 .unwrap();

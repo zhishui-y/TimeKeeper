@@ -112,7 +112,7 @@ describe("calendar appointment presentation", () => {
     expect(calendarEventTimeLabel(crossDay)).toBe("23:30–01:30 +1");
     expect(calendarEventTimeLabel(appointment({ startsAt: null, endsAt: null }))).toBe("待定");
     expect(calendarEventTooltip(crossDay)).toBe(
-      ["小北", "时间：23:30–01:30 +1", "内容：手法陪练", "状态：已完成", "金额：¥180"].join("\n"),
+      ["小北", "时间：23:30–01:30 +1", "内容：手法陪练", "状态：进行中", "金额：¥180"].join("\n"),
     );
   });
 });

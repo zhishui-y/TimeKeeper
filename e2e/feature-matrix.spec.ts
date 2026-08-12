@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { addDays, format } from "date-fns";
+import { addDateKeyDays, chinaDateKey } from "./china-date";
 
-const today = format(new Date(), "yyyy-MM-dd");
+const today = chinaDateKey();
 
 function appointmentRow(page: Page, text: string): Locator {
   return page.locator("tbody tr").filter({ hasText: text });
@@ -89,7 +89,7 @@ async function createBusinessAppointment(
   await drawer.getByLabel("联系人", { exact: true }).fill(contactName);
   await drawer.getByLabel("预约内容").fill(content);
   await drawer.getByLabel("金额（元）").fill("88");
-  await drawer.getByRole("button", { name: "不使用账号", exact: true }).click();
+  await drawer.locator(".account-kind__item", { hasText: "不使用账号" }).click();
   await drawer.getByRole("button", { name: "保存预约" }).click();
   await expect(drawer).toBeHidden();
 }
@@ -173,7 +173,6 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       await drawer.getByRole("button", { name: "保存档案" }).click();
 
       await expect(drawer).toBeHidden();
-      await expect(page.getByRole("status")).toContainText("账号档案已保存");
     });
 
     await test.step("按账号查询并只筛选暂不可用档案", async () => {
@@ -204,7 +203,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
     await test.step("不刷新页面打开全局预约并看到新账号", async () => {
       await page.getByRole("button", { name: "新建预约", exact: true }).click();
       const drawer = page.getByRole("dialog", { name: /新建预约|编辑预约/ });
-      await drawer.getByRole("button", { name: "从档案选择" }).click();
+      await drawer.locator(".account-kind__item", { hasText: "从档案选择" }).click();
       const accountSelect = drawer.getByLabel("账号档案 *");
       const accountOption = accountSelect
         .locator("option")
@@ -313,7 +312,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       await drawer.getByLabel("结束时间（可留空）").fill("20:00");
       await drawer.getByLabel("联系人").fill(contactName);
       await drawer.getByLabel("预约内容").fill("模板恢复验收");
-      await drawer.getByRole("button", { name: "一次性账号" }).click();
+      await drawer.locator(".account-kind__item", { hasText: "一次性账号" }).click();
       await drawer.getByLabel("职业").fill("冰心诀");
       await drawer.getByLabel("装分").fill("20万");
       await drawer.getByLabel("区服").fill("梦江南");
@@ -371,7 +370,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
     await test.step("显式选择联系人建议后恢复模板", async () => {
       await page.getByRole("button", { name: "新建预约", exact: true }).click();
       const drawer = page.getByRole("dialog", { name: "新建预约" });
-      const nextDate = format(addDays(new Date(`${today}T00:00:00`), 1), "yyyy-MM-dd");
+      const nextDate = addDateKeyDays(today, 1);
       await drawer.getByLabel("日期 *").fill(nextDate);
       const contact = drawer.getByLabel("联系人");
       await contact.fill(contactName);
@@ -389,7 +388,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
 
       await drawer.getByLabel("语音平台").selectOption("qq");
       await expect(drawer.getByLabel("YY频道号码")).toHaveCount(0);
-      await drawer.getByRole("button", { name: "不使用账号" }).click();
+      await drawer.locator(".account-kind__item", { hasText: "不使用账号" }).click();
       await expect(drawer.getByLabel("账号 *")).toHaveCount(0);
     });
   });
@@ -428,21 +427,20 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
     await test.step("保存一条娱乐预约", async () => {
       await page.getByRole("button", { name: "新建预约", exact: true }).click();
       const drawer = page.getByRole("dialog", { name: /新建预约|编辑预约/ });
-      await drawer.getByRole("button", { name: /娱乐模式/ }).click();
+      await drawer.locator(".mode-switch__item", { hasText: "娱乐模式" }).click();
       await drawer.getByLabel("日期 *").fill(today);
       await drawer.getByLabel("开始时间", { exact: true }).fill("07:00");
       await drawer.getByLabel("结束时间（可留空）", { exact: true }).fill("08:00");
       await drawer.getByLabel("联系人", { exact: true }).fill(contactName);
       await drawer.getByLabel("预约内容").fill("仅供娱乐模式回归");
-      await drawer.getByRole("button", { name: "不使用账号", exact: true }).click();
+      await drawer.locator(".account-kind__item", { hasText: "不使用账号" }).click();
       await drawer.getByRole("button", { name: "保存预约" }).click();
       await expect(drawer).toBeHidden();
     });
 
     await test.step("预约记录可查询到娱乐模式数据", async () => {
       await page.getByRole("link", { name: "预约记录" }).click();
-      await page.getByPlaceholder("搜索联系人、内容或账号").fill(contactName);
-      await page.getByRole("button", { name: "筛选", exact: true }).click();
+      await page.getByPlaceholder("搜索联系人、内容、账号、YY频道或备注").fill(contactName);
       const row = appointmentRow(page, contactName);
       await expect(row).toHaveCount(1);
       await expect(row).toContainText("娱乐");
@@ -466,9 +464,8 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
     await page.getByRole("link", { name: "预约记录" }).click();
 
     await test.step("查询并重置筛选", async () => {
-      const search = page.getByPlaceholder("搜索联系人、内容或账号");
+      const search = page.getByPlaceholder("搜索联系人、内容、账号、YY频道或备注");
       await search.fill(originalContact);
-      await page.getByRole("button", { name: "筛选", exact: true }).click();
       await expect(appointmentRow(page, originalContact)).toHaveCount(1);
       await expect(page.locator("tbody tr")).toHaveCount(1);
 

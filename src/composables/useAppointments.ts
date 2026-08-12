@@ -1,6 +1,7 @@
-import { onMounted, readonly, reactive, shallowRef } from "vue";
-import { api, errorMessage } from "../api/client";
+import { computed, onMounted, readonly, reactive } from "vue";
+import { api } from "../api/client";
 import type { Appointment, AppointmentFilters } from "../types/domain";
+import { useAsyncResource } from "./useAsyncResource";
 
 interface UseAppointmentsOptions {
   immediate?: boolean;
@@ -11,11 +12,11 @@ export function useAppointments(
   { immediate = true }: UseAppointmentsOptions = {},
 ) {
   const filters = reactive<AppointmentFilters>({ ...initialFilters });
-  const items = shallowRef<Appointment[]>([]);
-  const loading = shallowRef(false);
-  const error = shallowRef<string | null>(null);
+  const resource = useAsyncResource<Appointment[], AppointmentFilters>(
+    (left, right) => requestKey(left) === requestKey(right),
+  );
+  const items = computed<Appointment[]>(() => resource.data.value ?? []);
   const inFlight = new Map<string, Promise<Appointment[]>>();
-  let requestVersion = 0;
 
   function requestKey(value: AppointmentFilters): string {
     return JSON.stringify([
@@ -51,18 +52,8 @@ export function useAppointments(
   }
 
   async function load(): Promise<void> {
-    const version = ++requestVersion;
     const requestedFilters = { ...filters };
-    loading.value = true;
-    error.value = null;
-    try {
-      const nextItems = await fetchAppointments(requestedFilters);
-      if (version === requestVersion) items.value = nextItems;
-    } catch (cause) {
-      if (version === requestVersion) error.value = errorMessage(cause);
-    } finally {
-      if (version === requestVersion) loading.value = false;
-    }
+    await resource.load(requestedFilters, () => fetchAppointments(requestedFilters));
   }
 
   onMounted(() => {
@@ -72,8 +63,13 @@ export function useAppointments(
   return {
     filters,
     items: readonly(items),
-    loading: readonly(loading),
-    error: readonly(error),
+    loading: resource.loading,
+    error: resource.error,
+    status: resource.status,
+    stale: resource.stale,
+    actionsDisabled: resource.actionsDisabled,
+    requestedKey: resource.requestedKey,
+    resolvedKey: resource.resolvedKey,
     load,
   };
 }

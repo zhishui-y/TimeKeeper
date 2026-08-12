@@ -7,7 +7,7 @@ use tauri::State;
 use crate::{
     app_access::AppAccessState,
     appointments::get_appointment_impl,
-    db::Database,
+    db::{Database, JS_SAFE_INTEGER_MAX},
     models::{
         DashboardSummary, ReportGranularity, RevenueBreakdownItem, RevenuePoint, RevenueSummary,
         ServiceStatus, SettlementStatus,
@@ -122,8 +122,24 @@ async fn sum_minor(database: &Database, sql: &str, values: &[&str]) -> Result<i6
     for value in values {
         query = query.bind(*value);
     }
-    let row = query.fetch_one(database.pool()).await.map_err(db_error)?;
-    row.try_get("total").map_err(db_error)
+    let rows = query.fetch_all(database.pool()).await.map_err(db_error)?;
+    let mut total = 0_i64;
+    for row in rows {
+        let amount = row
+            .try_get::<Option<i64>, _>("amount_minor")
+            .map_err(db_error)?
+            .unwrap_or(0);
+        total = checked_add_money(total, amount)?;
+    }
+    Ok(total)
+}
+
+fn checked_add_money(total: i64, amount: i64) -> Result<i64, String> {
+    let sum = i128::from(total) + i128::from(amount);
+    if !(0..=i128::from(JS_SAFE_INTEGER_MAX)).contains(&sum) {
+        return Err("报表金额合计超出安全整数范围".into());
+    }
+    i64::try_from(sum).map_err(|_| "报表金额合计超出支持范围".to_string())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -160,7 +176,7 @@ async fn get_dashboard_summary_at(
 
     let today_settled_minor = sum_minor(
         database,
-        "SELECT COALESCE(SUM(amount_minor), 0) AS total FROM appointments
+        "SELECT amount_minor FROM appointments
          WHERE service_date = ? AND mode = 'business' AND service_status != 'cancelled'
            AND settlement_status = 'settled'",
         &[&normalized_date],
@@ -168,7 +184,7 @@ async fn get_dashboard_summary_at(
     .await?;
     let week_settled_minor = sum_minor(
         database,
-        "SELECT COALESCE(SUM(amount_minor), 0) AS total FROM appointments
+        "SELECT amount_minor FROM appointments
          WHERE service_date >= ? AND service_date <= ? AND mode = 'business'
            AND service_status != 'cancelled' AND settlement_status = 'settled'",
         &[&week_from, &week_to],
@@ -314,32 +330,46 @@ pub(crate) async fn get_revenue_summary_impl(
         let amount_minor: Option<i64> = row.try_get("amount_minor").map_err(db_error)?;
         let amount_minor = amount_minor.unwrap_or(0);
 
-        point.appointment_count += 1;
+        point.appointment_count = point
+            .appointment_count
+            .checked_add(1)
+            .ok_or_else(|| "报表预约数量超出支持范围".to_string())?;
         match settlement_status {
             SettlementStatus::Settled => {
-                settled_minor += amount_minor;
-                point.settled_minor += amount_minor;
+                settled_minor = checked_add_money(settled_minor, amount_minor)?;
+                point.settled_minor = checked_add_money(point.settled_minor, amount_minor)?;
                 let payment_method: Option<String> =
                     row.try_get("payment_method").map_err(db_error)?;
                 let name = payment_method
                     .filter(|value| !value.trim().is_empty())
                     .unwrap_or_else(|| "未填写".to_string());
                 let payment_entry = payment_methods.entry(name).or_default();
-                payment_entry.0 += amount_minor;
-                payment_entry.1 += 1;
+                payment_entry.0 = checked_add_money(payment_entry.0, amount_minor)?;
+                payment_entry.1 = payment_entry
+                    .1
+                    .checked_add(1)
+                    .ok_or_else(|| "报表预约数量超出支持范围".to_string())?;
 
                 let contact_name: String = row.try_get("contact_name").map_err(db_error)?;
                 let contact_name = revenue_contact_name(&contact_name);
                 let contact_entry = contacts.entry(contact_name).or_default();
-                contact_entry.0 += amount_minor;
-                contact_entry.1 += 1;
+                contact_entry.0 = checked_add_money(contact_entry.0, amount_minor)?;
+                contact_entry.1 = contact_entry
+                    .1
+                    .checked_add(1)
+                    .ok_or_else(|| "报表预约数量超出支持范围".to_string())?;
             }
             SettlementStatus::Unsettled => {
-                unsettled_minor += amount_minor;
-                point.unsettled_minor += amount_minor;
+                unsettled_minor = checked_add_money(unsettled_minor, amount_minor)?;
+                point.unsettled_minor = checked_add_money(point.unsettled_minor, amount_minor)?;
                 if service_status == ServiceStatus::Completed {
-                    pending_count += 1;
-                    point.pending_count += 1;
+                    pending_count = pending_count
+                        .checked_add(1)
+                        .ok_or_else(|| "报表预约数量超出支持范围".to_string())?;
+                    point.pending_count = point
+                        .pending_count
+                        .checked_add(1)
+                        .ok_or_else(|| "报表预约数量超出支持范围".to_string())?;
                 }
             }
             SettlementStatus::NotApplicable => {
@@ -348,7 +378,9 @@ pub(crate) async fn get_revenue_summary_impl(
         }
 
         if service_status == ServiceStatus::Completed {
-            completed_count += 1;
+            completed_count = completed_count
+                .checked_add(1)
+                .ok_or_else(|| "报表预约数量超出支持范围".to_string())?;
             let starts_at: Option<String> = row.try_get("starts_at").map_err(db_error)?;
             let ends_at: Option<String> = row.try_get("ends_at").map_err(db_error)?;
             let hours = duration_hours(starts_at.as_deref(), ends_at.as_deref())?;
@@ -392,7 +424,11 @@ pub(crate) async fn get_revenue_summary_impl(
 
     let business_hours = round_hours(business_hours);
     let average_hourly_minor = if business_hours > 0.0 {
-        (settled_minor as f64 / business_hours).round() as i64
+        let average = (settled_minor as f64 / business_hours).round();
+        if !average.is_finite() || !(0.0..=JS_SAFE_INTEGER_MAX as f64).contains(&average) {
+            return Err("报表平均时薪超出安全整数范围".into());
+        }
+        average as i64
     } else {
         0
     };
@@ -412,7 +448,8 @@ pub(crate) async fn get_revenue_summary_impl(
         pending_count,
         business_hours,
         average_hourly_minor,
-        appointment_count: rows.len() as i64,
+        appointment_count: i64::try_from(rows.len())
+            .map_err(|_| "报表预约数量超出支持范围".to_string())?,
         completed_count,
         payment_methods,
         contacts,
@@ -673,6 +710,56 @@ mod tests {
                     .map(|item| item.amount_minor)
                     .sum::<i64>(),
                 summary.settled_minor
+            );
+        });
+    }
+
+    #[test]
+    fn rejects_revenue_aggregates_outside_the_javascript_safe_integer_range() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let amount = JS_SAFE_INTEGER_MAX / 2 + 1;
+            create_appointment_impl(
+                &database,
+                input(
+                    "2026-07-13",
+                    "18:00",
+                    "19:00",
+                    SettlementStatus::Settled,
+                    amount,
+                ),
+            )
+            .await
+            .unwrap();
+            create_appointment_impl(
+                &database,
+                input(
+                    "2026-07-13",
+                    "20:00",
+                    "21:00",
+                    SettlementStatus::Settled,
+                    amount,
+                ),
+            )
+            .await
+            .unwrap();
+
+            assert!(
+                get_revenue_summary_impl(
+                    &database,
+                    "2026-07-13",
+                    "2026-07-13",
+                    ReportGranularity::Day,
+                )
+                .await
+                .unwrap_err()
+                .contains("安全整数")
+            );
+            assert!(
+                get_dashboard_summary_impl(&database, "2026-07-13")
+                    .await
+                    .unwrap_err()
+                    .contains("安全整数")
             );
         });
     }

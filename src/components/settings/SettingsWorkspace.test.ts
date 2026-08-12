@@ -3,7 +3,9 @@
 import { createPinia } from "pinia";
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createMemoryHistory, createRouter, RouterView } from "vue-router";
 import { mockApi } from "../../api/mockClient";
+import { useOperationStore } from "../../stores/operations";
 import { useUiStore } from "../../stores/ui";
 import type { BackupResult, ExcelImportPreview, ExcelImportResult } from "../../types/domain";
 import SettingsWorkspace from "./SettingsWorkspace.vue";
@@ -22,6 +24,28 @@ function buttonWithText(wrapper: VueWrapper, text: string) {
   const button = wrapper.findAll("button").find((candidate) => candidate.text().includes(text));
   if (!button) throw new Error(`未找到按钮：${text}`);
   return button;
+}
+
+async function mountRoutedSettings() {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: "/settings", component: SettingsWorkspace },
+      { path: "/next", component: { template: "<div>next route</div>" } },
+    ],
+  });
+  await router.push("/settings");
+  const pinia = createPinia();
+  const wrapper = mount(
+    { components: { RouterView }, template: "<RouterView />" },
+    {
+      attachTo: document.body,
+      global: { plugins: [pinia, router], stubs: { Teleport: true } },
+    },
+  );
+  await router.isReady();
+  await flushPromises();
+  return { wrapper, router, pinia };
 }
 
 const preview: ExcelImportPreview = {
@@ -132,7 +156,8 @@ describe("SettingsWorkspace operation progress", () => {
       accounts: true,
     });
     expect(wrapper.get('[role="status"]').text()).toContain("正在导入预约与账号");
-    expect(buttonWithText(wrapper, "正在导入").attributes("disabled")).toBeDefined();
+    expect(wrapper.find(".import-preview").exists()).toBe(false);
+    expect(buttonWithText(wrapper, "选择文件").attributes("disabled")).toBeDefined();
 
     pendingImport.resolve({
       importedAppointments: 408,
@@ -289,5 +314,103 @@ describe("SettingsWorkspace operation progress", () => {
     expect(wrapper.get('[role="alert"]').text()).toContain("不能包含用户名或密码");
     expect(buttonWithText(wrapper, "保存设置").attributes("disabled")).toBeDefined();
     wrapper.unmount();
+  });
+
+  it("keeps the settings surface inert until the latest load resolves", async () => {
+    const previous = await mockApi.getSettings();
+    const request = deferred<typeof previous>();
+    vi.spyOn(mockApi, "getSettings").mockReturnValue(request.promise);
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: "/settings", component: SettingsWorkspace }],
+    });
+    await router.push("/settings");
+    const wrapper = mount(
+      { components: { RouterView }, template: "<RouterView />" },
+      { global: { plugins: [createPinia(), router] } },
+    );
+    await router.isReady();
+    await flushPromises();
+
+    expect(wrapper.get(".settings-grid").attributes("inert")).toBeDefined();
+    expect(wrapper.get(".settings-grid").attributes("aria-busy")).toBe("true");
+    expect(buttonWithText(wrapper, "撤销外观预览").attributes("disabled")).toBeDefined();
+    expect(buttonWithText(wrapper, "保存设置").attributes("disabled")).toBeDefined();
+
+    request.resolve(previous);
+    await flushPromises();
+    expect(wrapper.get(".settings-grid").attributes("inert")).toBe("false");
+    expect(wrapper.get(".settings-grid").attributes("aria-busy")).toBe("false");
+    wrapper.unmount();
+  });
+
+  it("disables settings persistence while another global operation is running", async () => {
+    const pendingPreview = deferred<ExcelImportPreview>();
+    vi.spyOn(mockApi, "previewExcelImport").mockReturnValue(pendingPreview.promise);
+    const pinia = createPinia();
+    const wrapper = mount(SettingsWorkspace, { global: { plugins: [pinia] } });
+    await flushPromises();
+
+    await wrapper.get('input[aria-label="基础字号"]').setValue("18");
+    expect(buttonWithText(wrapper, "保存设置").attributes("disabled")).toBeUndefined();
+
+    const operations = useOperationStore(pinia);
+    const request = operations.previewExcel(preview.sourcePath, preview.baseYear);
+    await flushPromises();
+
+    expect(wrapper.get(".settings-grid").attributes("inert")).toBeDefined();
+    expect(wrapper.get(".settings-grid").attributes("aria-busy")).toBe("true");
+    expect(buttonWithText(wrapper, "保存设置").attributes("disabled")).toBeDefined();
+
+    pendingPreview.resolve(preview);
+    await request;
+    await flushPromises();
+    expect(wrapper.get(".settings-grid").attributes("inert")).toBe("false");
+    expect(buttonWithText(wrapper, "保存设置").attributes("disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("offers continue, discard, and save choices and never starts concurrent saves", async () => {
+    const previous = await mockApi.getSettings();
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(previous);
+    const saveRequest = deferred<typeof previous>();
+    const updateSettings = vi.spyOn(mockApi, "updateSettings").mockReturnValue(saveRequest.promise);
+    const { wrapper, router } = await mountRoutedSettings();
+
+    await wrapper.get('input[aria-label="基础字号"]').setValue("18");
+    expect(document.documentElement.style.getPropertyValue("--app-base-font-size")).toBe("18px");
+
+    const continuedNavigation = router.push("/next");
+    await flushPromises();
+    expect(wrapper.get('[role="dialog"]').text()).toContain("继续编辑");
+    await buttonWithText(wrapper, "继续编辑").trigger("click");
+    await continuedNavigation;
+    expect(router.currentRoute.value.path).toBe("/settings");
+
+    const savedNavigation = router.push("/next");
+    await flushPromises();
+    const saveAndLeaveButton = buttonWithText(wrapper, "保存并离开");
+    await saveAndLeaveButton.trigger("click");
+    await saveAndLeaveButton.trigger("click");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(buttonWithText(wrapper, "正在保存").attributes("disabled")).toBeDefined();
+
+    saveRequest.resolve({ ...previous, baseFontSize: 18 });
+    await savedNavigation;
+    await flushPromises();
+    expect(router.currentRoute.value.path).toBe("/next");
+    wrapper.unmount();
+
+    const second = await mountRoutedSettings();
+    await second.wrapper.get('input[aria-label="基础字号"]').setValue("18");
+    const discardedNavigation = second.router.push("/next");
+    await flushPromises();
+    await buttonWithText(second.wrapper, "放弃修改").trigger("click");
+    await discardedNavigation;
+    expect(second.router.currentRoute.value.path).toBe("/next");
+    expect(document.documentElement.style.getPropertyValue("--app-base-font-size")).toBe("15px");
+    second.wrapper.unmount();
   });
 });

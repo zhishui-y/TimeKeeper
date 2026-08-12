@@ -144,4 +144,24 @@ describe("CalendarEventCard", () => {
     expect(wrapper.classes()).toContain("calendar-event-card--next");
     expect(wrapper.attributes("aria-label")).toMatch(/^下一时段\n/);
   });
+
+  it("renders only a neutral time label when details are hidden", () => {
+    const wrapper = mount(CalendarEventCard, {
+      props: {
+        appointment: appointment(),
+        compact: true,
+        allDay: false,
+        timeText: "14:00 - 15:00",
+        isNext: true,
+        detailsHidden: true,
+      },
+    });
+
+    expect(wrapper.text()).toBe("14:00–15:00");
+    expect(wrapper.attributes("title")).toBeUndefined();
+    expect(wrapper.attributes("aria-label")).toBe("14:00–15:00");
+    expect(wrapper.find(".calendar-event-card__contact").exists()).toBe(false);
+    expect(wrapper.find(".calendar-event-card__content").exists()).toBe(false);
+    expect(wrapper.find(".calendar-event-card__progress").exists()).toBe(false);
+  });
 });

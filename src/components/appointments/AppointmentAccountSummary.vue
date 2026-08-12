@@ -5,6 +5,7 @@ import type { AppointmentAccount } from "../../types/domain";
 defineProps<{
   account?: AppointmentAccount | null;
   contactName: string;
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -32,6 +33,7 @@ const emit = defineEmits<{
         v-if="account.source === 'profile'"
         class="appointment-account-summary__copy"
         type="button"
+        :disabled="disabled"
         :title="`复制账号 ${account.accountName}`"
         :aria-label="`复制账号 ${account.accountName}`"
         @click="emit('copyAccount')"
@@ -42,6 +44,7 @@ const emit = defineEmits<{
         v-else
         class="appointment-account-summary__account"
         type="button"
+        :disabled="disabled"
         :title="`复制账号 ${account.accountName}`"
         :aria-label="`复制账号 ${account.accountName}`"
         @click="emit('copyAccount')"
@@ -51,7 +54,7 @@ const emit = defineEmits<{
       <button
         class="appointment-account-summary__copy"
         type="button"
-        :disabled="!account.password"
+        :disabled="disabled || !account.password"
         :title="account.password ? `复制${contactName} 的预约密码` : '未保存预约密码'"
         :aria-label="`复制${contactName} 的预约密码`"
         @click="emit('copyPassword')"
@@ -140,3 +143,4 @@ const emit = defineEmits<{
   opacity: 0.32;
 }
 </style>
+:disabled="disabled" :disabled="disabled"

@@ -1,17 +1,22 @@
-import { onMounted, readonly, shallowRef } from "vue";
-import { api, errorMessage } from "../api/client";
+import { computed, onMounted, readonly } from "vue";
+import { api } from "../api/client";
 import type { AccountProfile, AccountRoleDataRefreshPatch } from "../types/domain";
+import { useAsyncResource } from "./useAsyncResource";
 
 export interface UseAccountsOptions {
   immediate?: boolean;
 }
 
 export function useAccounts({ immediate = true }: UseAccountsOptions = {}) {
-  const items = shallowRef<AccountProfile[]>([]);
-  const loading = shallowRef(false);
-  const error = shallowRef<string | null>(null);
+  interface AccountRequestKey {
+    query: string | null;
+    needsReview: boolean | null;
+  }
+  const resource = useAsyncResource<AccountProfile[], AccountRequestKey>(
+    (left, right) => left.query === right.query && left.needsReview === right.needsReview,
+  );
+  const items = computed<AccountProfile[]>(() => resource.data.value ?? []);
   const inFlight = new Map<string, Promise<AccountProfile[]>>();
-  let requestVersion = 0;
 
   function requestKey(query?: string, needsReview?: boolean): string {
     return JSON.stringify([query ?? null, needsReview ?? null]);
@@ -32,21 +37,14 @@ export function useAccounts({ immediate = true }: UseAccountsOptions = {}) {
   }
 
   async function load(query?: string, needsReview?: boolean): Promise<void> {
-    const version = ++requestVersion;
-    loading.value = true;
-    error.value = null;
-    try {
-      const nextItems = await fetchAccounts(query, needsReview);
-      if (version === requestVersion) items.value = nextItems;
-    } catch (cause) {
-      if (version === requestVersion) error.value = errorMessage(cause);
-    } finally {
-      if (version === requestVersion) loading.value = false;
-    }
+    await resource.load({ query: query ?? null, needsReview: needsReview ?? null }, () =>
+      fetchAccounts(query, needsReview),
+    );
   }
 
   function applyRoleDataRefreshPatch(patch: AccountRoleDataRefreshPatch): void {
-    items.value = items.value.map((profile) =>
+    if (!resource.data.value) return;
+    resource.data.value = resource.data.value.map((profile: AccountProfile) =>
       profile.id === patch.accountId
         ? {
             ...profile,
@@ -67,8 +65,13 @@ export function useAccounts({ immediate = true }: UseAccountsOptions = {}) {
 
   return {
     items: readonly(items),
-    loading: readonly(loading),
-    error: readonly(error),
+    loading: resource.loading,
+    error: resource.error,
+    status: resource.status,
+    stale: resource.stale,
+    actionsDisabled: resource.actionsDisabled,
+    requestedKey: resource.requestedKey,
+    resolvedKey: resource.resolvedKey,
     load,
     applyRoleDataRefreshPatch,
   };

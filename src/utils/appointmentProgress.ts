@@ -10,7 +10,7 @@ export const appointmentProgressStatusLabels: Record<AppointmentProgressStatus, 
   scheduled: "已预约",
   in_progress: "进行中",
   pending_settlement: "待结算",
-  completed: "已完成",
+  completed: "完成",
   cancelled: "已取消",
 };
 
@@ -40,8 +40,9 @@ export function appointmentProgressStatus(
 ): AppointmentProgressStatus {
   if (appointment.serviceStatus === "cancelled") return "cancelled";
   if (appointment.mode === "entertainment") return appointment.serviceStatus;
-  if (appointment.settlementStatus === "settled") return "completed";
-  if (appointment.serviceStatus === "completed") return "pending_settlement";
+  if (appointment.serviceStatus === "completed") {
+    return appointment.settlementStatus === "settled" ? "completed" : "pending_settlement";
+  }
   return appointment.serviceStatus;
 }
 
@@ -65,10 +66,17 @@ export function appointmentStatusesFromProgress(
     };
   }
   if (progressStatus === "completed") {
-    return { serviceStatus: "completed", settlementStatus: "settled" };
+    return {
+      serviceStatus: "completed",
+      settlementStatus: "settled",
+    };
   }
   if (progressStatus === "pending_settlement") {
     return { serviceStatus: "completed", settlementStatus: "unsettled" };
   }
-  return { serviceStatus: progressStatus, settlementStatus: "unsettled" };
+  return {
+    serviceStatus: progressStatus,
+    settlementStatus:
+      currentSettlementStatus === "not_applicable" ? "unsettled" : currentSettlementStatus,
+  };
 }

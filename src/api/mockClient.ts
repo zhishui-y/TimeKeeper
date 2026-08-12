@@ -1,165 +1,37 @@
-import { differenceInMinutes, endOfWeek, format, parseISO, startOfWeek } from "date-fns";
 import type {
   AccountProfile,
   AccountRoleDataRefreshProgress,
   AccountRoleDataRefreshResult,
-  AccountTableColumnWidths,
   AppAccessRecoveryProof,
-  AppAccessStatus,
-  AppSettings,
   Appointment,
   AppointmentConflict,
   AppointmentFilters,
   AppointmentInput,
   AppointmentMutationResult,
-  AppointmentTableColumnWidths,
   ContactPreset,
   ReportGranularity,
   RevenuePoint,
   ServiceStatus,
 } from "../types/domain";
-import {
-  ACCOUNT_TABLE_COLUMN_KEYS,
-  DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS,
-  MAX_ACCOUNT_TABLE_COLUMN_WIDTH,
-  MIN_ACCOUNT_TABLE_COLUMN_WIDTHS,
-} from "../utils/accountTableColumns";
-import {
-  APPOINTMENT_TABLE_COLUMN_KEYS,
-  DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS,
-  MAX_APPOINTMENT_TABLE_COLUMN_WIDTH,
-  MIN_APPOINTMENT_TABLE_COLUMN_WIDTHS,
-} from "../utils/appointmentTableColumns";
-import {
-  DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
-  validateAccountRoleDataServerUrl,
-} from "../utils/accountRoleData";
+import { validateAccountRoleDataServerUrl } from "../utils/accountRoleData";
+import { parseOptionalAccountScore } from "../utils/accounts";
 import { MIN_MASTER_PASSWORD_CHARACTERS, isMasterPasswordLongEnough } from "../utils/security";
 import { combineDateTime } from "../utils/appointment";
 import { appointmentProgressStatus } from "../utils/appointmentProgress";
-import { demoAccounts, demoAppointments } from "./mockData";
+import {
+  chinaCivilNowValue,
+  chinaDateKey,
+  civilDateTimeValue,
+  civilDurationInMinutes,
+  civilTime,
+  endOfChinaWeek,
+  startOfChinaWeek,
+} from "../utils/chinaDateTime";
+import { isSafeAmountMinor } from "../utils/money";
 import type { ApiClient } from "./types";
-
-let appointments = structuredClone(demoAppointments);
-let accounts = structuredClone(demoAccounts).sort((a, b) => {
-  return (
-    Number(b.needsReview) - Number(a.needsReview) ||
-    b.updatedAt.localeCompare(a.updatedAt) ||
-    a.accountName.localeCompare(b.accountName)
-  );
-});
-let appAccess: AppAccessStatus = {
-  initialized: true,
-  unlocked: true,
-  legacyMigrationPendingCount: 0,
-  recoveryQuestion: "我最常用的陪玩角色是？",
-};
-let appAccessPassword: string | null = "demo";
-let appAccessRecoveryAnswer = "demo";
-const appointmentSelections = new Map<string, { ids: string[]; expiresAt: number }>();
-const ACCOUNT_TABLE_WIDTHS_STORAGE_KEY = "timekeeper.demo.accountTableColumnWidths";
-const APPOINTMENT_TABLE_WIDTHS_STORAGE_KEY = "timekeeper.demo.appointmentTableColumnWidths";
-
-function accountTableColumnWidthsAreValid(widths: AccountTableColumnWidths): boolean {
-  return ACCOUNT_TABLE_COLUMN_KEYS.every((key) => {
-    const width = widths[key];
-    return (
-      Number.isInteger(width) &&
-      width >= MIN_ACCOUNT_TABLE_COLUMN_WIDTHS[key] &&
-      width <= MAX_ACCOUNT_TABLE_COLUMN_WIDTH
-    );
-  });
-}
-
-function loadStoredAccountTableColumnWidths(): AccountTableColumnWidths {
-  try {
-    const stored = globalThis.localStorage?.getItem(ACCOUNT_TABLE_WIDTHS_STORAGE_KEY);
-    if (!stored) return { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS };
-    const parsed = JSON.parse(stored) as Partial<AccountTableColumnWidths> & { weekly?: number };
-    const widths = {
-      ...parsed,
-      accountName: parsed.accountName ?? DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS.accountName,
-      password: parsed.password ?? DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS.password,
-      weeklyWins:
-        parsed.weeklyWins ?? parsed.weekly ?? DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS.weeklyWins,
-    } as AccountTableColumnWidths;
-    delete (widths as AccountTableColumnWidths & { weekly?: number }).weekly;
-    if (!accountTableColumnWidthsAreValid(widths)) {
-      return { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS };
-    }
-    storeAccountTableColumnWidths(widths);
-    return widths;
-  } catch {
-    return { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS };
-  }
-}
-
-function storeAccountTableColumnWidths(widths: AccountTableColumnWidths): void {
-  globalThis.localStorage?.setItem(ACCOUNT_TABLE_WIDTHS_STORAGE_KEY, JSON.stringify(widths));
-}
-
-function appointmentTableColumnWidthsAreValid(widths: AppointmentTableColumnWidths): boolean {
-  return APPOINTMENT_TABLE_COLUMN_KEYS.every((key) => {
-    const width = widths[key];
-    return (
-      Number.isInteger(width) &&
-      width >= MIN_APPOINTMENT_TABLE_COLUMN_WIDTHS[key] &&
-      width <= MAX_APPOINTMENT_TABLE_COLUMN_WIDTH
-    );
-  });
-}
-
-function loadStoredAppointmentTableColumnWidths(): AppointmentTableColumnWidths {
-  try {
-    const stored = globalThis.localStorage?.getItem(APPOINTMENT_TABLE_WIDTHS_STORAGE_KEY);
-    if (!stored) return { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS };
-    const parsed = JSON.parse(stored) as Partial<AppointmentTableColumnWidths> & {
-      paymentMethod?: number;
-    };
-    const widths = {
-      ...parsed,
-      voice: parsed.voice ?? DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS.voice,
-      notes: parsed.notes ?? parsed.paymentMethod,
-    } as AppointmentTableColumnWidths;
-    delete (widths as AppointmentTableColumnWidths & { paymentMethod?: number }).paymentMethod;
-    if (!appointmentTableColumnWidthsAreValid(widths)) {
-      return { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS };
-    }
-    storeAppointmentTableColumnWidths(widths);
-    return widths;
-  } catch {
-    return { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS };
-  }
-}
-
-function storeAppointmentTableColumnWidths(widths: AppointmentTableColumnWidths): void {
-  globalThis.localStorage?.setItem(APPOINTMENT_TABLE_WIDTHS_STORAGE_KEY, JSON.stringify(widths));
-}
-
-let settings: AppSettings = {
-  fontFamily: "Microsoft YaHei UI",
-  baseFontSize: 15,
-  defaultReminderMinutes: 30,
-  backupRetention: 30,
-  lastAutomaticBackupDate: format(new Date(), "yyyy-MM-dd"),
-  accountTableColumnWidths: loadStoredAccountTableColumnWidths(),
-  appointmentTableColumnWidths: loadStoredAppointmentTableColumnWidths(),
-  accountRoleDataServerUrl: DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
-  accountRoleDataApiKey: "",
-};
-let accountRoleDataRefreshBusy = false;
-
-interface MockBackupSnapshot {
-  appointments: Appointment[];
-  accounts: AccountProfile[];
-  settings: AppSettings;
-  appAccess: Omit<AppAccessStatus, "unlocked">;
-  appAccessPassword: string | null;
-  appAccessRecoveryAnswer: string;
-}
-
-let backupSnapshot: MockBackupSnapshot | null = null;
-let lastBackupPath: string | null = null;
+import { createMockImportBackupApi } from "./mock/importBackup";
+import { createMockSettingsApi } from "./mock/settings";
+import { mockStore } from "./mock/store";
 
 function normalizeRecoveryAnswer(value: string): string {
   return value.trim().split(/\s+/u).filter(Boolean).join(" ").toLocaleLowerCase();
@@ -178,15 +50,21 @@ function makeId(prefix: string): string {
 }
 
 function currentChinaDate(): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const value = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((part) => part.type === type)?.value ?? "";
-  return `${value("year")}-${value("month")}-${value("day")}`;
+  return chinaDateKey();
+}
+
+function checkedSafeIntegerAdd(total: number, value: number, message: string): number {
+  const result = total + value;
+  if (
+    !Number.isSafeInteger(total) ||
+    !Number.isSafeInteger(value) ||
+    total < 0 ||
+    value < 0 ||
+    !Number.isSafeInteger(result)
+  ) {
+    throw new Error(message);
+  }
+  return result;
 }
 
 function refreshMockAccountRoleData(
@@ -196,9 +74,10 @@ function refreshMockAccountRoleData(
   const normalizedIds = [...new Set(ids.map((id) => id.trim()))];
   if (!normalizedIds.length) throw new Error("请至少选择一个账号更新角色数据");
   if (normalizedIds.some((id) => !id)) throw new Error("角色数据更新包含空白账号 ID");
+  if (normalizedIds.length > 1_000) throw new Error("单次最多更新 1000 个账号的角色数据");
 
   const items: AccountRoleDataRefreshResult["items"] = normalizedIds.map((id, index) => {
-    const profile = accounts.find((account) => account.id === id);
+    const profile = mockStore.accounts.find((account) => account.id === id);
     let item: AccountRoleDataRefreshResult["items"][number];
     let patch: AccountRoleDataRefreshProgress["patch"];
     if (!profile) {
@@ -208,23 +87,46 @@ function refreshMockAccountRoleData(
     } else if (profile.characterName.includes("未补充")) {
       item = { accountId: id, status: "noRecord", message: "服务器未返回角色战绩" };
     } else {
-      const nextScore = (profile.currentScore ?? 1800) + index + 1;
-      profile.gearScore = String(200_000 + nextScore);
-      profile.currentScore = nextScore;
-      profile.highestScore = Math.max(profile.highestScore ?? 0, nextScore + 100);
-      profile.scoreUpdatedAt = currentChinaDate();
-      profile.weeklyWins = index + 1;
-      profile.updatedAt = new Date().toISOString();
-      item = { accountId: id, status: "updated" };
-      patch = {
-        accountId: id,
-        gearScore: profile.gearScore,
-        currentScore: profile.currentScore,
-        highestScore: profile.highestScore,
-        scoreUpdatedAt: profile.scoreUpdatedAt,
-        weeklyWins: profile.weeklyWins,
-        updatedAt: profile.updatedAt,
-      };
+      try {
+        const nextScore = checkedSafeIntegerAdd(
+          profile.currentScore ?? 1800,
+          index + 1,
+          "角色数据分数超出 JavaScript 安全整数范围",
+        );
+        const nextHighestScore = Math.max(
+          profile.highestScore ?? 0,
+          checkedSafeIntegerAdd(nextScore, 100, "角色数据分数超出 JavaScript 安全整数范围"),
+        );
+        const nextGearScore = (BigInt(nextScore) + 200_000n).toString();
+        const nextScoreUpdatedAt = currentChinaDate();
+        const nextWeeklyWins = index + 1;
+        const nextUpdatedAt = new Date().toISOString();
+
+        Object.assign(profile, {
+          gearScore: nextGearScore,
+          currentScore: nextScore,
+          highestScore: nextHighestScore,
+          scoreUpdatedAt: nextScoreUpdatedAt,
+          weeklyWins: nextWeeklyWins,
+          updatedAt: nextUpdatedAt,
+        });
+        item = { accountId: id, status: "updated" };
+        patch = {
+          accountId: id,
+          gearScore: nextGearScore,
+          currentScore: nextScore,
+          highestScore: nextHighestScore,
+          scoreUpdatedAt: nextScoreUpdatedAt,
+          weeklyWins: nextWeeklyWins,
+          updatedAt: nextUpdatedAt,
+        };
+      } catch (cause) {
+        item = {
+          accountId: id,
+          status: "failed",
+          message: cause instanceof Error ? cause.message : "角色数据分数无效",
+        };
+      }
     }
     onProgress?.(
       structuredClone({
@@ -249,15 +151,28 @@ function refreshMockAccountRoleData(
 
 function toAppointment(input: AppointmentInput, existing?: Appointment): Appointment {
   const timestamp = new Date().toISOString();
-  if (input.amountMinor !== null && input.amountMinor !== undefined && input.amountMinor < 0) {
-    throw new Error("金额不能为负数");
+  if (
+    input.amountMinor !== null &&
+    input.amountMinor !== undefined &&
+    !isSafeAmountMinor(input.amountMinor)
+  ) {
+    throw new Error("金额必须是安全范围内的非负整数分");
   }
   if (
     input.mode === "business" &&
     input.settlementStatus === "settled" &&
     (input.amountMinor === null || input.amountMinor === undefined)
   ) {
-    throw new Error("已完成预约必须填写金额");
+    throw new Error("已结算预约必须填写金额");
+  }
+  if (
+    input.reminderMinutes !== null &&
+    input.reminderMinutes !== undefined &&
+    (!Number.isInteger(input.reminderMinutes) ||
+      input.reminderMinutes < 0 ||
+      input.reminderMinutes > 1440)
+  ) {
+    throw new Error("提醒时间必须是0到1440之间的整数");
   }
   const { startsAt, endsAt } = combineDateTime(input.serviceDate, input.startTime, input.endTime);
   const entertainment = input.mode === "entertainment";
@@ -274,10 +189,7 @@ function toAppointment(input: AppointmentInput, existing?: Appointment): Appoint
     contactName: input.contactName.trim(),
     content: input.content?.trim() || null,
     mode: input.mode,
-    serviceStatus:
-      !entertainment && input.settlementStatus === "settled" && input.serviceStatus !== "cancelled"
-        ? "completed"
-        : input.serviceStatus,
+    serviceStatus: input.serviceStatus,
     settlementStatus: entertainment ? "not_applicable" : input.settlementStatus,
     account,
     rateNote: entertainment ? null : input.rateNote?.trim() || null,
@@ -354,9 +266,9 @@ function resolveAppointmentAccount(
 function findConflicts(candidate: Appointment): AppointmentConflict[] {
   if (!candidate.startsAt || !candidate.endsAt || candidate.serviceStatus === "cancelled")
     return [];
-  const start = new Date(candidate.startsAt).getTime();
-  const end = new Date(candidate.endsAt).getTime();
-  return appointments
+  const start = civilDateTimeValue(candidate.startsAt);
+  const end = civilDateTimeValue(candidate.endsAt);
+  return mockStore.appointments
     .filter((item) => {
       if (
         item.id === candidate.id ||
@@ -366,7 +278,7 @@ function findConflicts(candidate: Appointment): AppointmentConflict[] {
       ) {
         return false;
       }
-      return start < new Date(item.endsAt).getTime() && end > new Date(item.startsAt).getTime();
+      return start < civilDateTimeValue(item.endsAt) && end > civilDateTimeValue(item.startsAt);
     })
     .map((item) => ({
       id: item.id,
@@ -378,7 +290,7 @@ function findConflicts(candidate: Appointment): AppointmentConflict[] {
 
 function filteredAppointments(filters: AppointmentFilters = {}): Appointment[] {
   const query = filters.query?.trim().toLocaleLowerCase();
-  return appointments
+  return mockStore.appointments
     .filter((item) => !filters.from || item.serviceDate >= filters.from)
     .filter((item) => !filters.to || item.serviceDate <= filters.to)
     .filter((item) => !filters.mode || item.mode === filters.mode)
@@ -399,6 +311,7 @@ function filteredAppointments(filters: AppointmentFilters = {}): Appointment[] {
         item.voiceChannel,
         item.account?.accountName,
         item.account?.server,
+        item.account?.characterName,
         item.account?.specialization,
         item.account?.gearScore,
       ].some((value) => value?.toLocaleLowerCase().includes(query));
@@ -425,9 +338,8 @@ function createPoint(period: string): RevenuePoint {
 }
 
 function periodFor(serviceDate: string, granularity: ReportGranularity): string {
-  const date = parseISO(serviceDate);
-  if (granularity === "month") return format(date, "yyyy-MM");
-  if (granularity === "week") return format(startOfWeek(date, { weekStartsOn: 1 }), "yyyy-MM-dd");
+  if (granularity === "month") return serviceDate.slice(0, 7);
+  if (granularity === "week") return startOfChinaWeek(serviceDate);
   return serviceDate;
 }
 
@@ -440,7 +352,7 @@ function appointmentHours(item: Appointment): number {
   ) {
     return 0;
   }
-  return Math.max(differenceInMinutes(parseISO(item.endsAt), parseISO(item.startsAt)) / 60, 0);
+  return Math.max(civilDurationInMinutes(item.startsAt, item.endsAt) / 60, 0);
 }
 
 function getPasswordOrThrow(id: string): string {
@@ -450,7 +362,7 @@ function getPasswordOrThrow(id: string): string {
 }
 
 function getAppointmentOrThrow(id: string): Appointment {
-  const item = appointments.find((appointment) => appointment.id === id);
+  const item = mockStore.appointments.find((appointment) => appointment.id === id);
   if (!item) throw new Error("预约不存在或已被删除");
   return item;
 }
@@ -469,39 +381,30 @@ function scheduleClipboardClear(expectedText: string): void {
 
 function deleteAppointmentsByIds(ids: readonly string[]): number {
   const targets = new Set(ids.map((id) => id.trim()).filter(Boolean));
-  const before = appointments.length;
-  appointments = appointments.filter((item) => !targets.has(item.id));
-  return before - appointments.length;
+  const before = mockStore.appointments.length;
+  mockStore.appointments = mockStore.appointments.filter((item) => !targets.has(item.id));
+  return before - mockStore.appointments.length;
 }
 
 function syncAppointmentServiceStatuses(now: Date): number {
-  const nowTime = now.getTime();
+  const nowTime = chinaCivilNowValue(now);
   let changedCount = 0;
-  appointments = appointments.map((appointment) => {
+  mockStore.appointments = mockStore.appointments.map((appointment) => {
     if (
       (appointment.serviceStatus !== "scheduled" && appointment.serviceStatus !== "in_progress") ||
       !appointment.startsAt ||
-      parseISO(appointment.startsAt).getTime() > nowTime
+      civilDateTimeValue(appointment.startsAt) > nowTime
     ) {
       return appointment;
     }
 
     const nextStatus =
-      appointment.endsAt && parseISO(appointment.endsAt).getTime() <= nowTime
+      appointment.endsAt && civilDateTimeValue(appointment.endsAt) <= nowTime
         ? "completed"
         : appointment.serviceStatus === "scheduled"
           ? "in_progress"
           : appointment.serviceStatus;
-    const nextSettlementStatus =
-      nextStatus === "completed"
-        ? appointment.mode === "business"
-          ? "unsettled"
-          : "not_applicable"
-        : appointment.settlementStatus;
-    if (
-      nextStatus === appointment.serviceStatus &&
-      nextSettlementStatus === appointment.settlementStatus
-    ) {
+    if (nextStatus === appointment.serviceStatus) {
       return appointment;
     }
 
@@ -509,7 +412,6 @@ function syncAppointmentServiceStatuses(now: Date): number {
     return {
       ...appointment,
       serviceStatus: nextStatus,
-      settlementStatus: nextSettlementStatus,
       updatedAt: now.toISOString(),
     };
   });
@@ -517,17 +419,26 @@ function syncAppointmentServiceStatuses(now: Date): number {
 }
 
 function getAccountOrThrow(id: string): AccountProfile {
-  const item = accounts.find((account) => account.id === id);
+  const item = mockStore.accounts.find((account) => account.id === id);
   if (!item) throw new Error("账号档案不存在或已被删除");
   return item;
+}
+
+function validatedAccountScore(
+  value: number | null | undefined,
+  label: "当前分" | "最高分",
+): number | null {
+  const result = parseOptionalAccountScore(value);
+  if (!result.ok) throw new Error(`${label}必须是 0 或更大的有效整数`);
+  return result.value;
 }
 
 function deleteAccountProfilesByIds(ids: readonly string[]): number {
   const targets = new Set(ids.map((id) => id.trim()).filter(Boolean));
   const existingIds = new Set(
-    accounts.filter((account) => targets.has(account.id)).map((account) => account.id),
+    mockStore.accounts.filter((account) => targets.has(account.id)).map((account) => account.id),
   );
-  accounts = accounts.filter((account) => !existingIds.has(account.id));
+  mockStore.accounts = mockStore.accounts.filter((account) => !existingIds.has(account.id));
   return existingIds.size;
 }
 
@@ -555,10 +466,19 @@ export const mockApi: ApiClient = {
     });
   },
   async createAppointmentSelection(filters = {}) {
+    const now = Date.now();
+    for (const [existingToken, snapshot] of mockStore.appointmentSelections) {
+      if (snapshot.expiresAt <= now) mockStore.appointmentSelections.delete(existingToken);
+    }
+    while (mockStore.appointmentSelections.size >= 8) {
+      const oldestToken = mockStore.appointmentSelections.keys().next().value as string | undefined;
+      if (!oldestToken) break;
+      mockStore.appointmentSelections.delete(oldestToken);
+    }
     const token = makeId("selection");
     const ids = filteredAppointments(filters).map((item) => item.id);
-    const expiresAt = Date.now() + 10 * 60_000;
-    appointmentSelections.set(token, { ids, expiresAt });
+    const expiresAt = now + 10 * 60_000;
+    mockStore.appointmentSelections.set(token, { ids, expiresAt });
     return { token, totalCount: ids.length, expiresAt: new Date(expiresAt).toISOString() };
   },
   async getAppointment(id) {
@@ -570,21 +490,21 @@ export const mockApi: ApiClient = {
       appointment: created,
       conflicts: findConflicts(created),
     };
-    appointments.push(created);
+    mockStore.appointments.push(created);
     return structuredClone(result);
   },
   async updateAppointment(id, input) {
-    const index = appointments.findIndex((item) => item.id === id);
+    const index = mockStore.appointments.findIndex((item) => item.id === id);
     if (index < 0) throw new Error("预约不存在或已被删除");
-    const updated = toAppointment(input, appointments[index]);
+    const updated = toAppointment(input, mockStore.appointments[index]);
     const result = { appointment: updated, conflicts: findConflicts(updated) };
-    appointments[index] = updated;
+    mockStore.appointments[index] = updated;
     return structuredClone(result);
   },
   async duplicateAppointment(id, serviceDate) {
     const source = getAppointmentOrThrow(id);
-    const startTime = source.startsAt ? format(parseISO(source.startsAt), "HH:mm") : null;
-    const endTime = source.endsAt ? format(parseISO(source.endsAt), "HH:mm") : null;
+    const startTime = civilTime(source.startsAt);
+    const endTime = civilTime(source.endsAt);
     return this.createAppointment({
       serviceDate: serviceDate ?? source.serviceDate,
       startTime,
@@ -623,7 +543,7 @@ export const mockApi: ApiClient = {
     const normalized = query?.trim().toLocaleLowerCase();
     const seen = new Set<string>();
     const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 50);
-    const sorted = appointments
+    const sorted = mockStore.appointments
       .filter((item) => item.serviceStatus !== "cancelled")
       .filter((item) => !normalized || item.contactName.toLocaleLowerCase().includes(normalized))
       .sort((left, right) => {
@@ -640,8 +560,8 @@ export const mockApi: ApiClient = {
       result.push({
         sourceAppointmentId: item.id,
         contactName: item.contactName,
-        startTime: item.startsAt ? format(parseISO(item.startsAt), "HH:mm") : null,
-        endTime: item.endsAt ? format(parseISO(item.endsAt), "HH:mm") : null,
+        startTime: civilTime(item.startsAt),
+        endTime: civilTime(item.endsAt),
         content: item.content,
         mode: item.mode,
         account: item.account,
@@ -686,9 +606,9 @@ export const mockApi: ApiClient = {
     if (selection.kind === "explicit") {
       ids = [...new Set(selection.ids.map((id) => id.trim()).filter(Boolean))];
     } else {
-      const snapshot = appointmentSelections.get(selection.token);
+      const snapshot = mockStore.appointmentSelections.get(selection.token);
       if (!snapshot || snapshot.expiresAt <= Date.now()) {
-        appointmentSelections.delete(selection.token);
+        mockStore.appointmentSelections.delete(selection.token);
         throw new Error("全选结果已过期，请重新选择");
       }
       token = selection.token;
@@ -697,7 +617,7 @@ export const mockApi: ApiClient = {
     }
     const matchedCount = ids.length;
     const deletedCount = deleteAppointmentsByIds(ids);
-    if (token) appointmentSelections.delete(token);
+    if (token) mockStore.appointmentSelections.delete(token);
     return { matchedCount, deletedCount };
   },
   async deleteAppointment(id) {
@@ -715,11 +635,10 @@ export const mockApi: ApiClient = {
   async settleAppointment(id, amountMinor, paymentMethod) {
     const item = getAppointmentOrThrow(id);
     if (item.mode !== "business") throw new Error("娱乐预约不参与结算");
-    if (amountMinor < 0) throw new Error("结算金额不能为负数");
+    if (!isSafeAmountMinor(amountMinor)) throw new Error("结算金额必须是安全范围内的非负整数分");
     item.amountMinor = amountMinor;
     item.paymentMethod = paymentMethod ?? item.paymentMethod;
     item.settlementStatus = "settled";
-    item.serviceStatus = "completed";
     item.updatedAt = new Date().toISOString();
     return structuredClone(item);
   },
@@ -727,7 +646,7 @@ export const mockApi: ApiClient = {
   async listAccountProfiles(query, needsReview) {
     const normalized = query?.trim().toLocaleLowerCase();
     return structuredClone(
-      accounts
+      mockStore.accounts
         .filter((item) => needsReview === undefined || item.needsReview === needsReview)
         .filter((item) => {
           if (!normalized) return true;
@@ -742,7 +661,12 @@ export const mockApi: ApiClient = {
   },
   async createAccountProfile(input) {
     const timestamp = new Date().toISOString();
-    if (!input.password) throw new Error("新建账号必须填写密码");
+    const credential = input.credential;
+    if (!credential || credential.kind !== "replace" || !credential.password) {
+      throw new Error("新建账号必须填写密码");
+    }
+    const currentScore = validatedAccountScore(input.currentScore, "当前分");
+    const highestScore = validatedAccountScore(input.highestScore, "最高分");
     const profile: AccountProfile = {
       id: makeId("account"),
       contactName: input.contactName?.trim() || null,
@@ -751,9 +675,9 @@ export const mockApi: ApiClient = {
       specialization: input.specialization?.trim() || null,
       gearScore: input.gearScore?.trim() || null,
       accountName: input.accountName.trim(),
-      password: input.password,
-      currentScore: input.currentScore ?? null,
-      highestScore: input.highestScore ?? null,
+      password: credential.password,
+      currentScore,
+      highestScore,
       scoreUpdatedAt: input.scoreUpdatedAt ?? null,
       weeklyWins: null,
       notes: input.notes?.trim() || null,
@@ -761,11 +685,24 @@ export const mockApi: ApiClient = {
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    accounts.push(profile);
+    mockStore.accounts.push(profile);
     return structuredClone(profile);
   },
   async updateAccountProfile(id, input) {
     const existing = getAccountOrThrow(id);
+    const credential = input.credential;
+    if (!credential) throw new Error("账号密码操作无效");
+    let password = existing.password;
+    if (credential.kind === "replace") {
+      if (!credential.password) throw new Error("新密码不能为空");
+      password = credential.password;
+    } else if (credential.kind === "remove") {
+      password = null;
+    } else if (credential.kind !== "keep") {
+      throw new Error("账号密码操作无效");
+    }
+    const currentScore = validatedAccountScore(input.currentScore, "当前分");
+    const highestScore = validatedAccountScore(input.highestScore, "最高分");
     Object.assign(existing, {
       contactName: input.contactName?.trim() || null,
       server: input.server?.trim() || null,
@@ -773,9 +710,9 @@ export const mockApi: ApiClient = {
       specialization: input.specialization?.trim() || null,
       gearScore: input.gearScore?.trim() || null,
       accountName: input.accountName.trim(),
-      password: input.password || existing.password,
-      currentScore: input.currentScore ?? null,
-      highestScore: input.highestScore ?? null,
+      password,
+      currentScore,
+      highestScore,
       scoreUpdatedAt: input.scoreUpdatedAt ?? null,
       notes: input.notes?.trim() || null,
       needsReview: input.needsReview ?? false,
@@ -795,13 +732,13 @@ export const mockApi: ApiClient = {
     if (normalized.some((id) => !id)) throw new Error("账号排序包含空白 ID");
     if (new Set(normalized).size !== normalized.length) throw new Error("账号排序包含重复 ID");
     if (
-      normalized.length !== accounts.length ||
-      normalized.some((id) => !accounts.some((account) => account.id === id))
+      normalized.length !== mockStore.accounts.length ||
+      normalized.some((id) => !mockStore.accounts.some((account) => account.id === id))
     ) {
       throw new Error("账号排序必须包含当前全部账号档案");
     }
-    const byId = new Map(accounts.map((account) => [account.id, account]));
-    accounts = normalized.map((id) => byId.get(id)!);
+    const byId = new Map(mockStore.accounts.map((account) => [account.id, account]));
+    mockStore.accounts = normalized.map((id) => byId.get(id)!);
   },
   async copyAccountName(id) {
     const profile = getAccountOrThrow(id);
@@ -816,20 +753,24 @@ export const mockApi: ApiClient = {
     await globalThis.navigator.clipboard.writeText(characterName);
   },
   async refreshAccountProfileRoleData(ids, onProgress) {
-    if (accountRoleDataRefreshBusy) throw new Error("已有角色数据更新任务正在进行");
-    const validationError = validateAccountRoleDataServerUrl(settings.accountRoleDataServerUrl);
+    if (mockStore.accountRoleDataRefreshBusy) throw new Error("已有角色数据更新任务正在进行");
+    const validationError = validateAccountRoleDataServerUrl(
+      mockStore.settings.accountRoleDataServerUrl,
+    );
     if (validationError) throw new Error(validationError);
-    if (!settings.accountRoleDataApiKey.trim()) throw new Error("请先配置角色数据 API 密钥");
-    accountRoleDataRefreshBusy = true;
+    if (!mockStore.settings.accountRoleDataApiKey.trim()) {
+      throw new Error("请先配置角色数据 API 密钥");
+    }
+    mockStore.accountRoleDataRefreshBusy = true;
     try {
       return structuredClone(refreshMockAccountRoleData(ids, onProgress));
     } finally {
-      accountRoleDataRefreshBusy = false;
+      mockStore.accountRoleDataRefreshBusy = false;
     }
   },
 
   async appAccessStatus() {
-    return structuredClone(appAccess);
+    return structuredClone(mockStore.appAccess);
   },
   async initializeAppAccess(password, recovery) {
     if (!isMasterPasswordLongEnough(password)) {
@@ -838,37 +779,37 @@ export const mockApi: ApiClient = {
     if (!recovery.question.trim() || recovery.answer.trim().length < 2) {
       throw new Error("请完整填写恢复问题和答案");
     }
-    appAccessPassword = password;
-    appAccessRecoveryAnswer = normalizeRecoveryAnswer(recovery.answer);
-    appAccess = {
-      ...appAccess,
+    mockStore.appAccessPassword = password;
+    mockStore.appAccessRecoveryAnswer = normalizeRecoveryAnswer(recovery.answer);
+    mockStore.appAccess = {
+      ...mockStore.appAccess,
       initialized: true,
       unlocked: true,
       recoveryQuestion: recovery.question.trim(),
     };
-    return structuredClone(appAccess);
+    return structuredClone(mockStore.appAccess);
   },
   async unlockAppAccess(password) {
     if (!password) throw new Error("入口密码不能为空");
-    if (appAccessPassword !== null && password !== appAccessPassword) {
+    if (mockStore.appAccessPassword !== null && password !== mockStore.appAccessPassword) {
       throw new Error("入口密码错误");
     }
-    appAccessPassword ??= password;
-    appAccess = { ...appAccess, unlocked: true };
-    return structuredClone(appAccess);
+    mockStore.appAccessPassword ??= password;
+    mockStore.appAccess = { ...mockStore.appAccess, unlocked: true };
+    return structuredClone(mockStore.appAccess);
   },
   async changeAppAccessPassword(currentPassword, newPassword) {
-    if (!appAccess.unlocked) throw new Error("应用尚未解锁");
+    if (!mockStore.appAccess.unlocked) throw new Error("应用尚未解锁");
     if (!currentPassword) throw new Error("入口密码不能为空");
     if (!isMasterPasswordLongEnough(newPassword)) {
       throw new Error(`入口密码至少需要${MIN_MASTER_PASSWORD_CHARACTERS}个字符`);
     }
     if (newPassword === currentPassword) throw new Error("新入口密码不能与当前密码相同");
-    if (appAccessPassword !== null && currentPassword !== appAccessPassword) {
+    if (mockStore.appAccessPassword !== null && currentPassword !== mockStore.appAccessPassword) {
       throw new Error("当前入口密码不正确");
     }
-    appAccessPassword = newPassword;
-    return structuredClone(appAccess);
+    mockStore.appAccessPassword = newPassword;
+    return structuredClone(mockStore.appAccess);
   },
   async resetAppAccessPassword(
     newPassword,
@@ -879,10 +820,10 @@ export const mockApi: ApiClient = {
     if (!isMasterPasswordLongEnough(newPassword)) {
       throw new Error(`入口密码至少需要${MIN_MASTER_PASSWORD_CHARACTERS}个字符`);
     }
-    if (appAccess.recoveryQuestion) {
+    if (mockStore.appAccess.recoveryQuestion) {
       if (
         recoveryProof.kind !== "answer" ||
-        normalizeRecoveryAnswer(recoveryProof.answer) !== appAccessRecoveryAnswer
+        normalizeRecoveryAnswer(recoveryProof.answer) !== mockStore.appAccessRecoveryAnswer
       ) {
         throw new Error("恢复答案错误");
       }
@@ -890,34 +831,41 @@ export const mockApi: ApiClient = {
       if (recoveryProof.kind !== "legacyEnrollment") {
         throw new Error("旧用户需要先设置恢复问题");
       }
-      appAccessRecoveryAnswer = normalizeRecoveryAnswer(recoveryProof.recovery.answer);
-      appAccess = { ...appAccess, recoveryQuestion: recoveryProof.recovery.question.trim() };
+      mockStore.appAccessRecoveryAnswer = normalizeRecoveryAnswer(recoveryProof.recovery.answer);
+      mockStore.appAccess = {
+        ...mockStore.appAccess,
+        recoveryQuestion: recoveryProof.recovery.question.trim(),
+      };
     }
-    appAccessPassword = newPassword;
-    appAccess = { ...appAccess, initialized: true, unlocked: true };
-    return structuredClone(appAccess);
+    mockStore.appAccessPassword = newPassword;
+    mockStore.appAccess = { ...mockStore.appAccess, initialized: true, unlocked: true };
+    return structuredClone(mockStore.appAccess);
   },
   async lockAppAccess() {
-    appAccess = { ...appAccess, unlocked: false };
-    return structuredClone(appAccess);
+    mockStore.appAccess = { ...mockStore.appAccess, unlocked: false };
+    mockStore.excelPreviewToken = null;
+    mockStore.excelPreviewTokenExpiresAt = null;
+    return structuredClone(mockStore.appAccess);
   },
   async setAppAccessRecovery(currentPassword, recovery) {
-    if (!appAccess.unlocked) throw new Error("应用尚未解锁");
-    if (appAccessPassword !== currentPassword) throw new Error("当前入口密码不正确");
-    appAccessRecoveryAnswer = normalizeRecoveryAnswer(recovery.answer);
-    appAccess = { ...appAccess, recoveryQuestion: recovery.question.trim() };
-    return structuredClone(appAccess);
+    if (!mockStore.appAccess.unlocked) throw new Error("应用尚未解锁");
+    if (mockStore.appAccessPassword !== currentPassword) {
+      throw new Error("当前入口密码不正确");
+    }
+    mockStore.appAccessRecoveryAnswer = normalizeRecoveryAnswer(recovery.answer);
+    mockStore.appAccess = { ...mockStore.appAccess, recoveryQuestion: recovery.question.trim() };
+    return structuredClone(mockStore.appAccess);
   },
   async migrateLegacyCredentials(password, recovery) {
     if (!password) throw new Error("原主密码不能为空");
-    const pendingCount = appAccess.legacyMigrationPendingCount;
+    const pendingCount = mockStore.appAccess.legacyMigrationPendingCount;
     if (pendingCount === 0) {
       return { migratedCount: 0, missingCount: 0, pendingCount: 0 };
     }
-    if (appAccess.initialized && !appAccess.unlocked) {
+    if (mockStore.appAccess.initialized && !mockStore.appAccess.unlocked) {
       throw new Error("应用已锁定，请先输入入口密码");
     }
-    if (!appAccess.initialized) {
+    if (!mockStore.appAccess.initialized) {
       if (!recovery) throw new Error("首次迁移入口密码时必须设置恢复问题");
       const question = recovery.question.trim();
       const answer = normalizeRecoveryAnswer(recovery.answer);
@@ -929,16 +877,16 @@ export const mockApi: ApiClient = {
       ) {
         throw new Error("请完整填写2到100个字符的恢复问题和答案");
       }
-      appAccessPassword = password;
-      appAccessRecoveryAnswer = normalizeRecoveryAnswer(recovery.answer);
-      appAccess = {
-        ...appAccess,
+      mockStore.appAccessPassword = password;
+      mockStore.appAccessRecoveryAnswer = normalizeRecoveryAnswer(recovery.answer);
+      mockStore.appAccess = {
+        ...mockStore.appAccess,
         initialized: true,
         unlocked: true,
         recoveryQuestion: question,
       };
     }
-    appAccess = { ...appAccess, legacyMigrationPendingCount: 0 };
+    mockStore.appAccess = { ...mockStore.appAccess, legacyMigrationPendingCount: 0 };
     return { migratedCount: pendingCount, missingCount: 0, pendingCount: 0 };
   },
   async copyAccountPassword(id) {
@@ -949,21 +897,21 @@ export const mockApi: ApiClient = {
     }
   },
 
-  async getAppAppearance() {
-    return { fontFamily: settings.fontFamily, baseFontSize: settings.baseFontSize };
-  },
-
   async getDashboardSummary(date) {
-    const target = parseISO(date);
-    const weekFrom = format(startOfWeek(target, { weekStartsOn: 1 }), "yyyy-MM-dd");
-    const weekTo = format(endOfWeek(target, { weekStartsOn: 1 }), "yyyy-MM-dd");
+    const weekFrom = startOfChinaWeek(date);
+    const weekTo = endOfChinaWeek(date);
     const settled = (items: Appointment[]) =>
       items
         .filter((item) => item.serviceStatus !== "cancelled" && item.settlementStatus === "settled")
-        .reduce((sum, item) => sum + (item.amountMinor ?? 0), 0);
+        .reduce(
+          (sum, item) =>
+            checkedSafeIntegerAdd(sum, item.amountMinor ?? 0, "报表金额合计超出安全整数范围"),
+          0,
+        );
     const now = new Date();
-    const applyTimeCutoff = date === format(now, "yyyy-MM-dd");
-    const upcoming = appointments
+    const applyTimeCutoff = date === chinaDateKey(now);
+    const nowCivil = chinaCivilNowValue(now);
+    const upcoming = mockStore.appointments
       .filter((item) => item.serviceDate >= date)
       .filter((item) => item.serviceStatus === "scheduled" || item.serviceStatus === "in_progress")
       .filter(
@@ -972,7 +920,7 @@ export const mockApi: ApiClient = {
           !applyTimeCutoff ||
           item.serviceDate > date ||
           !item.startsAt ||
-          new Date(item.startsAt) >= now,
+          civilDateTimeValue(item.startsAt) >= nowCivil,
       )
       .sort((a, b) => {
         if (a.serviceStatus !== b.serviceStatus) {
@@ -986,11 +934,15 @@ export const mockApi: ApiClient = {
         return a.startsAt.localeCompare(b.startsAt);
       })[0];
     return {
-      todaySettledMinor: settled(appointments.filter((item) => item.serviceDate === date)),
-      weekSettledMinor: settled(
-        appointments.filter((item) => item.serviceDate >= weekFrom && item.serviceDate <= weekTo),
+      todaySettledMinor: settled(
+        mockStore.appointments.filter((item) => item.serviceDate === date),
       ),
-      pendingCount: appointments.filter(
+      weekSettledMinor: settled(
+        mockStore.appointments.filter(
+          (item) => item.serviceDate >= weekFrom && item.serviceDate <= weekTo,
+        ),
+      ),
+      pendingCount: mockStore.appointments.filter(
         (item) =>
           item.mode === "business" &&
           item.serviceStatus === "completed" &&
@@ -1003,10 +955,10 @@ export const mockApi: ApiClient = {
     if ((!from && to) || (from && !to)) {
       throw new Error("开始日期和结束日期必须同时填写，或同时留空查看全部记录");
     }
-    const reportable = appointments.filter(
+    const reportable = mockStore.appointments.filter(
       (item) => item.mode === "business" && item.serviceStatus !== "cancelled",
     );
-    const today = format(new Date(), "yyyy-MM-dd");
+    const today = chinaDateKey();
     const incomeDates = reportable
       .filter(
         (item) =>
@@ -1030,11 +982,19 @@ export const mockApi: ApiClient = {
       point.appointmentCount += 1;
       point.businessHours += appointmentHours(item);
       if (item.settlementStatus === "settled") {
-        point.settledMinor += item.amountMinor ?? 0;
         const amountMinor = item.amountMinor ?? 0;
+        point.settledMinor = checkedSafeIntegerAdd(
+          point.settledMinor,
+          amountMinor,
+          "报表金额合计超出安全整数范围",
+        );
         const method = item.paymentMethod?.trim() || "未填写";
         const payment = paymentMap.get(method) ?? { amountMinor: 0, appointmentCount: 0 };
-        payment.amountMinor += amountMinor;
+        payment.amountMinor = checkedSafeIntegerAdd(
+          payment.amountMinor,
+          amountMinor,
+          "报表金额合计超出安全整数范围",
+        );
         payment.appointmentCount += 1;
         paymentMap.set(method, payment);
         const contactName = revenueContactName(item.contactName);
@@ -1042,18 +1002,34 @@ export const mockApi: ApiClient = {
           amountMinor: 0,
           appointmentCount: 0,
         };
-        contact.amountMinor += amountMinor;
+        contact.amountMinor = checkedSafeIntegerAdd(
+          contact.amountMinor,
+          amountMinor,
+          "报表金额合计超出安全整数范围",
+        );
         contact.appointmentCount += 1;
         contactMap.set(contactName, contact);
       } else if (item.settlementStatus === "unsettled") {
-        point.unsettledMinor += item.amountMinor ?? 0;
+        point.unsettledMinor = checkedSafeIntegerAdd(
+          point.unsettledMinor,
+          item.amountMinor ?? 0,
+          "报表金额合计超出安全整数范围",
+        );
         if (item.serviceStatus === "completed") point.pendingCount += 1;
       }
       pointsMap.set(key, point);
     }
     const points = [...pointsMap.values()].sort((a, b) => a.period.localeCompare(b.period));
-    const settledMinor = points.reduce((sum, point) => sum + point.settledMinor, 0);
-    const unsettledMinor = points.reduce((sum, point) => sum + point.unsettledMinor, 0);
+    const settledMinor = points.reduce(
+      (sum, point) =>
+        checkedSafeIntegerAdd(sum, point.settledMinor, "报表金额合计超出安全整数范围"),
+      0,
+    );
+    const unsettledMinor = points.reduce(
+      (sum, point) =>
+        checkedSafeIntegerAdd(sum, point.unsettledMinor, "报表金额合计超出安全整数范围"),
+      0,
+    );
     const pendingCount = points.reduce((sum, point) => sum + point.pendingCount, 0);
     const businessHours = points.reduce((sum, point) => sum + point.businessHours, 0);
     return {
@@ -1063,7 +1039,14 @@ export const mockApi: ApiClient = {
       unsettledMinor,
       pendingCount,
       businessHours,
-      averageHourlyMinor: businessHours > 0 ? Math.round(settledMinor / businessHours) : 0,
+      averageHourlyMinor:
+        businessHours > 0
+          ? checkedSafeIntegerAdd(
+              0,
+              Math.round(settledMinor / businessHours),
+              "报表平均时薪超出安全整数范围",
+            )
+          : 0,
       appointmentCount: scoped.length,
       completedCount: scoped.filter((item) => item.serviceStatus === "completed").length,
       paymentMethods: [...paymentMap.entries()]
@@ -1081,125 +1064,6 @@ export const mockApi: ApiClient = {
       points,
     };
   },
-  async previewExcelImport(path, baseYear) {
-    return {
-      sourcePath: path,
-      baseYear,
-      appointmentCount: 357,
-      profileCount: 22,
-      unmatchedProfileCount: 0,
-      crossMidnightCount: 50,
-      yyChannelCount: 64,
-      passwordConflictCount: 1,
-      skippedCount: 0,
-      warningCount: 2,
-      warnings: [
-        "1个同名账号存在多个历史密码，账号档案和各预约将分别保留各自密码",
-        "50条跨午夜记录已按次日结束处理",
-      ],
-      previewToken: makeId("preview"),
-    };
-  },
-  async commitExcelImport(_previewToken, selection) {
-    if (!selection.appointments && !selection.accounts) {
-      throw new Error("请至少选择导入预约或账号");
-    }
-    return {
-      importedAppointments: selection.appointments ? 357 : 0,
-      importedProfiles: selection.accounts ? 22 : 0,
-      skippedDuplicates: 0,
-      skippedAppointmentDuplicates: 0,
-      skippedProfileDuplicates: 0,
-      warnings: [],
-    };
-  },
-  async createBackup(destination) {
-    const path =
-      destination ?? "C:\\Users\\14620\\Documents\\TimeKeeper\\backups\\timekeeper-demo.tkbackup";
-    backupSnapshot = {
-      appointments: structuredClone(appointments),
-      accounts: structuredClone(accounts),
-      settings: structuredClone(settings),
-      appAccess: {
-        initialized: appAccess.initialized,
-        legacyMigrationPendingCount: appAccess.legacyMigrationPendingCount,
-        recoveryQuestion: appAccess.recoveryQuestion,
-      },
-      appAccessPassword,
-      appAccessRecoveryAnswer,
-    };
-    lastBackupPath = path;
-    return {
-      path,
-      createdAt: new Date().toISOString(),
-      sizeBytes: 842_136,
-    };
-  },
-  async restoreBackup(path) {
-    if (!backupSnapshot || path !== lastBackupPath) {
-      throw new Error("未找到可恢复的演示备份，请先创建备份");
-    }
-    storeAccountTableColumnWidths(backupSnapshot.settings.accountTableColumnWidths);
-    storeAppointmentTableColumnWidths(backupSnapshot.settings.appointmentTableColumnWidths);
-    appointments = structuredClone(backupSnapshot.appointments);
-    accounts = structuredClone(backupSnapshot.accounts);
-    settings = structuredClone(backupSnapshot.settings);
-    appAccess = { ...structuredClone(backupSnapshot.appAccess), unlocked: false };
-    appAccessPassword = backupSnapshot.appAccessPassword;
-    appAccessRecoveryAnswer = backupSnapshot.appAccessRecoveryAnswer;
-  },
-  async getSettings() {
-    return structuredClone(settings);
-  },
-  async updateSettings(nextSettings) {
-    if (!accountTableColumnWidthsAreValid(nextSettings.accountTableColumnWidths)) {
-      throw new Error("账号表格列宽超出允许范围");
-    }
-    if (!appointmentTableColumnWidthsAreValid(nextSettings.appointmentTableColumnWidths)) {
-      throw new Error("预约表格列宽超出允许范围");
-    }
-    const serverUrlError = validateAccountRoleDataServerUrl(nextSettings.accountRoleDataServerUrl);
-    if (serverUrlError) throw new Error(serverUrlError);
-    storeAccountTableColumnWidths(nextSettings.accountTableColumnWidths);
-    storeAppointmentTableColumnWidths(nextSettings.appointmentTableColumnWidths);
-    settings = {
-      ...nextSettings,
-      accountTableColumnWidths: { ...nextSettings.accountTableColumnWidths },
-      appointmentTableColumnWidths: { ...nextSettings.appointmentTableColumnWidths },
-      accountRoleDataServerUrl: nextSettings.accountRoleDataServerUrl.trim(),
-      accountRoleDataApiKey: nextSettings.accountRoleDataApiKey.trim(),
-    };
-    return structuredClone(settings);
-  },
-  async updateAccountTableColumnWidths(widths) {
-    if (!accountTableColumnWidthsAreValid(widths)) {
-      throw new Error("账号表格列宽超出允许范围");
-    }
-    settings.accountTableColumnWidths = structuredClone(widths);
-    storeAccountTableColumnWidths(widths);
-    return structuredClone(settings.accountTableColumnWidths);
-  },
-  async updateAppointmentTableColumnWidths(widths) {
-    if (!appointmentTableColumnWidthsAreValid(widths)) {
-      throw new Error("预约表格列宽超出允许范围");
-    }
-    settings.appointmentTableColumnWidths = structuredClone(widths);
-    storeAppointmentTableColumnWidths(widths);
-    return structuredClone(settings.appointmentTableColumnWidths);
-  },
-  async selectExcelFile() {
-    return "C:\\Users\\14620\\Desktop\\account.xlsm";
-  },
-  async selectBackupDestination() {
-    return "C:\\Users\\14620\\Documents\\TimeKeeper\\TimeKeeper-demo.tkbackup";
-  },
-  async selectBackupFile() {
-    return (
-      lastBackupPath ??
-      "C:\\Users\\14620\\Documents\\TimeKeeper\\backups\\timekeeper-latest.tkbackup"
-    );
-  },
-  async requestNotificationPermission() {
-    return "granted";
-  },
+  ...createMockSettingsApi(mockStore),
+  ...createMockImportBackupApi(mockStore, makeId),
 };

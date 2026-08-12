@@ -3,7 +3,10 @@
 import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 import type { Appointment } from "../../types/domain";
-import { DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS } from "../../utils/appointmentTableColumns";
+import {
+  APPOINTMENT_TABLE_ACTIONS_WIDTH,
+  DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS,
+} from "../../utils/appointmentTableColumns";
 import AppointmentTable from "./AppointmentTable.vue";
 
 function appointment(withAccount = true, overrides: Partial<Appointment> = {}): Appointment {
@@ -159,6 +162,10 @@ describe("AppointmentTable", () => {
     const settlementButton = wrapper.get('button[aria-label="填写测试联系人 的结算金额"]');
     expect(settlementButton.text()).toBe("待结算");
     expect(wrapper.findAll(".settlement-status-button")).toHaveLength(1);
+    const statusCells = wrapper.findAll("tbody tr").map((row) => row.findAll("td")[8]!);
+    expect(statusCells[0]!.text()).toBe("待结算");
+    expect(statusCells[1]!.text()).toBe("已预约");
+    expect(statusCells.every((cell) => cell.findAll(".badge").length <= 1)).toBe(true);
 
     await settlementButton.trigger("click");
     expect(wrapper.emitted("settle")?.[0]?.[0]).toMatchObject({
@@ -273,6 +280,9 @@ describe("AppointmentTable", () => {
     });
 
     expect(wrapper.findAll(".column-resizer")).toHaveLength(10);
+    expect(wrapper.get("col:last-child").attributes("style")).toContain(
+      `width: ${APPOINTMENT_TABLE_ACTIONS_WIDTH}px`,
+    );
     await wrapper.get('button[aria-label="调整语音列宽"]').trigger("keydown", {
       key: "ArrowRight",
     });

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { format } from "date-fns";
-import type { AppointmentInput } from "../types/domain";
+import type { AccountProfileCredentialInput, AppointmentInput } from "../types/domain";
 import { appointmentToInput } from "../utils/appointment";
 import { DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS } from "../utils/accountTableColumns";
 import { DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS } from "../utils/appointmentTableColumns";
@@ -59,10 +59,39 @@ describe("browser mock API", () => {
     expect(result.importedProfiles).toBe(0);
     await expect(
       mockApi.commitExcelImport(preview.previewToken, {
+        appointments: true,
+        accounts: false,
+      }),
+    ).rejects.toThrow("预览已失效");
+
+    const replacement = await mockApi.previewExcelImport("C:\\demo\\account.xlsm", 2026);
+    await expect(
+      mockApi.commitExcelImport(replacement.previewToken, {
         appointments: false,
         accounts: false,
       }),
     ).rejects.toThrow("至少选择");
+
+    const stale = await mockApi.previewExcelImport("C:\\demo\\old.xlsm", 2026);
+    const active = await mockApi.previewExcelImport("C:\\demo\\new.xlsm", 2026);
+    await expect(
+      mockApi.commitExcelImport(stale.previewToken, { appointments: true, accounts: true }),
+    ).rejects.toThrow("预览已失效");
+    await expect(
+      mockApi.commitExcelImport(active.previewToken, { appointments: true, accounts: true }),
+    ).resolves.toMatchObject({ importedAppointments: 357, importedProfiles: 22 });
+  });
+
+  it("expires the single Excel preview token after thirty minutes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T08:00:00Z"));
+    const preview = await mockApi.previewExcelImport("C:\\demo\\account.xlsm", 2026);
+
+    vi.advanceTimersByTime(30 * 60_000);
+
+    await expect(
+      mockApi.commitExcelImport(preview.previewToken, { appointments: true, accounts: true }),
+    ).rejects.toThrow("预览已失效");
   });
 
   it("refreshes role data deterministically without a network request", async () => {
@@ -102,6 +131,44 @@ describe("browser mock API", () => {
       "请先配置角色数据 API 密钥",
     );
     await mockApi.updateSettings(previousSettings);
+  });
+
+  it("caps role refresh batches and reports score overflow without mutating the account", async () => {
+    const previousSettings = await mockApi.getSettings();
+    await mockApi.updateSettings({ ...previousSettings, accountRoleDataApiKey: "demo-key" });
+    const profile = await mockApi.createAccountProfile({
+      accountName: `overflow-role-${Date.now()}`,
+      credential: { kind: "replace", password: "score-secret" },
+      server: "测试服",
+      characterName: "溢出角色",
+      currentScore: Number.MAX_SAFE_INTEGER,
+      highestScore: Number.MAX_SAFE_INTEGER,
+    });
+
+    try {
+      await expect(
+        mockApi.refreshAccountProfileRoleData(
+          Array.from({ length: 1_001 }, (_, index) => `account-${index}`),
+        ),
+      ).rejects.toThrow("单次最多更新 1000 个账号");
+
+      const result = await mockApi.refreshAccountProfileRoleData([profile.id]);
+      expect(result).toMatchObject({ updatedCount: 0, failedCount: 1 });
+      expect(result.items[0]).toMatchObject({
+        accountId: profile.id,
+        status: "failed",
+        message: "角色数据分数超出 JavaScript 安全整数范围",
+      });
+      await expect(mockApi.getAccountProfile(profile.id)).resolves.toMatchObject({
+        gearScore: null,
+        currentScore: Number.MAX_SAFE_INTEGER,
+        highestScore: Number.MAX_SAFE_INTEGER,
+        weeklyWins: null,
+      });
+    } finally {
+      await mockApi.deleteAccountProfile(profile.id);
+      await mockApi.updateSettings(previousSettings);
+    }
   });
 
   it("copies a profile character name through the demo client", async () => {
@@ -210,6 +277,25 @@ describe("browser mock API", () => {
     }
   });
 
+  it("validates the default reminder minute boundaries before mutating demo settings", async () => {
+    const previousSettings = await mockApi.getSettings();
+
+    for (const defaultReminderMinutes of [0, 1_440]) {
+      await expect(
+        mockApi.updateSettings({ ...previousSettings, defaultReminderMinutes }),
+      ).resolves.toMatchObject({ defaultReminderMinutes });
+    }
+
+    for (const defaultReminderMinutes of [-1, 1.5, 1_441, Number.NaN]) {
+      await expect(
+        mockApi.updateSettings({ ...previousSettings, defaultReminderMinutes }),
+      ).rejects.toThrow("默认提醒时间必须是0到1440分钟之间的整数");
+    }
+    expect((await mockApi.getSettings()).defaultReminderMinutes).toBe(1_440);
+
+    await mockApi.updateSettings(previousSettings);
+  });
+
   it("keeps conflicts, service completion, settlement, and revenue separate", async () => {
     const date = "2099-08-01";
     const first = await mockApi.createAppointment(
@@ -257,11 +343,11 @@ describe("browser mock API", () => {
         settlementStatus: "settled",
         amountMinor: null,
       }),
-    ).rejects.toThrow("已完成预约必须填写金额");
+    ).rejects.toThrow("已结算预约必须填写金额");
 
     await expect(
       mockApi.createAppointment(businessInput("2099-08-04", "13:00", "14:00", "负金额", -1)),
-    ).rejects.toThrow("金额不能为负数");
+    ).rejects.toThrow("金额必须是安全范围内的非负整数分");
   });
 
   it("accepts zero for both direct completion and the settlement command", async () => {
@@ -277,7 +363,7 @@ describe("browser mock API", () => {
 
     try {
       expect(direct.appointment).toMatchObject({
-        serviceStatus: "completed",
+        serviceStatus: "scheduled",
         settlementStatus: "settled",
         amountMinor: 0,
       });
@@ -296,6 +382,35 @@ describe("browser mock API", () => {
       await mockApi.deleteAppointments({
         kind: "explicit",
         ids: [direct.appointment.id, pending.appointment.id],
+      });
+    }
+  });
+
+  it("rejects unsafe dashboard and revenue amount aggregation", async () => {
+    const date = "2099-12-28";
+    const createdIds: string[] = [];
+    try {
+      for (const [startTime, endTime] of [
+        ["10:00", "11:00"],
+        ["12:00", "13:00"],
+      ] as const) {
+        const created = await mockApi.createAppointment({
+          ...businessInput(date, startTime, endTime, "金额溢出回归", Number.MAX_SAFE_INTEGER),
+          settlementStatus: "settled",
+        });
+        createdIds.push(created.appointment.id);
+      }
+
+      await expect(mockApi.getDashboardSummary(date)).rejects.toThrow(
+        "报表金额合计超出安全整数范围",
+      );
+      await expect(mockApi.getRevenueSummary(date, date, "day")).rejects.toThrow(
+        "报表金额合计超出安全整数范围",
+      );
+    } finally {
+      await mockApi.deleteAppointments({
+        kind: "explicit",
+        ids: createdIds,
       });
     }
   });
@@ -435,11 +550,9 @@ describe("browser mock API", () => {
         progressStatus: "completed",
       });
       expect(completed).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: settled.appointment.id }),
-          expect.objectContaining({ id: entertainment.appointment.id }),
-        ]),
+        expect.arrayContaining([expect.objectContaining({ id: entertainment.appointment.id })]),
       );
+      expect(completed.map((item) => item.id)).not.toContain(settled.appointment.id);
       expect(completed.some((item) => item.id === pending.appointment.id)).toBe(false);
     } finally {
       await mockApi.deleteAppointments({ kind: "explicit", ids: createdIds });
@@ -519,10 +632,110 @@ describe("browser mock API", () => {
     expect((await mockApi.getDashboardSummary(date)).todaySettledMinor).toBe(0);
   });
 
+  it("applies keep, replace and remove account credential actions explicitly", async () => {
+    const suffix = Date.now();
+    const created = await mockApi.createAccountProfile({
+      accountName: `credential-account-${suffix}`,
+      credential: { kind: "replace", password: "initial-secret" },
+    });
+
+    await expect(
+      mockApi.updateAccountProfile(created.id, {
+        accountName: created.accountName,
+        credential: { kind: "replace", password: "" },
+      }),
+    ).rejects.toThrow("新密码不能为空");
+    await expect(
+      mockApi.updateAccountProfile(created.id, {
+        accountName: created.accountName,
+        credential: { kind: "keep" },
+      }),
+    ).resolves.toMatchObject({ password: "initial-secret" });
+    await expect(
+      mockApi.updateAccountProfile(created.id, {
+        accountName: created.accountName,
+        credential: { kind: "replace", password: "replacement-secret" },
+      }),
+    ).resolves.toMatchObject({ password: "replacement-secret" });
+    await expect(
+      mockApi.updateAccountProfile(created.id, {
+        accountName: created.accountName,
+        credential: { kind: "remove" },
+      }),
+    ).resolves.toMatchObject({ password: null });
+
+    await mockApi.deleteAccountProfile(created.id);
+  });
+
+  it("requires a non-empty replacement credential when creating an account", async () => {
+    const invalidCredentials: AccountProfileCredentialInput[] = [
+      { kind: "keep" },
+      { kind: "remove" },
+      { kind: "replace", password: "" },
+    ];
+
+    for (const [index, credential] of invalidCredentials.entries()) {
+      await expect(
+        mockApi.createAccountProfile({
+          accountName: `invalid-credential-${Date.now()}-${index}`,
+          credential,
+        }),
+      ).rejects.toThrow("新建账号必须填写密码");
+    }
+  });
+
+  it("validates account scores before mutating demo data", async () => {
+    const suffix = Date.now();
+    await expect(
+      mockApi.createAccountProfile({
+        accountName: `invalid-score-account-${suffix}`,
+        credential: { kind: "replace", password: "score-secret" },
+        currentScore: -1,
+      }),
+    ).rejects.toThrow("当前分必须是 0 或更大的有效整数");
+
+    const created = await mockApi.createAccountProfile({
+      accountName: `score-account-${suffix}`,
+      credential: { kind: "replace", password: "score-secret" },
+      currentScore: 0,
+      highestScore: Number.MAX_SAFE_INTEGER,
+    });
+    expect(created).toMatchObject({ currentScore: 0, highestScore: Number.MAX_SAFE_INTEGER });
+
+    await expect(
+      mockApi.updateAccountProfile(created.id, {
+        accountName: created.accountName,
+        credential: { kind: "keep" },
+        currentScore: -1,
+      }),
+    ).rejects.toThrow("当前分必须是 0 或更大的有效整数");
+    await expect(
+      mockApi.updateAccountProfile(created.id, {
+        accountName: created.accountName,
+        credential: { kind: "keep" },
+        highestScore: 1.5,
+      }),
+    ).rejects.toThrow("最高分必须是 0 或更大的有效整数");
+    await expect(
+      mockApi.updateAccountProfile(created.id, {
+        accountName: created.accountName,
+        credential: { kind: "keep" },
+        currentScore: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).rejects.toThrow("当前分必须是 0 或更大的有效整数");
+    await expect(mockApi.getAccountProfile(created.id)).resolves.toMatchObject({
+      currentScore: 0,
+      highestScore: Number.MAX_SAFE_INTEGER,
+      password: "score-secret",
+    });
+
+    await mockApi.deleteAccountProfile(created.id);
+  });
+
   it("keeps an appointment account independent after its source profile is deleted", async () => {
     const account = await mockApi.createAccountProfile({
       accountName: `snapshot-account-${Date.now()}`,
-      password: "snapshot-secret",
+      credential: { kind: "replace", password: "snapshot-secret" },
       contactName: "历史联系人",
       server: "历史区服",
       characterName: "历史角色",
@@ -552,11 +765,11 @@ describe("browser mock API", () => {
     const suffix = Date.now();
     const first = await mockApi.createAccountProfile({
       accountName: `batch-account-a-${suffix}`,
-      password: "batch-secret-a",
+      credential: { kind: "replace", password: "batch-secret-a" },
     });
     const second = await mockApi.createAccountProfile({
       accountName: `batch-account-b-${suffix}`,
-      password: "batch-secret-b",
+      credential: { kind: "replace", password: "batch-secret-b" },
     });
     const linked = await mockApi.createAppointment({
       ...businessInput("2099-08-07", "10:00", "11:00", "批量账号删除", 6_600),
@@ -749,10 +962,26 @@ describe("browser mock API", () => {
       ...businessInput("2099-08-10", "11:00", "12:00", "备注搜索回归", 1_000),
       notes: `赛季末冲分-${suffix}`,
     });
+    const characterName = `快照角色-${suffix}`;
+    const character = await mockApi.createAppointment({
+      ...businessInput("2099-08-10", "11:30", "12:30", "角色名搜索回归", 1_000),
+      account: {
+        kind: "snapshot",
+        source: "profile",
+        characterName,
+        details: { accountName: `快照账号-${suffix}` },
+        credential: { kind: "none" },
+      },
+    });
     const unrelated = await mockApi.createAppointment(
       businessInput("2099-08-10", "12:00", "13:00", "无关预约", 1_000),
     );
-    const ids = [yy.appointment.id, notes.appointment.id, unrelated.appointment.id];
+    const ids = [
+      yy.appointment.id,
+      notes.appointment.id,
+      character.appointment.id,
+      unrelated.appointment.id,
+    ];
 
     try {
       const yyPage = await mockApi.listAppointmentPage({ query: channel.slice(2, -2) });
@@ -762,6 +991,10 @@ describe("browser mock API", () => {
       const notesPage = await mockApi.listAppointmentPage({ query: `末冲分-${suffix}` });
       expect(notesPage.items.map((item) => item.id)).toContain(notes.appointment.id);
       expect(notesPage.items.map((item) => item.id)).not.toContain(unrelated.appointment.id);
+
+      const characterPage = await mockApi.listAppointmentPage({ query: characterName.slice(2) });
+      expect(characterPage.items.map((item) => item.id)).toContain(character.appointment.id);
+      expect(characterPage.items.map((item) => item.id)).not.toContain(unrelated.appointment.id);
     } finally {
       await mockApi.deleteAppointments({ kind: "explicit", ids });
     }

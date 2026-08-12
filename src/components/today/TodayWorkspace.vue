@@ -1,47 +1,66 @@
 <script setup lang="ts">
 import { CalendarClock, CircleDollarSign, Clock3, WalletCards } from "@lucide/vue";
-import {
-  addDays,
-  differenceInMinutes,
-  endOfWeek,
-  format,
-  isSameDay,
-  parseISO,
-  startOfWeek,
-} from "date-fns";
-import { zhCN } from "date-fns/locale";
 import { computed, onMounted, onUnmounted, shallowRef, watch } from "vue";
 import { useRouter } from "vue-router";
 import { api, errorMessage } from "../../api/client";
 import { useAppointments } from "../../composables/useAppointments";
 import { useDashboard } from "../../composables/useDashboard";
 import { useUiStore } from "../../stores/ui";
+import { useOperationStore } from "../../stores/operations";
 import type { Appointment, ServiceStatus } from "../../types/domain";
 import { appointmentFiltersToQuery } from "../../utils/appointmentRouteQuery";
 import { findNextScheduledAppointment, sortAppointmentsByStartTime } from "../../utils/appointment";
+import {
+  addDateKeyDays,
+  chinaDateKey,
+  civilDifferenceInMinutes,
+  dateKeyWeekday,
+  endOfChinaWeek,
+  formatChinaDate,
+  parseDateKey,
+  startOfChinaWeek,
+} from "../../utils/chinaDateTime";
 import { formatCurrency, formatDateHeading, formatTimeRange } from "../../utils/formatters";
 import TodayAppointmentList from "./TodayAppointmentList.vue";
 import WeekSchedule from "./WeekSchedule.vue";
 
 const now = shallowRef(new Date());
 const router = useRouter();
-const todayKey = computed(() => format(now.value, "yyyy-MM-dd"));
+const todayKey = computed(() => chinaDateKey(now.value));
 const selectedDateKey = shallowRef(todayKey.value);
-const weekStart = computed(() => startOfWeek(now.value, { weekStartsOn: 1 }));
-const weekEnd = computed(() => endOfWeek(now.value, { weekStartsOn: 1 }));
-const currentMonthLabel = computed(() => format(now.value, "yyyy · MM"));
+const weekStartKey = computed(() => startOfChinaWeek(todayKey.value));
+const weekEndKey = computed(() => endOfChinaWeek(todayKey.value));
+const currentMonthLabel = computed(() => {
+  const parts = parseDateKey(todayKey.value);
+  return parts ? `${parts.year} · ${String(parts.month).padStart(2, "0")}` : todayKey.value;
+});
 const ui = useUiStore();
+const operations = useOperationStore();
 const {
   filters,
   items,
   loading,
   error,
+  stale,
+  actionsDisabled,
+  resolvedKey,
   load: loadAppointments,
 } = useAppointments({
-  from: format(weekStart.value, "yyyy-MM-dd"),
-  to: format(weekEnd.value, "yyyy-MM-dd"),
+  from: weekStartKey.value,
+  to: weekEndKey.value,
 });
 const dashboard = useDashboard();
+const resultActionsDisabled = computed(
+  () => actionsDisabled.value || dashboard.actionsDisabled.value || operations.busy,
+);
+const staleDataLabel = computed(() => {
+  const appointmentRange = resolvedKey.value;
+  const dashboardDate = dashboard.resolvedKey.value;
+  if (appointmentRange?.from && appointmentRange.to) {
+    return `${appointmentRange.from} 至 ${appointmentRange.to}${dashboardDate ? `、汇总日 ${dashboardDate}` : ""}`;
+  }
+  return dashboardDate ? `汇总日 ${dashboardDate}` : "上一请求";
+});
 let clockTimer: ReturnType<typeof globalThis.setInterval> | undefined;
 
 const todayAppointments = computed(() =>
@@ -65,7 +84,7 @@ const selectedListKicker = computed(() => (selectedDateIsToday.value ? "今日�
 const selectedListHeading = computed(() =>
   selectedDateIsToday.value
     ? "今日预约"
-    : `${format(parseISO(selectedDateKey.value), "M月d日 EEEE", { locale: zhCN })}预约`,
+    : `${formatChinaDate(selectedDateKey.value, { weekday: true })}预约`,
 );
 const nextTodayAppointmentId = computed(
   () => findNextScheduledAppointment(todayAppointments.value, now.value)?.id ?? null,
@@ -77,13 +96,13 @@ const nextSelectedAppointmentId = computed(() => {
 
 const weekDays = computed(() =>
   Array.from({ length: 7 }, (_, index) => {
-    const date = addDays(weekStart.value, index);
-    const dateKey = format(date, "yyyy-MM-dd");
+    const dateKey = addDateKeyDays(weekStartKey.value, index);
+    const parts = parseDateKey(dateKey);
     return {
       date: dateKey,
-      weekday: format(date, "EEE", { locale: zhCN }),
-      dayNumber: format(date, "d"),
-      isToday: isSameDay(date, now.value),
+      weekday: dateKeyWeekday(dateKey, true),
+      dayNumber: parts ? String(parts.day) : "",
+      isToday: dateKey === todayKey.value,
       appointments: sortAppointmentsByStartTime(
         items.value.filter((item) => item.serviceDate === dateKey),
       ),
@@ -96,7 +115,7 @@ const nextCountdown = computed(() => {
   if (!next) return "暂无待开始预约";
   if (next.serviceStatus === "in_progress") return "进行中";
   if (!next.startsAt) return "待定时段";
-  const minutes = differenceInMinutes(parseISO(next.startsAt), now.value);
+  const minutes = civilDifferenceInMinutes(next.startsAt, now.value);
   if (minutes <= 0) return "即将开始";
   if (minutes < 60) return `${minutes}分钟后`;
   if (minutes < 24 * 60) {
@@ -112,6 +131,7 @@ async function refresh(): Promise<void> {
 }
 
 async function changeStatus(appointment: Appointment, status: ServiceStatus): Promise<void> {
+  if (resultActionsDisabled.value) return;
   try {
     await api.setAppointmentServiceStatus(appointment.id, status);
     ui.notify(
@@ -148,6 +168,7 @@ async function copyVoiceChannel(appointment: Appointment): Promise<void> {
 }
 
 async function removeAppointment(appointment: Appointment): Promise<void> {
+  if (resultActionsDisabled.value) return;
   if (!globalThis.confirm(`确定永久删除 ${appointment.contactName} 的这条预约吗？`)) return;
   try {
     await api.deleteAppointment(appointment.id);
@@ -185,8 +206,8 @@ watch(
 
 watch(todayKey, () => {
   selectedDateKey.value = todayKey.value;
-  filters.from = format(weekStart.value, "yyyy-MM-dd");
-  filters.to = format(weekEnd.value, "yyyy-MM-dd");
+  filters.from = weekStartKey.value;
+  filters.to = weekEndKey.value;
   void refresh();
 });
 
@@ -207,6 +228,9 @@ onUnmounted(() => {
     <div v-if="loading || dashboard.loading.value" class="loading-line" />
     <div v-if="error || dashboard.error.value" class="error-banner">
       {{ error || dashboard.error.value }}
+    </div>
+    <div v-if="stale || dashboard.stale.value" class="stale-banner" role="status">
+      当前保留的是 {{ staleDataLabel }} 的旧数据；刷新失败或尚未完成，编辑、删除和结算操作已暂停。
     </div>
 
     <section class="today-lead">
@@ -255,6 +279,7 @@ onUnmounted(() => {
         <button
           class="metric metric--pending"
           type="button"
+          :disabled="dashboard.actionsDisabled.value"
           aria-label="查看待结算预约"
           @click="openPendingAppointments"
         >
@@ -273,6 +298,7 @@ onUnmounted(() => {
       :days="weekDays"
       :next-appointment-id="nextTodayAppointmentId"
       :selected-date="selectedDateKey"
+      :interactions-disabled="resultActionsDisabled"
       @edit="ui.openEditAppointment"
       @create="ui.openCreateAppointment"
       @select-date="selectDate"
@@ -284,6 +310,7 @@ onUnmounted(() => {
       :next-appointment-id="nextSelectedAppointmentId"
       :kicker="selectedListKicker"
       :heading="selectedListHeading"
+      :interactions-disabled="resultActionsDisabled"
       @edit="ui.openEditAppointment"
       @settle="ui.openSettleAppointment"
       @change-status="changeStatus"
@@ -318,6 +345,20 @@ onUnmounted(() => {
   z-index: 4;
   top: 8px;
   right: 8px;
+}
+
+.stale-banner {
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  left: 8px;
+  max-width: min(640px, calc(100% - 16px));
+  padding: 8px 12px;
+  border: 1px solid var(--amber-border);
+  border-radius: var(--radius-sm, 8px);
+  color: #815414;
+  background: var(--amber-soft);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .today-lead {

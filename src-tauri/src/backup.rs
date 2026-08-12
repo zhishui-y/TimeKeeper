@@ -6,14 +6,15 @@ use std::{
     sync::Arc,
 };
 
-use chrono::{Days, Local, NaiveDate, NaiveDateTime, Utc};
+use chrono::{Days, Duration as ChronoDuration, NaiveDate, NaiveDateTime, Utc};
+use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{
     Connection, Row, SqliteConnection,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
-use tauri::{AppHandle, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use thiserror::Error;
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
@@ -21,7 +22,7 @@ use crate::{
     accounts::profile_from_row,
     app_access::{AppAccessState, is_supported_access_verifier},
     appointments::appointment_from_row,
-    db::MIGRATOR,
+    db::{JS_SAFE_INTEGER_MAX, MIGRATOR},
     models::{AppointmentMode, SettlementStatus, VoicePlatform},
     settings::{AppSettings, SettingsError, SettingsState},
     vault,
@@ -52,6 +53,19 @@ const REQUIRED_DATABASE_TABLES: [&str; 4] = [
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_ENTRY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const AUTOMATIC_BACKUP_INITIAL_DELAY_SECONDS: u64 = 60;
+const AUTOMATIC_BACKUP_RETRY_MINUTES: [u64; 4] = [1, 5, 30, 60];
+const AUTOMATIC_BACKUP_CHECK_INTERVAL_MINUTES: u64 = 60;
+const OPERATION_WARNING_EVENT: &str = "operation-warning";
+const MAX_REMINDER_MINUTES: i64 = 1_440;
+
+fn optional_safe_non_negative_integer_is_invalid(value: Option<i64>) -> bool {
+    value.is_some_and(|value| !(0..=JS_SAFE_INTEGER_MAX).contains(&value))
+}
+
+fn optional_reminder_minutes_is_invalid(value: Option<i64>) -> bool {
+    value.is_some_and(|value| !(0..=MAX_REMINDER_MINUTES).contains(&value))
+}
 
 #[derive(Clone, Copy)]
 struct RequiredColumn {
@@ -158,7 +172,19 @@ pub struct BackupResult {
 struct BackupManifest {
     format_version: u32,
     created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<BackupManifestKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    business_date: Option<String>,
     files: Vec<ManifestFile>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum BackupManifestKind {
+    Manual,
+    Automatic,
+    PreRestore,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,6 +201,19 @@ struct RestoreRollback {
     original_files: Vec<String>,
     #[serde(default)]
     database_sidecars: Vec<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OperationWarning {
+    operation: &'static str,
+    message: String,
+}
+
+#[derive(Debug)]
+struct AutomaticBackupOutcome {
+    backup: Option<BackupResult>,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Error)]
@@ -202,18 +241,73 @@ pub struct BackupState {
     pending_marker: PathBuf,
     rollback_dir: PathBuf,
     operation_lock: Arc<tokio::sync::Mutex<()>>,
+    #[cfg(test)]
+    fail_pruning: Arc<std::sync::atomic::AtomicBool>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum BackupKind {
     Manual,
     Automatic,
     PreRestore,
 }
 
+impl BackupKind {
+    const fn manifest_kind(self) -> BackupManifestKind {
+        match self {
+            Self::Manual => BackupManifestKind::Manual,
+            Self::Automatic => BackupManifestKind::Automatic,
+            Self::PreRestore => BackupManifestKind::PreRestore,
+        }
+    }
+}
+
 struct BackupSource {
     archive_name: &'static str,
     path: PathBuf,
+}
+
+async fn run_blocking_backup_operation<T, F>(operation: F) -> Result<T, BackupError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, BackupError> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| BackupError::InvalidBackup(format!("备份后台文件任务执行失败：{error}")))?
+}
+
+fn write_backup_archive(
+    partial_path: &Path,
+    sources: &[BackupSource],
+    mut manifest: BackupManifest,
+) -> Result<(), BackupError> {
+    let partial = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(partial_path)?;
+    let mut archive = ZipWriter::new(partial);
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .unix_permissions(0o600);
+    manifest.files.reserve(sources.len());
+    for source in sources {
+        reject_symlink(&source.path)?;
+        archive.start_file(source.archive_name, options)?;
+        let mut input = File::open(&source.path)?;
+        let (size_bytes, sha256) = copy_and_hash(&mut input, &mut archive)?;
+        manifest.files.push(ManifestFile {
+            name: source.archive_name.to_string(),
+            size_bytes,
+            sha256,
+        });
+    }
+    validate_manifest(&manifest)?;
+    archive.start_file(MANIFEST_ARCHIVE_NAME, options)?;
+    archive.write_all(&serde_json::to_vec_pretty(&manifest)?)?;
+    let completed = archive.finish()?;
+    completed.sync_all()?;
+    Ok(())
 }
 
 impl BackupState {
@@ -233,12 +327,28 @@ impl BackupState {
             pending_marker: data_dir.join("restore-pending.json"),
             rollback_dir: data_dir.join("restore-rollback"),
             operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            #[cfg(test)]
+            fail_pruning: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             data_dir,
         })
     }
 
     pub(crate) async fn lock_data_operation(&self) -> tokio::sync::OwnedMutexGuard<()> {
         self.operation_lock.clone().lock_owned().await
+    }
+
+    #[cfg(test)]
+    fn fail_pruning_for_test(&self) {
+        self.fail_pruning
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn prune_completed_automatic_backups(&self, retention: usize) -> Result<(), BackupError> {
+        #[cfg(test)]
+        if self.fail_pruning.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(std::io::Error::other("injected automatic backup prune failure").into());
+        }
+        prune_automatic_backups(&self.backups_dir, retention)
     }
 
     pub fn apply_pending_restore(&self) -> Result<bool, BackupError> {
@@ -304,7 +414,19 @@ impl BackupState {
         destination: Option<PathBuf>,
         kind: BackupKind,
     ) -> Result<BackupResult, BackupError> {
+        let business_date = beijing_today();
+        self.create_backup_internal_for_date(destination, kind, business_date)
+            .await
+    }
+
+    async fn create_backup_internal_for_date(
+        self,
+        destination: Option<PathBuf>,
+        kind: BackupKind,
+        business_date: NaiveDate,
+    ) -> Result<BackupResult, BackupError> {
         let now = Utc::now();
+        let business_date = business_date.format("%Y-%m-%d").to_string();
         let default_name = format!(
             "{}-{}.tkbackup",
             match kind {
@@ -345,6 +467,8 @@ impl BackupState {
                 output_path.clone(),
                 database_snapshot.clone(),
                 now.to_rfc3339(),
+                kind,
+                business_date,
             )
             .await;
         if let Some(snapshot) = database_snapshot {
@@ -359,49 +483,31 @@ impl BackupState {
         output_path: PathBuf,
         database_snapshot: Option<PathBuf>,
         created_at: String,
+        kind: BackupKind,
+        business_date: String,
     ) -> Result<BackupResult, BackupError> {
         let database_snapshot = database_snapshot.ok_or_else(|| {
             BackupError::InvalidBackup("当前数据库不存在，无法创建完整备份".into())
         })?;
         let include_legacy_vault = legacy_migration_pending(database_snapshot.clone()).await?;
         let sources = self.backup_sources(&database_snapshot, include_legacy_vault)?;
-        let mut manifest = BackupManifest {
+        let manifest = BackupManifest {
             format_version: BACKUP_FORMAT_VERSION,
             created_at: created_at.clone(),
-            files: Vec::with_capacity(sources.len()),
+            kind: Some(kind.manifest_kind()),
+            business_date: (kind == BackupKind::Automatic).then_some(business_date),
+            files: Vec::new(),
         };
         let parent = output_path
             .parent()
             .ok_or_else(|| BackupError::InvalidBackup("目标备份路径缺少父目录".into()))?;
         let partial_path =
             parent.join(format!(".backup-{}.partial", uuid::Uuid::now_v7().simple()));
-        let write_result = (|| -> Result<(), BackupError> {
-            let partial = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&partial_path)?;
-            let mut archive = ZipWriter::new(partial);
-            let options = SimpleFileOptions::default()
-                .compression_method(CompressionMethod::Deflated)
-                .unix_permissions(0o600);
-            for source in &sources {
-                reject_symlink(&source.path)?;
-                archive.start_file(source.archive_name, options)?;
-                let mut input = File::open(&source.path)?;
-                let (size_bytes, sha256) = copy_and_hash(&mut input, &mut archive)?;
-                manifest.files.push(ManifestFile {
-                    name: source.archive_name.to_string(),
-                    size_bytes,
-                    sha256,
-                });
-            }
-            validate_manifest(&manifest)?;
-            archive.start_file(MANIFEST_ARCHIVE_NAME, options)?;
-            archive.write_all(&serde_json::to_vec_pretty(&manifest)?)?;
-            let completed = archive.finish()?;
-            completed.sync_all()?;
-            Ok(())
-        })();
+        let write_partial_path = partial_path.clone();
+        let write_result = run_blocking_backup_operation(move || {
+            write_backup_archive(&write_partial_path, &sources, manifest)
+        })
+        .await;
 
         if let Err(error) = write_result {
             let _ = fs::remove_file(&partial_path);
@@ -416,11 +522,21 @@ impl BackupState {
             let _ = fs::remove_file(&partial_path);
             return Err(error.into());
         }
-        let validation_result = async {
-            let manifest = extract_and_validate(&partial_path, &validation_dir)?;
-            validate_staged_contents(validation_dir.clone(), manifest).await
-        }
-        .await;
+        let validation_archive_path = partial_path.clone();
+        let validation_extract_dir = validation_dir.clone();
+        let manifest = match run_blocking_backup_operation(move || {
+            extract_and_validate(&validation_archive_path, &validation_extract_dir)
+        })
+        .await
+        {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&validation_dir);
+                let _ = fs::remove_file(&partial_path);
+                return Err(error);
+            }
+        };
+        let validation_result = validate_staged_contents(validation_dir.clone(), manifest).await;
         let cleanup_result = fs::remove_dir_all(&validation_dir);
         if let Err(error) = validation_result {
             let _ = fs::remove_file(&partial_path);
@@ -512,7 +628,13 @@ impl BackupState {
             .data_dir
             .join(format!(".restore-stage-{}", uuid::Uuid::now_v7().simple()));
         fs::create_dir_all(&staging_dir)?;
-        let mut manifest = match extract_and_validate(&backup_path, &staging_dir) {
+        let extraction_backup_path = backup_path.clone();
+        let extraction_staging_dir = staging_dir.clone();
+        let mut manifest = match run_blocking_backup_operation(move || {
+            extract_and_validate(&extraction_backup_path, &extraction_staging_dir)
+        })
+        .await
+        {
             Ok(manifest) => manifest,
             Err(error) => {
                 let _ = fs::remove_dir_all(&staging_dir);
@@ -523,8 +645,11 @@ impl BackupState {
             let _ = fs::remove_dir_all(&staging_dir);
             return Err(error);
         }
-        if manifest.format_version == BACKUP_FORMAT_VERSION {
-            refresh_staged_database_manifest(&staging_dir, &mut manifest)?;
+        if manifest.format_version == BACKUP_FORMAT_VERSION
+            && let Err(error) = refresh_staged_database_manifest(&staging_dir, &mut manifest).await
+        {
+            let _ = fs::remove_dir_all(&staging_dir);
+            return Err(error);
         }
 
         if let Err(error) = self
@@ -623,6 +748,8 @@ impl BackupState {
             BackupManifest {
                 format_version: BACKUP_FORMAT_VERSION,
                 created_at: String::new(),
+                kind: None,
+                business_date: None,
                 files: rollback
                     .original_files
                     .iter()
@@ -737,25 +864,154 @@ pub async fn restore_backup<R: Runtime>(
     app.restart()
 }
 
-pub(crate) async fn create_automatic_backup_if_due(
+async fn create_automatic_backup_for_date(
     backup: BackupState,
     settings: SettingsState,
-) -> Result<Option<BackupResult>, BackupError> {
+    today: NaiveDate,
+) -> Result<AutomaticBackupOutcome, BackupError> {
     let _operation_guard = backup.lock_data_operation().await;
-    let today = Local::now().date_naive();
     let today_text = today.format("%Y-%m-%d").to_string();
-    let snapshot = settings.snapshot()?;
-    if snapshot.last_automatic_backup_date.as_deref() == Some(today_text.as_str()) {
-        return Ok(None);
+    let existing =
+        automatic_backup_for_date_in_background(backup.backups_dir.clone(), today).await?;
+    let snapshot = match settings.snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(error) if existing.is_some() => {
+            eprintln!(
+                "automatic backup settings snapshot failed after package completion: {error}"
+            );
+            return Ok(AutomaticBackupOutcome {
+                backup: None,
+                warnings: vec!["自动备份已存在，但无法读取设置中的备份日期".into()],
+            });
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if snapshot.last_automatic_backup_date.as_deref() == Some(today_text.as_str())
+        && existing.is_some()
+    {
+        return Ok(AutomaticBackupOutcome {
+            backup: None,
+            warnings: Vec::new(),
+        });
+    }
+
+    if existing.is_some() {
+        let warnings = record_automatic_backup_date_best_effort(&settings, today)
+            .into_iter()
+            .collect();
+        return Ok(AutomaticBackupOutcome {
+            backup: None,
+            warnings,
+        });
     }
 
     let result = backup
         .clone()
-        .create_backup_internal(None, BackupKind::Automatic)
+        .create_backup_internal_for_date(None, BackupKind::Automatic, today)
         .await?;
-    prune_automatic_backups(&backup.backups_dir, snapshot.backup_retention as usize)?;
-    settings.record_automatic_backup_date(today)?;
-    Ok(Some(result))
+    let mut warnings = record_automatic_backup_date_best_effort(&settings, today)
+        .into_iter()
+        .collect::<Vec<_>>();
+    let pruning_state = backup.clone();
+    let retention = snapshot.backup_retention as usize;
+    if let Err(error) = run_blocking_backup_operation(move || {
+        pruning_state.prune_completed_automatic_backups(retention)
+    })
+    .await
+    {
+        eprintln!("automatic backup pruning failed after package completion: {error}");
+        warnings.push("自动备份已完成，但清理旧备份失败".into());
+    }
+    Ok(AutomaticBackupOutcome {
+        backup: Some(result),
+        warnings,
+    })
+}
+
+fn beijing_today() -> NaiveDate {
+    (Utc::now().naive_utc() + ChronoDuration::hours(8)).date()
+}
+
+fn record_automatic_backup_date_best_effort(
+    settings: &SettingsState,
+    date: NaiveDate,
+) -> Option<String> {
+    if let Err(error) = settings.record_automatic_backup_date(date) {
+        eprintln!("automatic backup date recording failed after package completion: {error}");
+        Some("自动备份已完成，但更新备份日期失败".into())
+    } else {
+        None
+    }
+}
+
+fn automatic_backup_for_date(
+    directory: &Path,
+    date: NaiveDate,
+) -> Result<Option<PathBuf>, BackupError> {
+    let expected_date = date.format("%Y-%m-%d").to_string();
+    for entry in fs::read_dir(directory)? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        if !path.is_file()
+            || !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("auto-") && name.ends_with(".tkbackup"))
+        {
+            continue;
+        }
+        let Ok(manifest) = read_backup_manifest(&path) else {
+            continue;
+        };
+        if manifest.kind == Some(BackupManifestKind::Automatic)
+            && manifest.business_date.as_deref() == Some(expected_date.as_str())
+        {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+async fn automatic_backup_for_date_in_background(
+    directory: PathBuf,
+    date: NaiveDate,
+) -> Result<Option<PathBuf>, BackupError> {
+    run_blocking_backup_operation(move || automatic_backup_for_date(&directory, date)).await
+}
+
+fn read_backup_manifest(path: &Path) -> Result<BackupManifest, BackupError> {
+    reject_symlink(path)?;
+    let file = File::open(path)?;
+    let mut archive = ZipArchive::new(file)?;
+    let mut manifest_file = archive.by_name(MANIFEST_ARCHIVE_NAME)?;
+    if manifest_file.size() > MAX_MANIFEST_BYTES {
+        return Err(BackupError::InvalidBackup("备份清单过大".into()));
+    }
+    let mut bytes = Vec::with_capacity(manifest_file.size() as usize);
+    manifest_file.read_to_end(&mut bytes)?;
+    let manifest = serde_json::from_slice(&bytes)?;
+    validate_manifest(&manifest)?;
+    Ok(manifest)
+}
+
+fn automatic_backup_retry_delay(retry_index: usize) -> std::time::Duration {
+    let minutes =
+        AUTOMATIC_BACKUP_RETRY_MINUTES[retry_index.min(AUTOMATIC_BACKUP_RETRY_MINUTES.len() - 1)];
+    std::time::Duration::from_secs(minutes * 60)
+}
+
+fn emit_automatic_backup_warnings<R: Runtime>(app: &AppHandle<R>, warnings: &[String]) {
+    for message in warnings {
+        let _ = app.emit(
+            OPERATION_WARNING_EVENT,
+            OperationWarning {
+                operation: "automaticBackup",
+                message: message.clone(),
+            },
+        );
+    }
 }
 
 pub fn spawn_automatic_backup_task<R: Runtime>(app: AppHandle<R>) {
@@ -772,13 +1028,39 @@ pub fn spawn_automatic_backup_task<R: Runtime>(app: AppHandle<R>) {
         )
     };
     tauri::async_runtime::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        let start = tokio::time::Instant::now()
+            + std::time::Duration::from_secs(AUTOMATIC_BACKUP_INITIAL_DELAY_SECONDS);
+        let mut interval = tokio::time::interval_at(
+            start,
+            std::time::Duration::from_secs(AUTOMATIC_BACKUP_CHECK_INTERVAL_MINUTES * 60),
+        );
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut retry_index = 0_usize;
+        let mut retry_delay = None;
+        let mut completed_date = None;
         loop {
-            interval.tick().await;
-            if let Err(error) =
-                create_automatic_backup_if_due(backup.clone(), settings.clone()).await
-            {
-                eprintln!("automatic backup failed: {error}");
+            if let Some(delay) = retry_delay.take() {
+                tokio::time::sleep(delay).await;
+            } else {
+                interval.tick().await;
+            }
+            let today = beijing_today();
+            if completed_date == Some(today) {
+                continue;
+            }
+            match create_automatic_backup_for_date(backup.clone(), settings.clone(), today).await {
+                Ok(outcome) => {
+                    emit_automatic_backup_warnings(&app, &outcome.warnings);
+                    let _created_new_package = outcome.backup.is_some();
+                    completed_date = Some(today);
+                    retry_index = 0;
+                    retry_delay = None;
+                }
+                Err(error) => {
+                    eprintln!("automatic backup failed: {error}");
+                    retry_delay = Some(automatic_backup_retry_delay(retry_index));
+                    retry_index = (retry_index + 1).min(AUTOMATIC_BACKUP_RETRY_MINUTES.len() - 1);
+                }
             }
         }
     });
@@ -910,6 +1192,19 @@ fn validate_manifest(manifest: &BackupManifest) -> Result<(), BackupError> {
     }
     chrono::DateTime::parse_from_rfc3339(&manifest.created_at)
         .map_err(|_| BackupError::InvalidBackup("备份时间格式无效".into()))?;
+    if manifest.kind == Some(BackupManifestKind::Automatic) {
+        let Some(date) = manifest.business_date.as_deref() else {
+            return Err(BackupError::InvalidBackup(
+                "自动备份清单缺少北京时间业务日期".into(),
+            ));
+        };
+        NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .map_err(|_| BackupError::InvalidBackup("自动备份业务日期格式无效".into()))?;
+    } else if manifest.business_date.is_some() && manifest.kind.is_none() {
+        return Err(BackupError::InvalidBackup(
+            "旧版备份清单不能单独声明业务日期".into(),
+        ));
+    }
     if manifest.files.is_empty() {
         return Err(BackupError::InvalidBackup("备份包不包含任何数据".into()));
     }
@@ -993,13 +1288,17 @@ async fn validate_staged_contents(
     Ok(())
 }
 
-fn refresh_staged_database_manifest(
+async fn refresh_staged_database_manifest(
     staging_dir: &Path,
     manifest: &mut BackupManifest,
 ) -> Result<(), BackupError> {
     let path = staging_dir.join(DATABASE_ARCHIVE_NAME);
-    let size_bytes = fs::metadata(&path)?.len();
-    let sha256 = hash_file(&path)?;
+    let (size_bytes, sha256) = run_blocking_backup_operation(move || {
+        let size_bytes = fs::metadata(&path)?.len();
+        let sha256 = hash_file(&path)?;
+        Ok((size_bytes, sha256))
+    })
+    .await?;
     let entry = manifest
         .files
         .iter_mut()
@@ -1245,21 +1544,28 @@ async fn validate_v2_database_contract(
 }
 
 async fn validate_v2_database_rows(connection: &mut SqliteConnection) -> Result<(), BackupError> {
-    let profile_rows = sqlx::query("SELECT * FROM account_profiles ORDER BY id")
-        .fetch_all(&mut *connection)
+    let mut profile_rows = sqlx::query(
+        "SELECT account_profiles.*, NULL AS password FROM account_profiles ORDER BY id",
+    )
+    .fetch(&mut *connection);
+    while let Some(row) = profile_rows
+        .try_next()
         .await
-        .map_err(|error| BackupError::InvalidBackup(format!("读取账号档案失败：{error}")))?;
-    for row in &profile_rows {
-        let profile = profile_from_row(row).map_err(|error| {
+        .map_err(|error| BackupError::InvalidBackup(format!("读取账号档案失败：{error}")))?
+    {
+        let profile = profile_from_row(&row).map_err(|error| {
             BackupError::InvalidBackup(format!("账号档案记录无法读取：{error}"))
         })?;
         if profile.id.trim().is_empty()
             || profile.account_name.trim().is_empty()
-            || profile.weekly_wins.is_some_and(|value| value < 0)
+            || optional_safe_non_negative_integer_is_invalid(profile.current_score)
+            || optional_safe_non_negative_integer_is_invalid(profile.highest_score)
+            || optional_safe_non_negative_integer_is_invalid(profile.weekly_wins)
         {
-            return Err(BackupError::InvalidBackup(
-                "账号档案包含空标识或空账号名".into(),
-            ));
+            return Err(BackupError::InvalidBackup(format!(
+                "账号档案 {} 的字段值不符合当前 TimeKeeper 契约",
+                profile.id
+            )));
         }
         if let Some(date) = profile.score_updated_at.as_deref() {
             NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| {
@@ -1269,6 +1575,21 @@ async fn validate_v2_database_rows(connection: &mut SqliteConnection) -> Result<
         validate_rfc3339(&profile.created_at, "账号档案创建时间", &profile.id)?;
         validate_rfc3339(&profile.updated_at, "账号档案更新时间", &profile.id)?;
     }
+    drop(profile_rows);
+    validate_credential_rows(
+        connection,
+        "account_profile_credentials",
+        "profile_id",
+        "账号档案凭据",
+    )
+    .await?;
+    validate_credential_rows(
+        connection,
+        "appointment_credentials",
+        "appointment_id",
+        "预约凭据",
+    )
+    .await?;
 
     let access_rows = sqlx::query("SELECT id, password_verifier, updated_at FROM app_access")
         .fetch_all(&mut *connection)
@@ -1344,17 +1665,19 @@ async fn validate_v2_database_rows(connection: &mut SqliteConnection) -> Result<
         )));
     }
 
-    let appointment_rows = sqlx::query(
+    let mut appointment_rows = sqlx::query(
         "SELECT a.*, c.password AS account_password
          FROM appointments a
          LEFT JOIN appointment_credentials c ON c.appointment_id = a.id
          ORDER BY a.id",
     )
-    .fetch_all(&mut *connection)
-    .await
-    .map_err(|error| BackupError::InvalidBackup(format!("读取预约记录失败：{error}")))?;
-    for row in &appointment_rows {
-        let appointment = appointment_from_row(row)
+    .fetch(&mut *connection);
+    while let Some(row) = appointment_rows
+        .try_next()
+        .await
+        .map_err(|error| BackupError::InvalidBackup(format!("读取预约记录失败：{error}")))?
+    {
+        let appointment = appointment_from_row(&row)
             .map_err(|error| BackupError::InvalidBackup(format!("预约记录无法读取：{error}")))?;
         let account_name: Option<String> =
             row.try_get("account_name").map_err(database_schema_error)?;
@@ -1390,6 +1713,8 @@ async fn validate_v2_database_rows(connection: &mut SqliteConnection) -> Result<
         validate_appointment_time_range(&appointment.id, service_date, starts_at, ends_at)?;
         if appointment.id.trim().is_empty()
             || appointment.contact_name.trim().is_empty()
+            || optional_safe_non_negative_integer_is_invalid(appointment.amount_minor)
+            || optional_reminder_minutes_is_invalid(appointment.reminder_minutes)
             || match account_name.as_deref() {
                 Some(value) => value.trim().is_empty(),
                 None => {
@@ -1452,6 +1777,38 @@ async fn validate_v2_database_rows(connection: &mut SqliteConnection) -> Result<
         }
         validate_rfc3339(&appointment.created_at, "预约创建时间", &appointment.id)?;
         validate_rfc3339(&appointment.updated_at, "预约更新时间", &appointment.id)?;
+    }
+    Ok(())
+}
+
+async fn validate_credential_rows(
+    connection: &mut SqliteConnection,
+    table: &str,
+    id_column: &str,
+    label: &str,
+) -> Result<(), BackupError> {
+    let query = format!(
+        "SELECT {id_column} AS owner_id, password, typeof(password) AS password_type
+         FROM {table} ORDER BY {id_column}"
+    );
+    let mut rows = sqlx::query(&query).fetch(&mut *connection);
+    while let Some(row) = rows
+        .try_next()
+        .await
+        .map_err(|error| BackupError::InvalidBackup(format!("读取{label}失败：{error}")))?
+    {
+        let owner_id: String = row.try_get("owner_id").map_err(database_schema_error)?;
+        let password_type: String = row
+            .try_get("password_type")
+            .map_err(database_schema_error)?;
+        let password = row.try_get::<String, _>("password").map_err(|_| {
+            BackupError::InvalidBackup(format!("{label} {owner_id} 的密码不是有效文本"))
+        })?;
+        if owner_id.trim().is_empty() || password_type != "text" || password.is_empty() {
+            return Err(BackupError::InvalidBackup(format!(
+                "{label} {owner_id} 的字段值不符合当前 TimeKeeper 契约"
+            )));
+        }
     }
     Ok(())
 }
@@ -1855,13 +2212,17 @@ fn normalize_schema_sql(sql: &str) -> String {
 }
 
 async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(), BackupError> {
-    let profile_rows =
-        sqlx::query("SELECT *, NULL AS weekly_wins FROM account_profiles ORDER BY id")
-            .fetch_all(&mut *connection)
-            .await
-            .map_err(|error| BackupError::InvalidBackup(format!("读取账号档案失败：{error}")))?;
-    for row in &profile_rows {
-        let profile = profile_from_row(row).map_err(|error| {
+    let mut profile_rows = sqlx::query(
+        "SELECT account_profiles.*, NULL AS weekly_wins, NULL AS password
+         FROM account_profiles ORDER BY id",
+    )
+    .fetch(&mut *connection);
+    while let Some(row) = profile_rows
+        .try_next()
+        .await
+        .map_err(|error| BackupError::InvalidBackup(format!("读取账号档案失败：{error}")))?
+    {
+        let profile = profile_from_row(&row).map_err(|error| {
             BackupError::InvalidBackup(format!("账号档案记录无法读取：{error}"))
         })?;
         let needs_review: i64 = row.try_get("needs_review").map_err(database_schema_error)?;
@@ -1870,8 +2231,9 @@ async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(),
             || profile.account_name.trim().is_empty()
             || !matches!(needs_review, 0 | 1)
             || sort_order < 0
-            || profile.current_score.is_some_and(|value| value < 0)
-            || profile.highest_score.is_some_and(|value| value < 0)
+            || optional_safe_non_negative_integer_is_invalid(profile.current_score)
+            || optional_safe_non_negative_integer_is_invalid(profile.highest_score)
+            || optional_safe_non_negative_integer_is_invalid(profile.weekly_wins)
         {
             return Err(BackupError::InvalidBackup(format!(
                 "账号档案 {} 的字段值不符合当前 TimeKeeper 契约",
@@ -1886,15 +2248,18 @@ async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(),
         validate_rfc3339(&profile.created_at, "账号档案创建时间", &profile.id)?;
         validate_rfc3339(&profile.updated_at, "账号档案更新时间", &profile.id)?;
     }
+    drop(profile_rows);
 
-    let backfill_rows = sqlx::query(
+    let mut backfill_rows = sqlx::query(
         "SELECT appointment_id, source_profile_id
          FROM appointment_password_backfill ORDER BY appointment_id",
     )
-    .fetch_all(&mut *connection)
-    .await
-    .map_err(|error| BackupError::InvalidBackup(format!("读取预约密码迁移队列失败：{error}")))?;
-    for row in &backfill_rows {
+    .fetch(&mut *connection);
+    while let Some(row) = backfill_rows
+        .try_next()
+        .await
+        .map_err(|error| BackupError::InvalidBackup(format!("读取预约密码迁移队列失败：{error}")))?
+    {
         let appointment_id: String = row
             .try_get("appointment_id")
             .map_err(database_schema_error)?;
@@ -1907,6 +2272,7 @@ async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(),
             ));
         }
     }
+    drop(backfill_rows);
     let orphaned_backfill_count = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*)
          FROM appointment_password_backfill AS backfill
@@ -1922,12 +2288,16 @@ async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(),
         )));
     }
 
-    let appointment_rows = sqlx::query("SELECT * FROM appointments ORDER BY id")
-        .fetch_all(&mut *connection)
+    let mut appointment_rows = sqlx::query(
+        "SELECT appointments.*, NULL AS account_password FROM appointments ORDER BY id",
+    )
+    .fetch(&mut *connection);
+    while let Some(row) = appointment_rows
+        .try_next()
         .await
-        .map_err(|error| BackupError::InvalidBackup(format!("读取预约记录失败：{error}")))?;
-    for row in &appointment_rows {
-        let appointment = appointment_from_row(row)
+        .map_err(|error| BackupError::InvalidBackup(format!("读取预约记录失败：{error}")))?
+    {
+        let appointment = appointment_from_row(&row)
             .map_err(|error| BackupError::InvalidBackup(format!("预约记录无法读取：{error}")))?;
         let account_password_available: i64 = row
             .try_get("account_password_available")
@@ -1960,8 +2330,8 @@ async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(),
         validate_appointment_time_range(&appointment.id, service_date, starts_at, ends_at)?;
         if appointment.id.trim().is_empty()
             || appointment.contact_name.trim().is_empty()
-            || appointment.amount_minor.is_some_and(|value| value < 0)
-            || appointment.reminder_minutes.is_some_and(|value| value < 0)
+            || optional_safe_non_negative_integer_is_invalid(appointment.amount_minor)
+            || optional_reminder_minutes_is_invalid(appointment.reminder_minutes)
             || !matches!(account_password_available, 0 | 1)
             || match account_name.as_deref() {
                 Some(value) => value.trim().is_empty(),
@@ -2098,8 +2468,9 @@ fn validate_rfc3339(value: &str, field: &str, record_id: &str) -> Result<(), Bac
 
 fn validate_staged_settings(path: &Path) -> Result<(), BackupError> {
     let bytes = fs::read(path)?;
-    let settings = serde_json::from_slice::<AppSettings>(&bytes)
+    let mut settings = serde_json::from_slice::<AppSettings>(&bytes)
         .map_err(|error| BackupError::InvalidBackup(format!("设置文件格式无效：{error}")))?;
+    settings.normalize_legacy_default_reminder();
     settings
         .validate()
         .map_err(|error| BackupError::InvalidBackup(error.to_string()))
@@ -2206,11 +2577,24 @@ fn prune_automatic_backups(directory: &Path, retention: usize) -> Result<(), Bac
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| {
-            path.is_file()
-                && path
+            if !path.is_file()
+                || !path
                     .file_name()
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| name.starts_with("auto-") && name.ends_with(".tkbackup"))
+            {
+                return false;
+            }
+            match read_backup_manifest(path) {
+                Ok(manifest) => manifest.kind == Some(BackupManifestKind::Automatic),
+                Err(error) => {
+                    eprintln!(
+                        "ignored invalid automatic backup candidate {}: {error}",
+                        path.display()
+                    );
+                    false
+                }
+            }
         })
         .collect::<Vec<_>>();
     backups.sort_by(|left, right| right.file_name().cmp(&left.file_name()));
@@ -2235,8 +2619,8 @@ mod tests {
         db::Database,
         importer::parse_legacy_workbook,
         models::{
-            AccountProfileInput, AppointmentInput, AppointmentMode, ReportGranularity,
-            ServiceStatus, SettlementStatus,
+            AccountProfileCredentialInput, AccountProfileInput, AppointmentInput, AppointmentMode,
+            ReportGranularity, ServiceStatus, SettlementStatus,
         },
         reports::get_revenue_summary_impl,
         settings::{AccountTableColumnWidths, AppointmentTableColumnWidths},
@@ -2409,6 +2793,76 @@ mod tests {
         });
     }
 
+    fn create_v2_database_with_out_of_range_weekly_wins(path: &Path) {
+        create_timekeeper_database(path);
+        runtime().block_on(async {
+            let options = SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(false)
+                .foreign_keys(true);
+            let mut connection = SqliteConnection::connect_with(&options).await.unwrap();
+            sqlx::query("DROP TRIGGER account_profiles_safe_integers_insert")
+                .execute(&mut connection)
+                .await
+                .unwrap();
+            let now = Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO account_profiles (
+                    id, account_name, weekly_wins, created_at, updated_at
+                 ) VALUES ('unsafe-score', 'unsafe-account', ?, ?, ?)",
+            )
+            .bind(JS_SAFE_INTEGER_MAX + 1)
+            .bind(&now)
+            .bind(&now)
+            .execute(&mut connection)
+            .await
+            .unwrap();
+            sqlx::query(
+                "CREATE TRIGGER account_profiles_safe_integers_insert
+                 BEFORE INSERT ON account_profiles
+                 WHEN NEW.current_score > 9007199254740991
+                   OR NEW.highest_score > 9007199254740991
+                   OR NEW.weekly_wins > 9007199254740991
+                 BEGIN
+                     SELECT RAISE(ABORT, 'account score exceeds JavaScript safe integer range');
+                 END",
+            )
+            .execute(&mut connection)
+            .await
+            .unwrap();
+            connection.close().await.unwrap();
+        });
+    }
+
+    fn create_v1_database_with_out_of_range_appointment_values(path: &Path) {
+        create_v1_database(path);
+        runtime().block_on(async {
+            let options = SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(false)
+                .foreign_keys(true);
+            let mut connection = SqliteConnection::connect_with(&options).await.unwrap();
+            let now = Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO appointments (
+                    id, service_date, contact_name, mode, service_status, settlement_status,
+                    amount_minor, reminder_minutes, created_at, updated_at
+                 ) VALUES (
+                    'unsafe-appointment', '2099-01-01', '契约边界测试', 'business',
+                    'scheduled', 'unsettled', ?, ?, ?, ?
+                 )",
+            )
+            .bind(JS_SAFE_INTEGER_MAX + 1)
+            .bind(MAX_REMINDER_MINUTES + 1)
+            .bind(&now)
+            .bind(&now)
+            .execute(&mut connection)
+            .await
+            .unwrap();
+            connection.close().await.unwrap();
+        });
+    }
+
     fn create_database_with_invalid_appointment(
         path: &Path,
         service_date: &str,
@@ -2496,6 +2950,8 @@ mod tests {
         let manifest = BackupManifest {
             format_version,
             created_at: Utc::now().to_rfc3339(),
+            kind: None,
+            business_date: None,
             files: files
                 .iter()
                 .map(|(name, bytes)| ManifestFile {
@@ -2523,6 +2979,37 @@ mod tests {
 
     fn write_test_backup(path: &Path, files: &[(&str, &[u8])]) {
         write_test_backup_with_version(path, BACKUP_FORMAT_VERSION, files);
+    }
+
+    fn write_manifest_only(path: &Path, kind: BackupManifestKind, business_date: Option<&str>) {
+        let files = V2_REQUIRED_ARCHIVE_FILES
+            .iter()
+            .map(|name| ManifestFile {
+                name: (*name).to_string(),
+                size_bytes: 0,
+                sha256: "0".repeat(64),
+            })
+            .collect();
+        let manifest = BackupManifest {
+            format_version: BACKUP_FORMAT_VERSION,
+            created_at: Utc::now().to_rfc3339(),
+            kind: Some(kind),
+            business_date: business_date.map(str::to_string),
+            files,
+        };
+        let output = File::create(path).unwrap();
+        let mut archive = ZipWriter::new(output);
+        archive
+            .start_file(MANIFEST_ARCHIVE_NAME, SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .write_all(&serde_json::to_vec(&manifest).unwrap())
+            .unwrap();
+        archive.finish().unwrap();
+    }
+
+    fn write_automatic_manifest_only(path: &Path, business_date: &str) {
+        write_manifest_only(path, BackupManifestKind::Automatic, Some(business_date));
     }
 
     fn pre_restore_backup_count(state: &BackupState) -> usize {
@@ -2864,7 +3351,7 @@ mod tests {
             .fetch_one(upgraded.pool())
             .await
             .unwrap();
-            assert_eq!(latest_version, 8);
+            assert_eq!(latest_version, 10);
             assert_eq!(queued, 1);
             upgraded.pool().close().await;
         });
@@ -2915,7 +3402,7 @@ mod tests {
                         .fetch_one(upgraded.pool())
                         .await
                         .unwrap();
-                assert_eq!(latest, 8);
+                assert_eq!(latest, 10);
                 let columns = sqlx::query_scalar::<_, String>(
                     "SELECT name FROM pragma_table_info('account_profiles') ORDER BY cid",
                 )
@@ -3412,6 +3899,198 @@ mod tests {
     }
 
     #[test]
+    fn rejects_non_text_business_credentials_before_touching_live_data() {
+        for credential_kind in ["account", "appointment"] {
+            let dir = test_dir(&format!("blob-{credential_kind}-credential"));
+            fs::create_dir_all(&dir).unwrap();
+            let live_database = dir.join("timekeeper.db");
+            create_timekeeper_database(&live_database);
+            let candidate_database = dir.join("candidate.sqlite3");
+            create_timekeeper_database(&candidate_database);
+            let original_live_bytes = fs::read(&live_database).unwrap();
+
+            runtime().block_on(async {
+                let database = Database::initialize(&candidate_database).await.unwrap();
+                if credential_kind == "account" {
+                    let profile = create_account_profile_impl(
+                        &database,
+                        AccountProfileInput {
+                            contact_name: None,
+                            server: None,
+                            character_name: None,
+                            specialization: None,
+                            gear_score: None,
+                            account_name: "blob-account".into(),
+                            credential: AccountProfileCredentialInput::Replace {
+                                password: "valid-password".into(),
+                            },
+                            current_score: None,
+                            highest_score: None,
+                            score_updated_at: None,
+                            notes: None,
+                            needs_review: Some(false),
+                        },
+                    )
+                    .await
+                    .unwrap();
+                    sqlx::query(
+                        "UPDATE account_profile_credentials SET password = X'FF' WHERE profile_id = ?",
+                    )
+                    .bind(profile.id)
+                    .execute(database.pool())
+                    .await
+                    .unwrap();
+                } else {
+                    let created = create_appointment_impl(
+                        &database,
+                        business_input("2026-07-13", "20:00", "21:00", 12_000),
+                    )
+                    .await
+                    .unwrap();
+                    sqlx::query(
+                        "INSERT INTO appointment_credentials (appointment_id, password) VALUES (?, X'FF')",
+                    )
+                    .bind(created.appointment.id)
+                    .execute(database.pool())
+                    .await
+                    .unwrap();
+                }
+                sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                    .execute(database.pool())
+                    .await
+                    .unwrap();
+                database.pool().close().await;
+            });
+
+            let settings = serde_json::to_vec_pretty(&AppSettings::default()).unwrap();
+            let candidate_bytes = fs::read(&candidate_database).unwrap();
+            let backup_path = dir.join(format!("blob-{credential_kind}.tkbackup"));
+            write_test_backup(
+                &backup_path,
+                &[
+                    (DATABASE_ARCHIVE_NAME, candidate_bytes.as_slice()),
+                    (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
+                ],
+            );
+            let state = BackupState::new(&dir, &live_database).unwrap();
+            let error = runtime()
+                .block_on(state.stage_restore(&backup_path))
+                .unwrap_err();
+
+            assert!(error.to_string().contains("凭据"), "{error}");
+            assert_eq!(fs::read(&live_database).unwrap(), original_live_bytes);
+            assert_eq!(pre_restore_backup_count(&state), 0);
+            assert!(!state.pending_marker.exists());
+            fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn rejects_v2_out_of_range_numeric_rows_without_touching_live_data() {
+        let dir = test_dir("v2-invalid-numeric-contract");
+        fs::create_dir_all(&dir).unwrap();
+        let live_database = dir.join("timekeeper.db");
+        create_timekeeper_database(&live_database);
+        fs::write(
+            dir.join(SETTINGS_ARCHIVE_NAME),
+            serde_json::to_vec_pretty(&AppSettings::default()).unwrap(),
+        )
+        .unwrap();
+        let original_database = fs::read(&live_database).unwrap();
+
+        let invalid_database = dir.join("v2-invalid-numeric.sqlite3");
+        create_v2_database_with_out_of_range_weekly_wins(&invalid_database);
+        let invalid_database_bytes = fs::read(&invalid_database).unwrap();
+        let settings = fs::read(dir.join(SETTINGS_ARCHIVE_NAME)).unwrap();
+        let backup_path = dir.join("v2-invalid-numeric.tkbackup");
+        write_test_backup(
+            &backup_path,
+            &[
+                (DATABASE_ARCHIVE_NAME, invalid_database_bytes.as_slice()),
+                (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
+            ],
+        );
+        let state = BackupState::new(&dir, &live_database).unwrap();
+
+        let error = runtime()
+            .block_on(state.stage_restore(&backup_path))
+            .unwrap_err();
+        assert!(error.to_string().contains("字段值"), "{error}");
+        assert_eq!(fs::read(&live_database).unwrap(), original_database);
+        assert!(!state.pending_dir.exists());
+        assert!(!state.pending_marker.exists());
+        assert_eq!(pre_restore_backup_count(&state), 0);
+
+        drop(state);
+        remove_test_dir_after_sqlite_shutdown(dir);
+    }
+
+    #[test]
+    fn rejects_v1_out_of_range_numeric_rows_without_touching_live_data() {
+        let dir = test_dir("v1-invalid-numeric-contract");
+        fs::create_dir_all(&dir).unwrap();
+        let live_database = dir.join("timekeeper.db");
+        create_timekeeper_database(&live_database);
+        fs::write(
+            dir.join(SETTINGS_ARCHIVE_NAME),
+            serde_json::to_vec_pretty(&AppSettings::default()).unwrap(),
+        )
+        .unwrap();
+        let original_database = fs::read(&live_database).unwrap();
+        let (vault_bytes, salt_bytes) = create_vault_files(&dir);
+
+        let invalid_database = dir.join("v1-invalid-numeric.sqlite3");
+        create_v1_database_with_out_of_range_appointment_values(&invalid_database);
+        let invalid_database_bytes = fs::read(&invalid_database).unwrap();
+        let settings = fs::read(dir.join(SETTINGS_ARCHIVE_NAME)).unwrap();
+        let backup_path = dir.join("v1-invalid-numeric.tkbackup");
+        write_test_backup_with_version(
+            &backup_path,
+            LEGACY_BACKUP_FORMAT_VERSION,
+            &[
+                (DATABASE_ARCHIVE_NAME, invalid_database_bytes.as_slice()),
+                (SETTINGS_ARCHIVE_NAME, settings.as_slice()),
+                (VAULT_ARCHIVE_NAME, vault_bytes.as_slice()),
+                (SALT_ARCHIVE_NAME, salt_bytes.as_slice()),
+            ],
+        );
+        let state = BackupState::new(&dir, &live_database).unwrap();
+
+        let error = runtime()
+            .block_on(state.stage_restore(&backup_path))
+            .unwrap_err();
+        assert!(error.to_string().contains("字段值"), "{error}");
+        assert_eq!(fs::read(&live_database).unwrap(), original_database);
+        assert!(!state.pending_dir.exists());
+        assert!(!state.pending_marker.exists());
+        assert_eq!(pre_restore_backup_count(&state), 0);
+
+        drop(state);
+        remove_test_dir_after_sqlite_shutdown(dir);
+    }
+
+    #[test]
+    fn backup_numeric_contract_rejects_every_out_of_range_boundary() {
+        for value in [-1, JS_SAFE_INTEGER_MAX + 1] {
+            assert!(optional_safe_non_negative_integer_is_invalid(Some(value)));
+        }
+        assert!(!optional_safe_non_negative_integer_is_invalid(None));
+        assert!(!optional_safe_non_negative_integer_is_invalid(Some(0)));
+        assert!(!optional_safe_non_negative_integer_is_invalid(Some(
+            JS_SAFE_INTEGER_MAX
+        )));
+
+        for value in [-1, MAX_REMINDER_MINUTES + 1] {
+            assert!(optional_reminder_minutes_is_invalid(Some(value)));
+        }
+        assert!(!optional_reminder_minutes_is_invalid(None));
+        assert!(!optional_reminder_minutes_is_invalid(Some(0)));
+        assert!(!optional_reminder_minutes_is_invalid(Some(
+            MAX_REMINDER_MINUTES
+        )));
+    }
+
+    #[test]
     fn full_business_flow_survives_backup_and_restore() {
         let dir = test_dir("full-business-flow");
         fs::create_dir_all(&dir).unwrap();
@@ -3458,7 +4137,9 @@ mod tests {
                     specialization: None,
                     gear_score: None,
                     account_name: "workflow-account".into(),
-                    password: None,
+                    credential: AccountProfileCredentialInput::Replace {
+                        password: "workflow-profile-password".into(),
+                    },
                     current_score: None,
                     highest_score: None,
                     score_updated_at: None,
@@ -3739,6 +4420,8 @@ mod tests {
         let v2 = BackupManifest {
             format_version: BACKUP_FORMAT_VERSION,
             created_at: Utc::now().to_rfc3339(),
+            kind: None,
+            business_date: None,
             files: V2_REQUIRED_ARCHIVE_FILES
                 .iter()
                 .map(|name| file(name))
@@ -3758,6 +4441,8 @@ mod tests {
         let v1 = BackupManifest {
             format_version: LEGACY_BACKUP_FORMAT_VERSION,
             created_at: Utc::now().to_rfc3339(),
+            kind: None,
+            business_date: None,
             files: V1_REQUIRED_ARCHIVE_FILES
                 .iter()
                 .map(|name| file(name))
@@ -3777,19 +4462,261 @@ mod tests {
     fn retention_only_prunes_automatic_backups() {
         let dir = test_dir("retention");
         fs::create_dir_all(&dir).unwrap();
-        for name in [
-            "auto-20260710-100000-000.tkbackup",
-            "auto-20260711-100000-000.tkbackup",
-            "auto-20260712-100000-000.tkbackup",
-            "manual-20260701-100000-000.tkbackup",
-        ] {
-            fs::write(dir.join(name), b"backup").unwrap();
-        }
+        write_automatic_manifest_only(&dir.join("auto-20260710-100000-000.tkbackup"), "2026-07-10");
+        write_automatic_manifest_only(&dir.join("auto-20260711-100000-000.tkbackup"), "2026-07-11");
+        write_automatic_manifest_only(&dir.join("auto-20260712-100000-000.tkbackup"), "2026-07-12");
+        fs::write(dir.join("auto-99999999-999999-999.tkbackup"), b"damaged").unwrap();
+        write_manifest_only(
+            &dir.join("auto-99999998-999999-999.tkbackup"),
+            BackupManifestKind::Manual,
+            None,
+        );
+        fs::write(dir.join("manual-20260701-100000-000.tkbackup"), b"manual").unwrap();
 
         prune_automatic_backups(&dir, 2).unwrap();
         assert!(!dir.join("auto-20260710-100000-000.tkbackup").exists());
         assert!(dir.join("auto-20260712-100000-000.tkbackup").exists());
+        assert!(dir.join("auto-99999999-999999-999.tkbackup").exists());
+        assert!(dir.join("auto-99999998-999999-999.tkbackup").exists());
         assert!(dir.join("manual-20260701-100000-000.tkbackup").exists());
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn upgraded_unsafe_numeric_values_survive_a_complete_backup_roundtrip_as_repairs() {
+        let dir = test_dir("numeric-repair-roundtrip");
+        fs::create_dir_all(&dir).unwrap();
+        let database_path = dir.join("timekeeper.db");
+        create_legacy_database(&database_path, 9);
+
+        runtime().block_on(async {
+            let options = SqliteConnectOptions::new()
+                .filename(&database_path)
+                .foreign_keys(true);
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(options)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO account_profiles (
+                    id, account_name, current_score, needs_review, sort_order,
+                    created_at, updated_at
+                 ) VALUES ('legacy-unsafe-profile', '旧超界账号', 9007199254740992,
+                    0, 0, '2026-07-13T00:00:00Z', '2026-07-13T00:00:00Z')",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO appointments (
+                    id, service_date, contact_name, mode, service_status, settlement_status,
+                    amount_minor, created_at, updated_at
+                 ) VALUES ('legacy-unsafe-appointment', '2026-07-13', '旧超界预约',
+                    'business', 'completed', 'settled', 9007199254740992,
+                    '2026-07-13T00:00:00Z', '2026-07-13T00:00:00Z')",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            pool.close().await;
+
+            let upgraded = Database::initialize(&database_path).await.unwrap();
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM legacy_numeric_repair_issues WHERE resolved_at IS NULL",
+                )
+                .fetch_one(upgraded.pool())
+                .await
+                .unwrap(),
+                2
+            );
+            upgraded.pool().close().await;
+        });
+
+        let settings = SettingsState::load(&dir).unwrap();
+        let state = BackupState::new(&dir, &database_path).unwrap();
+        let backup = runtime()
+            .block_on(
+                state
+                    .clone()
+                    .create_backup_internal(None, BackupKind::Manual),
+            )
+            .unwrap();
+        runtime()
+            .block_on(state.stage_restore(Path::new(&backup.path)))
+            .unwrap();
+        assert!(state.apply_pending_restore().unwrap());
+
+        runtime().block_on(async {
+            let restored = Database::initialize(&database_path).await.unwrap();
+            let original_values = sqlx::query_scalar::<_, String>(
+                "SELECT original_value FROM legacy_numeric_repair_issues ORDER BY id",
+            )
+            .fetch_all(restored.pool())
+            .await
+            .unwrap();
+            assert_eq!(
+                original_values,
+                vec!["9007199254740992", "9007199254740992"]
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, Option<i64>>(
+                    "SELECT current_score FROM account_profiles WHERE id = 'legacy-unsafe-profile'",
+                )
+                .fetch_one(restored.pool())
+                .await
+                .unwrap(),
+                None
+            );
+            assert_eq!(
+                sqlx::query_as::<_, (Option<i64>, String)>(
+                    "SELECT amount_minor, settlement_status FROM appointments
+                     WHERE id = 'legacy-unsafe-appointment'",
+                )
+                .fetch_one(restored.pool())
+                .await
+                .unwrap(),
+                (None, "unsettled".into())
+            );
+            restored.pool().close().await;
+        });
+        drop(settings);
+        remove_test_dir_after_sqlite_shutdown(dir);
+    }
+
+    #[test]
+    fn automatic_backup_retry_backoff_is_bounded() {
+        assert_eq!(automatic_backup_retry_delay(0).as_secs(), 60);
+        assert_eq!(automatic_backup_retry_delay(1).as_secs(), 5 * 60);
+        assert_eq!(automatic_backup_retry_delay(2).as_secs(), 30 * 60);
+        assert_eq!(automatic_backup_retry_delay(3).as_secs(), 60 * 60);
+        assert_eq!(automatic_backup_retry_delay(99).as_secs(), 60 * 60);
+    }
+
+    #[test]
+    fn automatic_backup_manifest_repairs_missing_date_without_creating_a_second_package() {
+        let dir = test_dir("automatic-manifest-idempotency");
+        fs::create_dir_all(&dir).unwrap();
+        let database_path = dir.join("timekeeper.db");
+        create_timekeeper_database(&database_path);
+        let state = BackupState::new(&dir, &database_path).unwrap();
+        let settings = SettingsState::load(&dir).unwrap();
+        let today = beijing_today();
+
+        runtime().block_on(async {
+            let first = create_automatic_backup_for_date(state.clone(), settings.clone(), today)
+                .await
+                .unwrap();
+            assert!(first.backup.is_some());
+            assert!(first.warnings.is_empty());
+        });
+        let first_count = automatic_backup_count(&state.backups_dir);
+        assert_eq!(first_count, 1);
+
+        let settings_path = dir.join(SETTINGS_ARCHIVE_NAME);
+        let mut snapshot: AppSettings =
+            serde_json::from_slice(&fs::read(&settings_path).unwrap()).unwrap();
+        snapshot.last_automatic_backup_date = None;
+        fs::write(
+            &settings_path,
+            serde_json::to_vec_pretty(&snapshot).unwrap(),
+        )
+        .unwrap();
+        let repaired_settings = SettingsState::load(&dir).unwrap();
+
+        runtime().block_on(async {
+            let second =
+                create_automatic_backup_for_date(state.clone(), repaired_settings.clone(), today)
+                    .await
+                    .unwrap();
+            assert!(second.backup.is_none());
+            assert!(second.warnings.is_empty());
+        });
+        assert_eq!(automatic_backup_count(&state.backups_dir), 1);
+        let today_text = today.format("%Y-%m-%d").to_string();
+        assert_eq!(
+            repaired_settings
+                .snapshot()
+                .unwrap()
+                .last_automatic_backup_date
+                .as_deref(),
+            Some(today_text.as_str())
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn automatic_backup_recreates_package_when_only_the_date_marker_exists() {
+        let dir = test_dir("automatic-marker-without-package");
+        fs::create_dir_all(&dir).unwrap();
+        let database_path = dir.join("timekeeper.db");
+        create_timekeeper_database(&database_path);
+        let state = BackupState::new(&dir, &database_path).unwrap();
+        let settings = SettingsState::load(&dir).unwrap();
+        let today = beijing_today();
+        settings.record_automatic_backup_date(today).unwrap();
+
+        runtime().block_on(async {
+            let outcome = create_automatic_backup_for_date(state.clone(), settings, today)
+                .await
+                .unwrap();
+            assert!(outcome.backup.is_some());
+            assert!(outcome.warnings.is_empty());
+        });
+        assert_eq!(automatic_backup_count(&state.backups_dir), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn completed_package_is_success_even_when_date_recording_and_pruning_fail() {
+        let dir = test_dir("automatic-post-processing-failures");
+        fs::create_dir_all(&dir).unwrap();
+        let database_path = dir.join("timekeeper.db");
+        create_timekeeper_database(&database_path);
+        let state = BackupState::new(&dir, &database_path).unwrap();
+        let settings = SettingsState::load(&dir).unwrap();
+        let today = beijing_today();
+
+        state.fail_pruning_for_test();
+        let mut failing_settings = settings.clone();
+        failing_settings.fail_writes_for_test();
+
+        runtime().block_on(async {
+            let first =
+                create_automatic_backup_for_date(state.clone(), failing_settings.clone(), today)
+                    .await
+                    .unwrap();
+            assert!(first.backup.is_some());
+            assert_eq!(first.warnings.len(), 2);
+            assert_eq!(automatic_backup_count(&state.backups_dir), 1);
+
+            let second =
+                create_automatic_backup_for_date(state.clone(), failing_settings.clone(), today)
+                    .await
+                    .unwrap();
+            assert!(second.backup.is_none());
+            assert_eq!(second.warnings.len(), 1);
+            assert_eq!(automatic_backup_count(&state.backups_dir), 1);
+        });
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn automatic_backup_count(directory: &Path) -> usize {
+        fs::read_dir(directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_file()
+                    && path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| {
+                            name.starts_with("auto-") && name.ends_with(".tkbackup")
+                        })
+            })
+            .count()
     }
 }

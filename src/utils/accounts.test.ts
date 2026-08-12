@@ -5,6 +5,7 @@ import {
   moveAccountProfileId,
   orderAccountProfilesByIds,
   parseGearScore,
+  parseOptionalAccountScore,
   uniqueAccountValues,
 } from "./accounts";
 
@@ -61,6 +62,20 @@ describe("account profile filtering and sorting", () => {
     expect(parseGearScore("19.8万")).toBe(198000);
     expect(parseGearScore("198,000")).toBe(198000);
     expect(parseGearScore(null)).toBeNull();
+  });
+
+  it("accepts only optional non-negative safe integer account scores", () => {
+    expect(parseOptionalAccountScore(0)).toEqual({ ok: true, value: 0 });
+    expect(parseOptionalAccountScore("3186")).toEqual({ ok: true, value: 3186 });
+    expect(parseOptionalAccountScore(" ")).toEqual({ ok: true, value: null });
+    expect(parseOptionalAccountScore(null)).toEqual({ ok: true, value: null });
+    expect(parseOptionalAccountScore(-1)).toEqual({ ok: false, value: null });
+    expect(parseOptionalAccountScore(1.5)).toEqual({ ok: false, value: null });
+    expect(parseOptionalAccountScore(Number.MAX_SAFE_INTEGER + 1)).toEqual({
+      ok: false,
+      value: null,
+    });
+    expect(parseOptionalAccountScore(Number.NaN)).toEqual({ ok: false, value: null });
   });
 
   it("filters by exact categorical values", () => {

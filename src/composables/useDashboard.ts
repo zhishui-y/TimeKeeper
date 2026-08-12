@@ -1,13 +1,10 @@
-import { readonly, shallowRef } from "vue";
-import { api, errorMessage } from "../api/client";
+import { api } from "../api/client";
 import type { DashboardSummary } from "../types/domain";
+import { useAsyncResource } from "./useAsyncResource";
 
 export function useDashboard() {
-  const summary = shallowRef<DashboardSummary | null>(null);
-  const loading = shallowRef(false);
-  const error = shallowRef<string | null>(null);
+  const resource = useAsyncResource<DashboardSummary, string>((left, right) => left === right);
   const inFlight = new Map<string, Promise<DashboardSummary>>();
-  let requestVersion = 0;
 
   function fetchSummary(date: string): Promise<DashboardSummary> {
     const existing = inFlight.get(date);
@@ -23,23 +20,18 @@ export function useDashboard() {
   }
 
   async function load(date: string): Promise<void> {
-    const version = ++requestVersion;
-    loading.value = true;
-    error.value = null;
-    try {
-      const nextSummary = await fetchSummary(date);
-      if (version === requestVersion) summary.value = nextSummary;
-    } catch (cause) {
-      if (version === requestVersion) error.value = errorMessage(cause);
-    } finally {
-      if (version === requestVersion) loading.value = false;
-    }
+    await resource.load(date, () => fetchSummary(date));
   }
 
   return {
-    summary: readonly(summary),
-    loading: readonly(loading),
-    error: readonly(error),
+    summary: resource.data,
+    loading: resource.loading,
+    error: resource.error,
+    status: resource.status,
+    stale: resource.stale,
+    actionsDisabled: resource.actionsDisabled,
+    requestedKey: resource.requestedKey,
+    resolvedKey: resource.resolvedKey,
     load,
   };
 }

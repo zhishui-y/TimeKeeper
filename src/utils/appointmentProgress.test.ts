@@ -30,9 +30,14 @@ describe("appointment progress status", () => {
     );
     expect(
       appointmentProgressStatus(
-        appointment({ serviceStatus: "in_progress", settlementStatus: "settled" }),
+        appointment({ serviceStatus: "completed", settlementStatus: "settled" }),
       ),
     ).toBe("completed");
+    expect(
+      appointmentProgressStatus(
+        appointment({ serviceStatus: "in_progress", settlementStatus: "settled" }),
+      ),
+    ).toBe("in_progress");
     expect(
       appointmentProgressStatus(
         appointment({ serviceStatus: "cancelled", settlementStatus: "settled" }),
@@ -45,8 +50,12 @@ describe("appointment progress status", () => {
       serviceStatus: "completed",
       settlementStatus: "unsettled",
     });
-    expect(appointmentStatusesFromProgress("business", "completed", "unsettled")).toEqual({
+    expect(appointmentStatusesFromProgress("business", "completed", "settled")).toEqual({
       serviceStatus: "completed",
+      settlementStatus: "settled",
+    });
+    expect(appointmentStatusesFromProgress("business", "scheduled", "settled")).toEqual({
+      serviceStatus: "scheduled",
       settlementStatus: "settled",
     });
     expect(appointmentStatusesFromProgress("business", "cancelled", "settled")).toEqual({

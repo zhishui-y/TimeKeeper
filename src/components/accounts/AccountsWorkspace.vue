@@ -3,6 +3,8 @@ import { computed, onMounted, reactive, ref, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAccounts } from "../../composables/useAccounts";
 import { useAccountRoleDataRefresh } from "../../composables/useAccountRoleDataRefresh";
+import { useOperationStore } from "../../stores/operations";
+import { useAppAccessStore } from "../../stores/appAccess";
 import { useUiStore } from "../../stores/ui";
 import type {
   AccountProfile,
@@ -26,13 +28,25 @@ import {
   type AccountProfileSortKey,
   type SortDirection,
 } from "../../utils/accounts";
+import { isInsecureRemoteRoleDataServer } from "../../utils/accountRoleData";
 import AccountDrawer from "./AccountDrawer.vue";
 import AccountRoleDataRefreshDialog from "./AccountRoleDataRefreshDialog.vue";
 import AccountTable from "./AccountTable.vue";
 import AccountToolbar from "./AccountToolbar.vue";
 
 const ui = useUiStore();
-const { items, loading, error, load, applyRoleDataRefreshPatch } = useAccounts({
+const access = useAppAccessStore();
+const operations = useOperationStore();
+const {
+  items,
+  loading,
+  error,
+  stale,
+  actionsDisabled,
+  resolvedKey,
+  load,
+  applyRoleDataRefreshPatch,
+} = useAccounts({
   immediate: false,
 });
 const query = shallowRef("");
@@ -82,14 +96,19 @@ const roleDataRefresh = useAccountRoleDataRefresh({
   onProgress(progress) {
     if (progress.patch) applyRoleDataRefreshPatch(progress.patch);
   },
-  async afterRefresh() {
-    await load(query.value, needsReviewOnly.value ? true : undefined);
-    ui.markAccountsChanged();
-  },
 });
 const activeFilterCount = computed(() => Object.values(accountFilters).filter(Boolean).length);
+const workspaceActionsDisabled = computed(() => actionsDisabled.value || operations.busy);
+const resolvedFilterLabel = computed(() => {
+  const key = resolvedKey.value;
+  if (!key) return "上一组条件";
+  const parts = [key.query ? `搜索“${key.query}”` : "全部账号"];
+  if (key.needsReview) parts.push("仅待完善");
+  return parts.join("、");
+});
 const manualReorderEnabled = computed(() => {
   return (
+    !workspaceActionsDisabled.value &&
     !savingOrder.value &&
     !query.value.trim() &&
     !needsReviewOnly.value &&
@@ -102,6 +121,26 @@ const reorderDisabledReason = computed(() => {
   return "清除搜索和筛选并恢复默认排序后可拖动";
 });
 async function refreshRoleData(ids: readonly string[]): Promise<void> {
+  if (workspaceActionsDisabled.value) return;
+  if (ids.length > 1_000) {
+    ui.notify("单次最多更新 1000 个账号，请缩小当前范围后重试", "warning");
+    return;
+  }
+  try {
+    const settings = await api.getSettings();
+    if (
+      settings.accountRoleDataApiKey.trim() &&
+      isInsecureRemoteRoleDataServer(settings.accountRoleDataServerUrl) &&
+      !globalThis.confirm(
+        "当前角色数据服务器使用非本机 HTTP，API 密钥会以明文经过网络。仍要继续刷新吗？",
+      )
+    ) {
+      return;
+    }
+  } catch (cause) {
+    ui.notify(`读取角色数据服务器设置失败：${errorMessage(cause)}`, "danger");
+    return;
+  }
   const activeElement = globalThis.document.activeElement;
   if (activeElement && "focus" in activeElement && typeof activeElement.focus === "function") {
     const restoreFocus = activeElement.focus.bind(activeElement);
@@ -125,11 +164,13 @@ function refreshSingleRoleData(profile: AccountProfile): void {
 }
 
 function openCreate(): void {
+  if (workspaceActionsDisabled.value) return;
   activeProfile.value = null;
   drawerOpen.value = true;
 }
 
 function openEdit(profile: AccountProfile): void {
+  if (workspaceActionsDisabled.value) return;
   activeProfile.value = profile;
   drawerOpen.value = true;
 }
@@ -239,6 +280,7 @@ async function reorderProfiles(
 }
 
 async function copyAccount(profile: AccountProfile): Promise<void> {
+  if (workspaceActionsDisabled.value) return;
   try {
     await api.copyAccountName(profile.id);
     ui.notify("账号已复制", "success");
@@ -248,6 +290,7 @@ async function copyAccount(profile: AccountProfile): Promise<void> {
 }
 
 async function copyCharacterName(profile: AccountProfile): Promise<void> {
+  if (workspaceActionsDisabled.value) return;
   try {
     await api.copyAccountCharacterName(profile.id);
     ui.notify("角色名已复制", "success");
@@ -257,7 +300,7 @@ async function copyCharacterName(profile: AccountProfile): Promise<void> {
 }
 
 async function save(input: AccountProfileInput): Promise<void> {
-  if (savingAccount.value) return;
+  if (savingAccount.value || workspaceActionsDisabled.value) return;
   savingAccount.value = true;
   try {
     if (activeProfile.value) {
@@ -269,6 +312,7 @@ async function save(input: AccountProfileInput): Promise<void> {
     activeProfile.value = null;
     await search();
     ui.markAccountsChanged();
+    await access.refreshStatus();
     ui.notify("账号档案已保存", "success");
   } catch (cause) {
     ui.notify(errorMessage(cause), "danger");
@@ -278,6 +322,7 @@ async function save(input: AccountProfileInput): Promise<void> {
 }
 
 async function copy(profile: AccountProfile): Promise<void> {
+  if (workspaceActionsDisabled.value) return;
   try {
     await api.copyAccountPassword(profile.id);
     ui.notify("密码已复制，剪贴板将在30秒后清空", "success");
@@ -287,6 +332,7 @@ async function copy(profile: AccountProfile): Promise<void> {
 }
 
 async function remove(profile: AccountProfile): Promise<void> {
+  if (workspaceActionsDisabled.value) return;
   if (!globalThis.confirm(`确定永久删除账号 ${profile.accountName} 及其密码吗？`)) return;
   try {
     await api.deleteAccountProfile(profile.id);
@@ -302,7 +348,7 @@ async function remove(profile: AccountProfile): Promise<void> {
 }
 
 async function removeBatch(): Promise<void> {
-  if (selectedCount.value === 0 || deletingAccounts.value) return;
+  if (selectedCount.value === 0 || deletingAccounts.value || workspaceActionsDisabled.value) return;
   if (!globalThis.confirm(`确定永久删除选中的 ${selectedCount.value} 个账号档案及其密码吗？`)) {
     return;
   }
@@ -318,6 +364,7 @@ async function removeBatch(): Promise<void> {
     selectedIds.value = [];
     await load(query.value, needsReviewOnly.value ? true : undefined);
     ui.markAccountsChanged();
+    await access.refreshStatus();
     if (deletedCount > 0) {
       const message = `已永久删除 ${deletedCount} 个账号档案`;
       batchDeleteFeedback.value = { message, tone: "success" };
@@ -338,8 +385,14 @@ async function removeBatch(): Promise<void> {
 }
 
 async function initializeWorkspace(): Promise<void> {
-  await loadColumnWidths();
-  await load();
+  await Promise.all([loadColumnWidths(), load()]);
+  const requestedId = ui.consumeRequestedAccountProfileId();
+  if (!requestedId || actionsDisabled.value) return;
+  try {
+    openEdit(await api.getAccountProfile(requestedId));
+  } catch (cause) {
+    ui.notify(`打开待修复账号失败：${errorMessage(cause)}`, "danger");
+  }
 }
 
 onMounted(() => {
@@ -379,6 +432,16 @@ watch(
 watch(query, () => {
   void search();
 });
+
+watch(
+  () => operations.roleRefreshResult,
+  async (result) => {
+    if (!result) return;
+    await load(query.value, needsReviewOnly.value ? true : undefined);
+    ui.markAccountsChanged();
+  },
+  { immediate: true },
+);
 
 watch(
   () => [accountFilters.contactName, accountFilters.server, accountFilters.specialization],
@@ -443,6 +506,11 @@ watch(
       :return-focus="roleDataRefreshReturnFocus"
       @close="roleDataRefresh.clearResult"
     />
+    <div v-if="stale" class="stale-banner" role="status">
+      当前保留的是{{
+        resolvedFilterLabel
+      }}的旧数据；新请求失败或尚未完成，编辑、删除和刷新操作已暂停。
+    </div>
     <AccountTable
       :profiles="visibleProfiles"
       :sort-key="sortKey"
@@ -452,6 +520,7 @@ watch(
       :column-widths="columnWidths"
       :saving-column-widths="savingColumnWidths"
       :role-refresh-busy="roleDataRefresh.busy.value"
+      :interactions-disabled="workspaceActionsDisabled"
       :refreshing-ids="roleDataRefresh.targetIds.value"
       v-model:selected-ids="selectedIds"
       @edit="openEdit"
@@ -481,6 +550,15 @@ watch(
   position: relative;
   height: 100%;
   gap: 12px;
+}
+
+.stale-banner {
+  padding: 8px 12px;
+  border: 1px solid var(--amber-border);
+  border-radius: var(--radius-sm, 8px);
+  color: #815414;
+  background: var(--amber-soft);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .accounts-workspace > .loading-line {

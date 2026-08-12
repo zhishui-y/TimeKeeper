@@ -1,6 +1,7 @@
-import { onMounted, readonly, reactive, shallowRef } from "vue";
-import { api, errorMessage } from "../api/client";
-import type { Appointment, AppointmentFilters } from "../types/domain";
+import { computed, onMounted, readonly, reactive, shallowRef } from "vue";
+import { api } from "../api/client";
+import type { AppointmentFilters, AppointmentPage } from "../types/domain";
+import { useAsyncResource } from "./useAsyncResource";
 
 interface UseAppointmentPageOptions {
   pageSize?: number;
@@ -11,39 +12,37 @@ export function useAppointmentPage(
   initialFilters: AppointmentFilters = {},
   { pageSize: initialPageSize = 100, immediate = true }: UseAppointmentPageOptions = {},
 ) {
+  interface AppointmentPageRequestKey {
+    filters: AppointmentFilters;
+    page: number;
+    pageSize: number;
+  }
   const filters = reactive<AppointmentFilters>({ ...initialFilters });
-  const items = shallowRef<Appointment[]>([]);
-  const totalCount = shallowRef(0);
   const page = shallowRef(1);
   const pageSize = shallowRef(initialPageSize);
-  const totalPages = shallowRef(0);
-  const loading = shallowRef(false);
-  const error = shallowRef<string | null>(null);
-  let requestVersion = 0;
+  const resource = useAsyncResource<AppointmentPage, AppointmentPageRequestKey>(
+    (left, right) => JSON.stringify(left) === JSON.stringify(right),
+  );
+  const items = computed<AppointmentPage["items"]>(() => resource.data.value?.items ?? []);
+  const totalCount = computed(() => resource.data.value?.totalCount ?? 0);
+  const totalPages = computed(() => resource.data.value?.totalPages ?? 0);
 
   async function load(): Promise<void> {
-    const version = ++requestVersion;
     const requestedFilters = { ...filters };
     const requestedPage = page.value;
     const requestedPageSize = pageSize.value;
-    loading.value = true;
-    error.value = null;
-    try {
-      const result = await api.listAppointmentPage(
-        requestedFilters,
-        requestedPage,
-        requestedPageSize,
-      );
-      if (version !== requestVersion) return;
-      items.value = result.items;
-      totalCount.value = result.totalCount;
+    const result = await resource.load(
+      { filters: requestedFilters, page: requestedPage, pageSize: requestedPageSize },
+      () => api.listAppointmentPage(requestedFilters, requestedPage, requestedPageSize),
+      (response) => ({
+        filters: requestedFilters,
+        page: response.page,
+        pageSize: response.pageSize,
+      }),
+    );
+    if (result) {
       page.value = result.page;
       pageSize.value = result.pageSize;
-      totalPages.value = result.totalPages;
-    } catch (cause) {
-      if (version === requestVersion) error.value = errorMessage(cause);
-    } finally {
-      if (version === requestVersion) loading.value = false;
     }
   }
 
@@ -81,8 +80,13 @@ export function useAppointmentPage(
     page: readonly(page),
     pageSize: readonly(pageSize),
     totalPages: readonly(totalPages),
-    loading: readonly(loading),
-    error: readonly(error),
+    loading: resource.loading,
+    error: resource.error,
+    status: resource.status,
+    stale: resource.stale,
+    actionsDisabled: resource.actionsDisabled,
+    requestedKey: resource.requestedKey,
+    resolvedKey: resource.resolvedKey,
     load,
     applyFilters,
     goToPage,

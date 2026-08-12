@@ -13,6 +13,7 @@ import type {
   Appointment,
   AppointmentDraftSeed,
   AppointmentInput,
+  AppointmentProgressStatus,
 } from "../../types/domain";
 import { todayInChina } from "../../utils/appointment";
 import {
@@ -62,8 +63,10 @@ const emit = defineEmits<{
 }>();
 const drawerRef = useTemplateRef("drawer");
 const appointmentFormRef = useTemplateRef("appointmentForm");
+const dateInputRef = useTemplateRef<FocusTarget>("dateInput");
 const amountInputRef = useTemplateRef<FocusTarget>("amountInput");
-const formFieldSelector = "input:not([disabled]), select:not([disabled]), textarea:not([disabled])";
+const formFieldSelector =
+  "input:not([disabled]):not([type='radio']), select:not([disabled]), textarea:not([disabled])";
 
 const {
   draft,
@@ -88,12 +91,7 @@ const {
   onSave: (input) => emit("save", input),
 });
 
-const progressStatusOptions = computed(() =>
-  appointmentProgressStatusesForMode(draft.mode).map((value) => ({
-    value,
-    label: appointmentProgressStatusLabels[value],
-  })),
-);
+const progressStatusOptions = computed(() => appointmentProgressStatusesForMode(draft.mode));
 
 const accountModel = computed<AppointmentAccountDraft>({
   get: () => draft.account,
@@ -110,6 +108,20 @@ function close(): void {
 function submitWithProgressStatus(status: "completed" | "cancelled"): void {
   progressStatus.value = status;
   submit();
+}
+
+function updateProgressStatus(event: globalThis.Event): void {
+  const target = event.target as globalThis.HTMLSelectElement;
+  const nextStatus = target.value as AppointmentProgressStatus;
+  if (
+    draft.settlementStatus === "settled" &&
+    nextStatus === "pending_settlement" &&
+    !globalThis.confirm("确定改为待结算吗？已填写的金额和收款信息会继续保留。")
+  ) {
+    target.value = progressStatus.value;
+    return;
+  }
+  progressStatus.value = nextStatus;
 }
 
 function duplicate(): void {
@@ -138,7 +150,7 @@ useModalFocus({
   open: () => props.open,
   container: drawerRef,
   close,
-  initialFocus: () => (props.initialFocus === "amount" ? amountInputRef.value : null),
+  initialFocus: () => (props.initialFocus === "amount" ? amountInputRef.value : dateInputRef.value),
 });
 </script>
 
@@ -172,25 +184,32 @@ useModalFocus({
             @keydown.tab="focusAdjacentField"
             @submit.prevent="submit"
           >
-            <div class="mode-switch" role="radiogroup" aria-label="预约模式">
-              <button
-                type="button"
-                class="mode-switch__item"
-                :class="{ 'is-active': draft.mode === 'business' }"
-                @click="selectMode('business')"
-              >
+            <div class="mode-switch" aria-label="预约模式">
+              <label class="mode-switch__item" :class="{ 'is-active': draft.mode === 'business' }">
+                <input
+                  type="radio"
+                  name="appointment-mode"
+                  value="business"
+                  :checked="draft.mode === 'business'"
+                  @change="selectMode('business')"
+                />
                 <BriefcaseBusiness :size="17" />
                 <span><strong>业务模式</strong><small>记录账单并计入收益</small></span>
-              </button>
-              <button
-                type="button"
+              </label>
+              <label
                 class="mode-switch__item"
                 :class="{ 'is-active': draft.mode === 'entertainment' }"
-                @click="selectMode('entertainment')"
               >
+                <input
+                  type="radio"
+                  name="appointment-mode"
+                  value="entertainment"
+                  :checked="draft.mode === 'entertainment'"
+                  @change="selectMode('entertainment')"
+                />
                 <Gamepad2 :size="17" />
                 <span><strong>娱乐模式</strong><small>只保留排班信息</small></span>
-              </button>
+              </label>
             </div>
 
             <div v-if="errors.length" class="form-errors" role="alert">
@@ -202,7 +221,7 @@ useModalFocus({
               <div class="form-grid form-grid--3">
                 <label class="field form-grid__wide">
                   <span class="field__label">日期 *</span>
-                  <input v-model="draft.serviceDate" class="input" type="date" />
+                  <input ref="dateInput" v-model="draft.serviceDate" class="input" type="date" />
                 </label>
                 <div class="field">
                   <label class="field__label" for="appointment-start-time">开始时间</label>
@@ -267,7 +286,7 @@ useModalFocus({
             </section>
 
             <section class="form-section">
-              <h3>账号与进度</h3>
+              <h3>账号与状态</h3>
               <AppointmentAccountFields
                 v-model="accountModel"
                 :accounts="accounts"
@@ -277,14 +296,15 @@ useModalFocus({
               />
               <div class="form-grid form-grid--status">
                 <label class="field">
-                  <span class="field__label">预约进度</span>
-                  <select v-model="progressStatus" class="select" aria-label="预约进度">
-                    <option
-                      v-for="option in progressStatusOptions"
-                      :key="option.value"
-                      :value="option.value"
-                    >
-                      {{ option.label }}
+                  <span class="field__label">预约状态</span>
+                  <select
+                    class="select"
+                    aria-label="预约状态"
+                    :value="progressStatus"
+                    @change="updateProgressStatus"
+                  >
+                    <option v-for="status in progressStatusOptions" :key="status" :value="status">
+                      {{ appointmentProgressStatusLabels[status] }}
                     </option>
                   </select>
                 </label>
@@ -300,9 +320,9 @@ useModalFocus({
                     ref="amountInput"
                     v-model="draft.amountYuan"
                     class="input mono-number"
-                    type="number"
-                    min="0"
-                    step="0.01"
+                    type="text"
+                    inputmode="decimal"
+                    autocomplete="off"
                     placeholder="0.00"
                   />
                 </label>
@@ -549,6 +569,7 @@ useModalFocus({
 }
 
 .mode-switch__item {
+  position: relative;
   display: flex;
   min-height: 66px;
   align-items: center;
@@ -560,6 +581,20 @@ useModalFocus({
   background: color-mix(in srgb, var(--surface) 95%, transparent);
   text-align: left;
   cursor: pointer;
+}
+
+.mode-switch__item > input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.mode-switch__item:has(input:focus-visible) {
+  outline: 2px solid color-mix(in srgb, var(--brand) 66%, transparent);
+  outline-offset: 2px;
 }
 
 .mode-switch__item.is-active {
@@ -640,7 +675,7 @@ useModalFocus({
 }
 
 .form-grid--status {
-  grid-template-columns: minmax(180px, 0.5fr);
+  grid-template-columns: repeat(2, minmax(180px, 0.5fr));
 }
 
 .form-grid__wide {

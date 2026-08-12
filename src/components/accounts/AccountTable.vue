@@ -15,6 +15,7 @@ import {
 import { computed, shallowRef, useTemplateRef, watch } from "vue";
 import type { AccountProfile, AccountTableColumnWidths } from "../../types/domain";
 import {
+  ACCOUNT_TABLE_ACTIONS_WIDTH,
   accountTableTotalWidth,
   type AccountTableColumnKey,
 } from "../../utils/accountTableColumns";
@@ -46,12 +47,14 @@ const props = withDefaults(
     reorderDisabledReason: string;
     columnWidths: AccountTableColumnWidths;
     savingColumnWidths: boolean;
+    interactionsDisabled?: boolean;
     roleRefreshBusy?: boolean;
     refreshingIds?: ReadonlySet<string>;
   }>(),
   {
     roleRefreshBusy: false,
     refreshingIds: () => new Set<string>(),
+    interactionsDisabled: false,
   },
 );
 const selectedIds = defineModel<string[]>("selectedIds", { required: true });
@@ -94,10 +97,12 @@ function isChecked(event: unknown): boolean {
 }
 
 function toggleAll(event: unknown): void {
+  if (props.interactionsDisabled) return;
   selectedIds.value = isChecked(event) ? props.profiles.map((profile) => profile.id) : [];
 }
 
 function toggleOne(profileId: string, event: unknown): void {
+  if (props.interactionsDisabled) return;
   const next = new Set(selectedIds.value);
   if (isChecked(event)) {
     next.add(profileId);
@@ -108,6 +113,7 @@ function toggleOne(profileId: string, event: unknown): void {
 }
 
 function toggleSelection(profileId: string): void {
+  if (props.interactionsDisabled) return;
   const next = new Set(selectedIds.value);
   if (next.has(profileId)) {
     next.delete(profileId);
@@ -130,11 +136,13 @@ function toggleRow(profileId: string, event: { target: unknown }): void {
 }
 
 function copyAccount(profile: AccountProfile): void {
+  if (props.interactionsDisabled) return;
   toggleSelection(profile.id);
   emit("copyAccount", profile);
 }
 
 function copyPassword(profile: AccountProfile): void {
+  if (props.interactionsDisabled) return;
   if (!profile.password) return;
   toggleSelection(profile.id);
   emit("copy", profile);
@@ -214,7 +222,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
           <col :style="{ width: `${columnWidths.scoreUpdatedAt}px` }" />
           <col :style="{ width: `${columnWidths.weeklyWins}px` }" />
           <col :style="{ width: `${columnWidths.notes}px` }" />
-          <col style="width: 108px" />
+          <col :style="{ width: `${ACCOUNT_TABLE_ACTIONS_WIDTH}px` }" />
         </colgroup>
         <thead>
           <tr>
@@ -222,6 +230,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
               <input
                 ref="all-select"
                 type="checkbox"
+                :disabled="interactionsDisabled"
                 :checked="allChecked"
                 aria-label="全选当前列表账号"
                 @change="toggleAll"
@@ -474,6 +483,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
               dropTarget?.id,
               dropTarget?.placement,
               roleRefreshBusy,
+              interactionsDisabled,
               refreshingIds.has(profile.id),
             ]"
             :class="{
@@ -508,6 +518,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
               </button>
               <input
                 type="checkbox"
+                :disabled="interactionsDisabled"
                 :checked="selectedIdSet.has(profile.id)"
                 :aria-label="`选择账号 ${profile.accountName}`"
                 @change="toggleOne(profile.id, $event)"
@@ -526,6 +537,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
                 v-if="profile.characterName"
                 class="character-name-copy"
                 type="button"
+                :disabled="interactionsDisabled"
                 :title="`复制角色名 ${profile.characterName}`"
                 :aria-label="`复制角色名 ${profile.characterName}`"
                 @click.stop="emit('copyCharacterName', profile)"
@@ -540,6 +552,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
               <button
                 class="icon-button copy-button"
                 type="button"
+                :disabled="interactionsDisabled"
                 title="复制账号"
                 :aria-label="`复制账号 ${profile.accountName}`"
                 @click="copyAccount(profile)"
@@ -551,7 +564,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
               <button
                 class="icon-button copy-button"
                 type="button"
-                :disabled="!profile.password"
+                :disabled="interactionsDisabled || !profile.password"
                 :title="profile.password ? `复制${profile.accountName} 的密码` : '未保存账号密码'"
                 :aria-label="`复制${profile.accountName} 的密码`"
                 @click="copyPassword(profile)"
@@ -577,7 +590,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
                 <button
                   class="icon-button"
                   type="button"
-                  :disabled="roleRefreshBusy"
+                  :disabled="interactionsDisabled || roleRefreshBusy"
                   :title="refreshingIds.has(profile.id) ? '正在更新角色数据' : '更新角色数据'"
                   :aria-label="`更新角色数据 ${profile.accountName}`"
                   :aria-busy="refreshingIds.has(profile.id)"
@@ -593,6 +606,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
                 <button
                   class="icon-button"
                   type="button"
+                  :disabled="interactionsDisabled"
                   title="编辑"
                   aria-label="编辑账号"
                   @click="emit('edit', profile)"
@@ -602,6 +616,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
                 <button
                   class="icon-button action-danger"
                   type="button"
+                  :disabled="interactionsDisabled"
                   title="删除"
                   aria-label="删除账号"
                   @click="emit('delete', profile)"

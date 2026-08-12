@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 use crate::{
     backup::BackupState,
     db::Database,
+    importer::ImportState,
     vault::{VaultState, run_blocking_vault_operation},
 };
 
@@ -50,6 +51,19 @@ pub struct AppAccessStatus {
     pub unlocked: bool,
     pub legacy_migration_pending_count: usize,
     pub recovery_question: Option<String>,
+    pub data_repair_issue_count: usize,
+    pub data_repair_issues: Vec<DataRepairIssue>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataRepairIssue {
+    pub id: String,
+    pub entity_kind: String,
+    pub entity_id: String,
+    pub display_name: String,
+    pub field_name: String,
+    pub original_value: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -102,6 +116,33 @@ pub struct LegacyCredentialMigrationResult {
 #[derive(Clone, Default)]
 pub struct AppAccessState {
     unlocked: Arc<AtomicBool>,
+    transition: Arc<tokio::sync::Mutex<()>>,
+}
+
+#[derive(Debug, Clone)]
+struct AppAccessStatusSnapshot {
+    initialized: bool,
+    legacy_migration_pending_count: usize,
+    recovery_question: Option<String>,
+    data_repair_issue_count: usize,
+    data_repair_issues: Vec<DataRepairIssue>,
+}
+
+impl AppAccessStatusSnapshot {
+    fn with_state(self, unlocked: bool) -> AppAccessStatus {
+        AppAccessStatus {
+            initialized: self.initialized,
+            unlocked: self.initialized && unlocked,
+            legacy_migration_pending_count: self.legacy_migration_pending_count,
+            recovery_question: self.recovery_question,
+            data_repair_issue_count: self.data_repair_issue_count,
+            data_repair_issues: if unlocked {
+                self.data_repair_issues
+            } else {
+                Vec::new()
+            },
+        }
+    }
 }
 
 impl AppAccessState {
@@ -122,6 +163,11 @@ impl AppAccessState {
 
     fn is_unlocked(&self) -> bool {
         self.unlocked.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_unlocked_for_test(&self, unlocked: bool) {
+        self.set_unlocked(unlocked);
     }
 }
 
@@ -248,12 +294,73 @@ async fn status_impl(
     database: &Database,
     access: &AppAccessState,
 ) -> Result<AppAccessStatus, String> {
+    load_status_snapshot(database, access.is_unlocked())
+        .await
+        .map(|snapshot| snapshot.with_state(access.is_unlocked()))
+}
+
+async fn load_status_snapshot(
+    database: &Database,
+    include_issue_details: bool,
+) -> Result<AppAccessStatusSnapshot, String> {
     let initialized = load_verifier(database).await?.is_some();
-    Ok(AppAccessStatus {
+    let data_repair_issue_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM legacy_numeric_repair_issues WHERE resolved_at IS NULL",
+    )
+    .fetch_one(database.pool())
+    .await
+    .map_err(|error| db_error("读取旧数值修复状态失败", error))?
+    .max(0) as usize;
+    let data_repair_issues = if include_issue_details {
+        sqlx::query(
+            "SELECT issue.id, issue.entity_kind, issue.entity_id, issue.field_name,
+                    issue.original_value,
+                    COALESCE(profile.account_name, appointment.contact_name, issue.entity_id)
+                        AS display_name
+             FROM legacy_numeric_repair_issues AS issue
+             LEFT JOIN account_profiles AS profile
+               ON issue.entity_kind = 'account_profile' AND profile.id = issue.entity_id
+             LEFT JOIN appointments AS appointment
+               ON issue.entity_kind = 'appointment' AND appointment.id = issue.entity_id
+             WHERE issue.resolved_at IS NULL
+             ORDER BY issue.created_at, issue.id",
+        )
+        .fetch_all(database.pool())
+        .await
+        .map_err(|error| db_error("读取旧数值修复明细失败", error))?
+        .into_iter()
+        .map(|row| {
+            Ok(DataRepairIssue {
+                id: row
+                    .try_get("id")
+                    .map_err(|error| db_error("读取修复记录失败", error))?,
+                entity_kind: row
+                    .try_get("entity_kind")
+                    .map_err(|error| db_error("读取修复记录失败", error))?,
+                entity_id: row
+                    .try_get("entity_id")
+                    .map_err(|error| db_error("读取修复记录失败", error))?,
+                display_name: row
+                    .try_get("display_name")
+                    .map_err(|error| db_error("读取修复记录失败", error))?,
+                field_name: row
+                    .try_get("field_name")
+                    .map_err(|error| db_error("读取修复记录失败", error))?,
+                original_value: row
+                    .try_get("original_value")
+                    .map_err(|error| db_error("读取修复记录失败", error))?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?
+    } else {
+        Vec::new()
+    };
+    Ok(AppAccessStatusSnapshot {
         initialized,
-        unlocked: initialized && access.is_unlocked(),
         legacy_migration_pending_count: pending_migration_count(database).await?,
         recovery_question: load_recovery_question(database).await?,
+        data_repair_issue_count,
+        data_repair_issues,
     })
 }
 
@@ -271,10 +378,12 @@ async fn initialize_impl(
     password: String,
     recovery: AppAccessRecoverySetup,
 ) -> Result<AppAccessStatus, String> {
+    let _transition = access.transition.lock().await;
     if load_verifier(database).await?.is_some() {
         return Err("入口密码已经初始化".into());
     }
     let normalized_answer = validate_recovery_setup(&recovery)?;
+    let mut status = load_status_snapshot(database, true).await?;
     let answer_for_hash = normalized_answer.clone();
     let (verifier, answer_verifier) = run_blocking_access_operation(move || {
         Ok((
@@ -315,7 +424,9 @@ async fn initialize_impl(
         .await
         .map_err(|error| db_error("提交入口安全初始化失败", error))?;
     access.set_unlocked(true);
-    status_impl(database, access).await
+    status.initialized = true;
+    status.recovery_question = Some(recovery.question.trim().to_string());
+    Ok(status.with_state(true))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -335,6 +446,7 @@ async fn unlock_impl(
     access: &AppAccessState,
     password: String,
 ) -> Result<AppAccessStatus, String> {
+    let _transition = access.transition.lock().await;
     let verifier = load_verifier(database)
         .await?
         .ok_or_else(|| "入口密码尚未初始化".to_string())?;
@@ -343,8 +455,21 @@ async fn unlock_impl(
     if !verified {
         return Err("入口密码错误".into());
     }
+    let status = load_status_snapshot(database, true).await?;
     access.set_unlocked(true);
-    status_impl(database, access).await
+    Ok(status.with_state(true))
+}
+
+async fn lock_impl(
+    database: &Database,
+    access: &AppAccessState,
+    imports: &ImportState,
+) -> Result<AppAccessStatus, String> {
+    let _transition = access.transition.lock().await;
+    let status = load_status_snapshot(database, false).await?;
+    access.set_unlocked(false);
+    imports.clear();
+    Ok(status.with_state(false))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -360,9 +485,9 @@ pub async fn unlock_app_access(
 pub async fn lock_app_access(
     database: State<'_, Database>,
     access: State<'_, AppAccessState>,
+    imports: State<'_, ImportState>,
 ) -> Result<AppAccessStatus, String> {
-    access.set_unlocked(false);
-    status_impl(database.inner(), access.inner()).await
+    lock_impl(database.inner(), access.inner(), imports.inner()).await
 }
 
 async fn change_password_impl(
@@ -385,6 +510,7 @@ async fn change_password_impl(
     if !verified {
         return Err("当前入口密码不正确".into());
     }
+    let status = load_status_snapshot(database, true).await?;
 
     let new_verifier = run_blocking_access_operation(move || hash_password(new_password)).await?;
     let result =
@@ -397,7 +523,7 @@ async fn change_password_impl(
     if result.rows_affected() != 1 {
         return Err("入口密码尚未初始化".into());
     }
-    status_impl(database, access).await
+    Ok(status.with_state(true))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -408,6 +534,7 @@ pub async fn change_app_access_password(
     backup: State<'_, BackupState>,
     access: State<'_, AppAccessState>,
 ) -> Result<AppAccessStatus, String> {
+    let _transition = access.transition.lock().await;
     let _operation_guard = backup.lock_data_operation().await;
     change_password_impl(
         database.inner(),
@@ -434,6 +561,7 @@ async fn set_recovery_impl(
     if !verified {
         return Err("当前入口密码不正确".into());
     }
+    let mut status = load_status_snapshot(database, true).await?;
     let answer_verifier =
         run_blocking_access_operation(move || hash_recovery_answer(normalized_answer)).await?;
     let now = chrono::Utc::now().to_rfc3339();
@@ -451,7 +579,8 @@ async fn set_recovery_impl(
     .execute(database.pool())
     .await
     .map_err(|error| db_error("保存恢复问题失败", error))?;
-    status_impl(database, access).await
+    status.recovery_question = Some(recovery.question.trim().to_string());
+    Ok(status.with_state(true))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -462,6 +591,7 @@ pub async fn set_app_access_recovery(
     backup: State<'_, BackupState>,
     access: State<'_, AppAccessState>,
 ) -> Result<AppAccessStatus, String> {
+    let _transition = access.transition.lock().await;
     let _operation_guard = backup.lock_data_operation().await;
     set_recovery_impl(database.inner(), access.inner(), current_password, recovery).await
 }
@@ -499,6 +629,7 @@ async fn reset_password_impl(
         }
     };
     let answer_for_hash = enrollment.as_ref().map(|(_, answer)| answer.clone());
+    let mut status = load_status_snapshot(database, true).await?;
     let (verifier, answer_verifier) = run_blocking_access_operation(move || {
         let answer_verifier = answer_for_hash.map(hash_recovery_answer).transpose()?;
         Ok((hash_password(new_password)?, answer_verifier))
@@ -523,6 +654,7 @@ async fn reset_password_impl(
     .await
     .map_err(|error| db_error("重置入口密码失败", error))?;
     if let Some((question, _)) = enrollment {
+        status.recovery_question = Some(question.clone());
         sqlx::query(
             "INSERT INTO app_access_recovery (id, question, answer_verifier, updated_at)
              VALUES (1, ?, ?, ?)
@@ -543,7 +675,8 @@ async fn reset_password_impl(
         .await
         .map_err(|error| db_error("提交入口密码重置失败", error))?;
     access.set_unlocked(true);
-    status_impl(database, access).await
+    status.initialized = true;
+    Ok(status.with_state(true))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -666,6 +799,7 @@ async fn migrate_impl(
     password: String,
     recovery: Option<AppAccessRecoverySetup>,
 ) -> Result<LegacyCredentialMigrationResult, String> {
+    let _transition_guard = access.transition.lock().await;
     let rows = load_migration_rows(database).await?;
     if rows.is_empty() {
         return Ok(LegacyCredentialMigrationResult {
@@ -825,6 +959,18 @@ mod tests {
             "timekeeper-app-access-{name}-{}",
             uuid::Uuid::now_v7()
         ))
+    }
+
+    #[test]
+    fn unlock_command_delegates_to_the_single_serialized_transition() {
+        let source = include_str!("app_access.rs");
+        let command = source
+            .split("pub async fn unlock_app_access")
+            .nth(1)
+            .and_then(|tail| tail.split("#[tauri::command]").next())
+            .expect("unlock command source should be present");
+        assert!(!command.contains("transition.lock()"));
+        assert_eq!(command.matches("unlock_impl(").count(), 1);
     }
 
     #[test]
@@ -1220,6 +1366,33 @@ mod tests {
                     .unwrap()
                     .unlocked
             );
+        });
+    }
+
+    #[test]
+    fn locking_clears_the_in_memory_excel_preview() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let access = AppAccessState::new();
+            initialize_impl(
+                &database,
+                &access,
+                "first password".into(),
+                AppAccessRecoverySetup {
+                    question: "常用角色".into(),
+                    answer: "青瓷".into(),
+                },
+            )
+            .await
+            .unwrap();
+            let imports = ImportState::default();
+            imports.insert_for_test("preview-token");
+
+            let status = lock_impl(&database, &access, &imports).await.unwrap();
+
+            assert!(!status.unlocked);
+            assert!(access.require_unlocked().is_err());
+            assert!(!imports.contains("preview-token"));
         });
     }
 
@@ -1649,6 +1822,44 @@ mod tests {
             assert_eq!(result.pending_count, 1);
             assert!(access.require_unlocked().is_ok());
             std::fs::remove_dir_all(dir).unwrap();
+        });
+    }
+
+    #[test]
+    fn repair_issue_details_are_only_exposed_while_unlocked() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let access = AppAccessState::new();
+            sqlx::query(
+                "INSERT INTO account_profiles (
+                    id, account_name, needs_review, sort_order, created_at, updated_at
+                 ) VALUES ('repair-profile', '待修复账号', 0, 0, 'now', 'now')",
+            )
+            .execute(database.pool())
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO legacy_numeric_repair_issues (
+                    id, entity_kind, entity_id, field_name, original_value, created_at
+                 ) VALUES (1, 'account_profile', 'repair-profile', 'current_score',
+                    '9007199254740992', 'now')",
+            )
+            .execute(database.pool())
+            .await
+            .unwrap();
+
+            let locked = status_impl(&database, &access).await.unwrap();
+            assert_eq!(locked.data_repair_issue_count, 1);
+            assert!(locked.data_repair_issues.is_empty());
+
+            access.set_unlocked(true);
+            let unlocked = status_impl(&database, &access).await.unwrap();
+            assert_eq!(unlocked.data_repair_issue_count, 1);
+            assert_eq!(unlocked.data_repair_issues[0].display_name, "待修复账号");
+            assert_eq!(
+                unlocked.data_repair_issues[0].original_value,
+                "9007199254740992"
+            );
         });
     }
 }

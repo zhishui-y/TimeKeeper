@@ -18,6 +18,7 @@ const props = defineProps<{
   days: DaySchedule[];
   nextAppointmentId?: string | null;
   selectedDate?: string;
+  interactionsDisabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -41,7 +42,7 @@ function appointmentTitle(appointment: Appointment): string {
 </script>
 
 <template>
-  <section class="week-schedule">
+  <section class="week-schedule" :inert="interactionsDisabled">
     <header class="week-schedule__header">
       <div>
         <span class="section-kicker">本周安排</span>

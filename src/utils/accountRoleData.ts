@@ -17,3 +17,14 @@ export function validateAccountRoleDataServerUrl(value: string): string | null {
   if (url.search || url.hash) return "角色数据服务器 URL 不能包含查询参数或片段";
   return null;
 }
+
+export function isInsecureRemoteRoleDataServer(value: string): boolean {
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== "http:") return false;
+    const host = url.hostname.toLocaleLowerCase();
+    return host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]" && host !== "::1";
+  } catch {
+    return false;
+  }
+}

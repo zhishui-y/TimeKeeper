@@ -1,16 +1,16 @@
-import { addDays, format, parseISO } from "date-fns";
 import type { Appointment, AppointmentDraftSeed, AppointmentInput } from "../types/domain";
+import {
+  addDateKeyDays,
+  buildCivilDateTime,
+  calendarDateKey,
+  calendarTime,
+  chinaCivilNowValue,
+  chinaDateKey,
+  civilDateTimeValue,
+  civilTime,
+} from "./chinaDateTime";
 
-export function todayInChina(now = new Date()): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(now);
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${value.year}-${value.month}-${value.day}`;
-}
+export const todayInChina = chinaDateKey;
 
 function snapshotAccountInput(
   appointment: Appointment,
@@ -40,8 +40,8 @@ function snapshotAccountInput(
 export function appointmentToInput(appointment: Appointment): AppointmentInput {
   return {
     serviceDate: appointment.serviceDate,
-    startTime: appointment.startsAt ? format(parseISO(appointment.startsAt), "HH:mm") : null,
-    endTime: appointment.endsAt ? format(parseISO(appointment.endsAt), "HH:mm") : null,
+    startTime: civilTime(appointment.startsAt),
+    endTime: civilTime(appointment.endsAt),
     contactName: appointment.contactName,
     content: appointment.content,
     mode: appointment.mode,
@@ -85,16 +85,16 @@ export function rescheduledInput(
   if (!appointment.startsAt || allDay) {
     return {
       ...input,
-      serviceDate: format(startsAt, "yyyy-MM-dd"),
+      serviceDate: calendarDateKey(startsAt),
       startTime: null,
       endTime: null,
     };
   }
   return {
     ...input,
-    serviceDate: format(startsAt, "yyyy-MM-dd"),
-    startTime: format(startsAt, "HH:mm"),
-    endTime: endsAt ? format(endsAt, "HH:mm") : null,
+    serviceDate: calendarDateKey(startsAt),
+    startTime: calendarTime(startsAt),
+    endTime: endsAt ? calendarTime(endsAt) : null,
   };
 }
 
@@ -104,14 +104,16 @@ export function combineDateTime(
   endTime?: string | null,
 ): { startsAt: string | null; endsAt: string | null } {
   if (!startTime) return { startsAt: null, endsAt: null };
-  const start = parseISO(`${serviceDate}T${startTime}:00`);
-  if (!endTime) return { startsAt: start.toISOString(), endsAt: null };
-  let end = parseISO(`${serviceDate}T${endTime}:00`);
-  if (end.getTime() === start.getTime()) {
+  const startsAt = buildCivilDateTime(serviceDate, startTime);
+  if (!startsAt) throw new Error("开始时间格式不正确");
+  if (!endTime) return { startsAt, endsAt: null };
+  if (endTime === startTime) {
     throw new Error("开始时间和结束时间不能相同");
   }
-  if (end < start) end = addDays(end, 1);
-  return { startsAt: start.toISOString(), endsAt: end.toISOString() };
+  const endDate = endTime < startTime ? addDateKeyDays(serviceDate, 1) : serviceDate;
+  const endsAt = buildCivilDateTime(endDate, endTime);
+  if (!endsAt) throw new Error("结束时间格式不正确");
+  return { startsAt, endsAt };
 }
 
 export function sortAppointmentsByStartTime(appointments: readonly Appointment[]): Appointment[] {
@@ -119,10 +121,10 @@ export function sortAppointmentsByStartTime(appointments: readonly Appointment[]
     .map((appointment, index) => ({ appointment, index }))
     .sort((left, right) => {
       const leftTime = left.appointment.startsAt
-        ? parseISO(left.appointment.startsAt).getTime()
+        ? civilDateTimeValue(left.appointment.startsAt)
         : Number.POSITIVE_INFINITY;
       const rightTime = right.appointment.startsAt
-        ? parseISO(right.appointment.startsAt).getTime()
+        ? civilDateTimeValue(right.appointment.startsAt)
         : Number.POSITIVE_INFINITY;
       return leftTime - rightTime || left.index - right.index;
     })
@@ -133,7 +135,7 @@ export function findNextScheduledAppointment(
   appointments: readonly Appointment[],
   now: Date,
 ): Appointment | null {
-  const nowTime = now.getTime();
+  const nowTime = chinaCivilNowValue(now);
   const sortedAppointments = sortAppointmentsByStartTime(appointments);
   const ongoingAppointment = sortedAppointments.find((appointment) => {
     if (appointment.serviceStatus !== "scheduled" && appointment.serviceStatus !== "in_progress") {
@@ -141,10 +143,10 @@ export function findNextScheduledAppointment(
     }
     if (typeof appointment.startsAt !== "string") return false;
 
-    const startsAt = parseISO(appointment.startsAt).getTime();
+    const startsAt = civilDateTimeValue(appointment.startsAt);
     if (startsAt > nowTime) return false;
     if (typeof appointment.endsAt === "string") {
-      return parseISO(appointment.endsAt).getTime() > nowTime;
+      return civilDateTimeValue(appointment.endsAt) > nowTime;
     }
     return appointment.serviceStatus === "in_progress";
   });
@@ -157,7 +159,7 @@ export function findNextScheduledAppointment(
       (appointment) =>
         appointment.serviceStatus === "scheduled" &&
         typeof appointment.startsAt === "string" &&
-        parseISO(appointment.startsAt).getTime() > nowTime,
+        civilDateTimeValue(appointment.startsAt) > nowTime,
     ) ?? null
   );
 }

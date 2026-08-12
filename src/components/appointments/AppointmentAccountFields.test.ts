@@ -29,10 +29,10 @@ describe("AppointmentAccountFields", () => {
       },
     });
 
-    expect(wrapper.get('button[aria-label="档案账号快照，点击改为一次性账号"]').text()).toContain(
+    expect(wrapper.get('label[aria-label="档案账号快照，点击改为一次性账号"]').text()).toContain(
       "档案账号快照",
     );
-    await wrapper.get('button[aria-label="档案账号快照，点击改为一次性账号"]').trigger("click");
+    await wrapper.get('input[type="radio"][value="embedded"]').trigger("click");
 
     expect(wrapper.emitted("update:modelValue")?.[0]?.[0]).toEqual(
       expect.objectContaining({

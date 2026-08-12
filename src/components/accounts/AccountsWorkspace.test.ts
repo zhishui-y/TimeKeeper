@@ -378,6 +378,60 @@ describe("AccountsWorkspace batch delete feedback", () => {
     wrapper.unmount();
   });
 
+  it("reloads the active workspace when a role refresh completes after navigating away", async () => {
+    const pendingRefresh =
+      deferred<Awaited<ReturnType<typeof mockApi.refreshAccountProfileRoleData>>>();
+    const refreshedProfiles = [
+      {
+        ...profiles[0]!,
+        currentScore: 2800,
+        highestScore: 2900,
+        weeklyWins: 9,
+        updatedAt: "2026-08-12T00:00:00Z",
+      },
+      profiles[1]!,
+    ];
+    const listProfiles = vi
+      .spyOn(mockApi, "listAccountProfiles")
+      .mockResolvedValueOnce(profiles)
+      .mockResolvedValueOnce(profiles)
+      .mockResolvedValueOnce(refreshedProfiles);
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
+    vi.spyOn(mockApi, "refreshAccountProfileRoleData").mockReturnValue(pendingRefresh.promise);
+    const pinia = createPinia();
+    const first = mount(AccountsWorkspace, { global: { plugins: [pinia] } });
+    await flushPromises();
+
+    await first.get('button[aria-label="更新角色数据 账号一"]').trigger("click");
+    await flushPromises();
+    first.unmount();
+
+    const returned = mount(AccountsWorkspace, { global: { plugins: [pinia] } });
+    await flushPromises();
+    expect(returned.findComponent(AccountTable).props("profiles")[0]).toMatchObject({
+      currentScore: 2100,
+    });
+
+    pendingRefresh.resolve({
+      requestedCount: 1,
+      updatedCount: 1,
+      noRecordCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      items: [{ accountId: "account-1", status: "updated" }],
+    });
+    await flushPromises();
+
+    expect(listProfiles).toHaveBeenCalledTimes(3);
+    expect(returned.findComponent(AccountTable).props("profiles")[0]).toMatchObject({
+      currentScore: 2800,
+      highestScore: 2900,
+      weeklyWins: 9,
+    });
+    expect(useUiStore(pinia).accountRevision).toBe(1);
+    returned.unmount();
+  });
+
   it("keeps request errors in the summary dialog without a duplicate toast", async () => {
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
     vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);

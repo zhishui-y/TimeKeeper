@@ -2,8 +2,21 @@ import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 
-// @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+const developmentCsp = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self' data:",
+  "connect-src 'self' ipc: http://ipc.localhost ws:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-src 'none'",
+  "frame-ancestors 'none'",
+  "worker-src 'none'",
+].join("; ");
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -23,6 +36,9 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: host || false,
+    headers: {
+      "Content-Security-Policy": developmentCsp,
+    },
     hmr: host
       ? {
           protocol: "ws",

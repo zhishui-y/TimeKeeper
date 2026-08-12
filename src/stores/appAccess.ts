@@ -13,6 +13,8 @@ const emptyStatus: AppAccessStatus = {
   unlocked: false,
   legacyMigrationPendingCount: 0,
   recoveryQuestion: null,
+  dataRepairIssueCount: 0,
+  dataRepairIssues: [],
 };
 
 export const useAppAccessStore = defineStore("appAccess", () => {
@@ -26,6 +28,8 @@ export const useAppAccessStore = defineStore("appAccess", () => {
   const unlocked = computed(() => status.value.unlocked);
   const legacyMigrationPendingCount = computed(() => status.value.legacyMigrationPendingCount);
   const recoveryQuestion = computed(() => status.value.recoveryQuestion);
+  const dataRepairIssueCount = computed(() => status.value.dataRepairIssueCount);
+  const dataRepairIssues = computed(() => status.value.dataRepairIssues);
 
   function applyStatus(next: AppAccessStatus): AppAccessStatus {
     status.value = next;
@@ -89,6 +93,15 @@ export const useAppAccessStore = defineStore("appAccess", () => {
   const setRecovery = (currentPassword: string, recovery: AppAccessRecoverySetup) =>
     runStatusAction(() => api.setAppAccessRecovery(currentPassword, recovery));
 
+  async function refreshStatus(): Promise<AppAccessStatus | null> {
+    try {
+      return applyStatus(await api.appAccessStatus());
+    } catch (cause) {
+      error.value = errorMessage(cause);
+      return null;
+    }
+  }
+
   async function migrateLegacyCredentials(
     password: string,
     recovery?: AppAccessRecoverySetup,
@@ -117,6 +130,8 @@ export const useAppAccessStore = defineStore("appAccess", () => {
     unlocked,
     legacyMigrationPendingCount,
     recoveryQuestion,
+    dataRepairIssueCount,
+    dataRepairIssues,
     bootstrap,
     initialize,
     unlock,
@@ -124,6 +139,7 @@ export const useAppAccessStore = defineStore("appAccess", () => {
     changePassword,
     resetPassword,
     setRecovery,
+    refreshStatus,
     migrateLegacyCredentials,
     clearError,
   };

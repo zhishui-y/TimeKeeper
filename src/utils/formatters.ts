@@ -1,6 +1,5 @@
-import { format, isToday, parseISO } from "date-fns";
-import { zhCN } from "date-fns/locale";
 import type { AppointmentMode } from "../types/domain";
+import { civilDateKey, civilTime, chinaDateKey, formatChinaDate } from "./chinaDateTime";
 
 export const modeLabels: Record<AppointmentMode, string> = {
   business: "业务",
@@ -17,31 +16,31 @@ export function formatCurrency(amountMinor?: number | null): string {
 }
 
 export function formatShortDate(value: string): string {
-  return format(parseISO(value), "M月d日 EEE", { locale: zhCN });
+  return formatChinaDate(value, { weekday: true });
 }
 
 export function formatCompactDate(value: string): string {
-  return format(parseISO(value), "MM.dd");
+  return formatChinaDate(value, { compact: true });
 }
 
 export function formatDateHeading(value: string): string {
-  const date = parseISO(value);
-  return isToday(date)
-    ? `今天 · ${format(date, "M月d日 EEEE", { locale: zhCN })}`
-    : format(date, "M月d日 EEEE", { locale: zhCN });
+  const label = formatChinaDate(value, { weekday: true });
+  return value === chinaDateKey() ? `今天 · ${label}` : label;
 }
 
 export function formatTime(value?: string | null): string {
-  return value ? format(parseISO(value), "HH:mm") : "待定";
+  return civilTime(value) ?? "待定";
 }
 
 export function formatTimeRange(startsAt?: string | null, endsAt?: string | null): string {
   if (!startsAt) return "待定时段";
-  const start = parseISO(startsAt);
-  if (!endsAt) return format(start, "HH:mm");
-  const end = parseISO(endsAt);
-  const crossesDay = format(start, "yyyy-MM-dd") !== format(end, "yyyy-MM-dd");
-  return `${format(start, "HH:mm")}–${format(end, "HH:mm")}${crossesDay ? " +1" : ""}`;
+  const start = civilTime(startsAt);
+  if (!start) return "待定时段";
+  if (!endsAt) return start;
+  const end = civilTime(endsAt);
+  if (!end) return start;
+  const crossesDay = civilDateKey(startsAt) !== civilDateKey(endsAt);
+  return `${start}–${end}${crossesDay ? " +1" : ""}`;
 }
 
 export function formatFileSize(sizeBytes: number): string {

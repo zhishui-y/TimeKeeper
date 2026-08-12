@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
 import { effectScope } from "vue";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockApi } from "../api/mockClient";
 import type {
   AccountRoleDataRefreshProgress,
@@ -30,6 +31,10 @@ function deferred<T>() {
 }
 
 describe("useAccountRoleDataRefresh", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();

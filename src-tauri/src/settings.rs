@@ -19,6 +19,8 @@ const SETTINGS_RECOVERY_FILE_NAME: &str = "settings.previous.json";
 pub const DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL: &str = "https://zhishui.cc/api/jx3/excel/";
 pub const DEFAULT_FONT_FAMILY: &str = "Microsoft YaHei UI";
 pub const DEFAULT_BASE_FONT_SIZE: u32 = 15;
+const MAX_DEFAULT_REMINDER_MINUTES: u32 = 1_440;
+const LEGACY_MAX_DEFAULT_REMINDER_MINUTES: u32 = 7 * 24 * 60;
 
 fn default_account_role_data_server_url() -> String {
     DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL.to_string()
@@ -286,6 +288,16 @@ impl AppSettings {
         self.account_role_data_api_key = self.account_role_data_api_key.trim().to_string();
     }
 
+    pub(crate) fn normalize_legacy_default_reminder(&mut self) -> bool {
+        if (MAX_DEFAULT_REMINDER_MINUTES + 1..=LEGACY_MAX_DEFAULT_REMINDER_MINUTES)
+            .contains(&self.default_reminder_minutes)
+        {
+            self.default_reminder_minutes = 0;
+            return true;
+        }
+        false
+    }
+
     pub(crate) fn validate(&self) -> Result<(), SettingsError> {
         let font_length = self.font_family.chars().count();
         if !(1..=120).contains(&font_length)
@@ -301,8 +313,10 @@ impl AppSettings {
                 "基础字号必须在14到18像素之间".into(),
             ));
         }
-        if self.default_reminder_minutes > 7 * 24 * 60 {
-            return Err(SettingsError::Validation("默认提醒时间不能超过7天".into()));
+        if self.default_reminder_minutes > MAX_DEFAULT_REMINDER_MINUTES {
+            return Err(SettingsError::Validation(
+                "默认提醒时间必须是0到1440分钟之间的整数".into(),
+            ));
         }
         if !(1..=365).contains(&self.backup_retention) {
             return Err(SettingsError::Validation(
@@ -353,10 +367,11 @@ impl SettingsState {
 
         let path = data_dir.join(SETTINGS_FILE_NAME);
         let recovery_path = data_dir.join(SETTINGS_RECOVERY_FILE_NAME);
-        let settings = load_with_recovery(&path, &recovery_path)?;
+        let mut settings = load_with_recovery(&path, &recovery_path)?;
+        let migrated_legacy_reminder = settings.normalize_legacy_default_reminder();
         settings.validate()?;
 
-        if !path.exists() {
+        if !path.exists() || migrated_legacy_reminder {
             write_settings_atomic(&path, &recovery_path, &settings)?;
         }
 
@@ -369,6 +384,12 @@ impl SettingsState {
 
     pub fn snapshot(&self) -> Result<AppSettings, SettingsError> {
         Ok(self.lock()?.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_writes_for_test(&mut self) {
+        self.path = self.path.join("unwritable-settings.json");
+        self.recovery_path = self.path.join("unwritable-settings.previous.json");
     }
 
     fn update_from_frontend(
@@ -572,6 +593,85 @@ mod tests {
 
         let reloaded = SettingsState::load(&dir).unwrap();
         assert_eq!(reloaded.snapshot().unwrap(), AppSettings::default());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn validates_default_reminder_minute_boundaries() {
+        for minutes in [0, MAX_DEFAULT_REMINDER_MINUTES] {
+            let settings = AppSettings {
+                default_reminder_minutes: minutes,
+                ..AppSettings::default()
+            };
+            assert!(settings.validate().is_ok(), "{minutes} should be accepted");
+        }
+
+        let settings = AppSettings {
+            default_reminder_minutes: MAX_DEFAULT_REMINDER_MINUTES + 1,
+            ..AppSettings::default()
+        };
+        assert!(matches!(
+            settings.validate(),
+            Err(SettingsError::Validation(message))
+                if message == "默认提醒时间必须是0到1440分钟之间的整数"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_unsigned_integer_default_reminder_values_during_deserialization() {
+        let defaults = serde_json::to_value(AppSettings::default()).unwrap();
+        for invalid in [serde_json::json!(-1), serde_json::json!(1.5)] {
+            let mut value = defaults.clone();
+            value["defaultReminderMinutes"] = invalid;
+            assert!(serde_json::from_value::<AppSettings>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn migrates_legacy_default_reminders_to_disabled_and_persists_the_result() {
+        for minutes in [
+            MAX_DEFAULT_REMINDER_MINUTES + 1,
+            LEGACY_MAX_DEFAULT_REMINDER_MINUTES,
+        ] {
+            let dir = test_dir("legacy-reminder");
+            fs::create_dir_all(&dir).unwrap();
+            let legacy = AppSettings {
+                default_reminder_minutes: minutes,
+                ..AppSettings::default()
+            };
+            fs::write(
+                dir.join(SETTINGS_FILE_NAME),
+                serde_json::to_vec_pretty(&legacy).unwrap(),
+            )
+            .unwrap();
+
+            let loaded = SettingsState::load(&dir).unwrap().snapshot().unwrap();
+            assert_eq!(loaded.default_reminder_minutes, 0);
+            let persisted: AppSettings =
+                serde_json::from_slice(&fs::read(dir.join(SETTINGS_FILE_NAME)).unwrap()).unwrap();
+            assert_eq!(persisted.default_reminder_minutes, 0);
+            fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn keeps_previously_invalid_default_reminders_rejected_during_load() {
+        let dir = test_dir("invalid-legacy-reminder");
+        fs::create_dir_all(&dir).unwrap();
+        let invalid = AppSettings {
+            default_reminder_minutes: LEGACY_MAX_DEFAULT_REMINDER_MINUTES + 1,
+            ..AppSettings::default()
+        };
+        fs::write(
+            dir.join(SETTINGS_FILE_NAME),
+            serde_json::to_vec_pretty(&invalid).unwrap(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            SettingsState::load(&dir),
+            Err(SettingsError::Validation(_))
+        ));
         fs::remove_dir_all(dir).unwrap();
     }
 

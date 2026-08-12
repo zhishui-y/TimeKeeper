@@ -130,9 +130,9 @@ describe("TodayAppointmentList", () => {
     await settlementButton?.trigger("click");
     expect(wrapper.emitted("settle")?.[0]?.[0]).toMatchObject({ id: "appointment-1" });
     expect(rows[0]?.find('button[aria-label="编辑结算"]').exists()).toBe(false);
-    expect(rows[1]?.get(".badge").text()).toBe("已完成");
+    expect(rows[1]?.get(".badge").text()).toBe("完成");
     expect(rows[1]?.find(".appointment-row__settlement-status").exists()).toBe(false);
-    expect(rows[2]?.get(".badge").text()).toBe("已完成");
+    expect(rows[2]?.get(".badge").text()).toBe("完成");
     expect(rows[2]?.find(".appointment-row__settlement-status").exists()).toBe(false);
   });
 });

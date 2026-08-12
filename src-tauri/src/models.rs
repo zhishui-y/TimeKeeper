@@ -351,6 +351,31 @@ impl fmt::Debug for AccountProfile {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AccountProfileCredentialInput {
+    Keep,
+    Replace { password: String },
+    Remove,
+}
+
+impl fmt::Debug for AccountProfileCredentialInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Keep => formatter.write_str("Keep"),
+            Self::Replace { .. } => formatter
+                .debug_struct("Replace")
+                .field("password", &"<redacted>")
+                .finish(),
+            Self::Remove => formatter.write_str("Remove"),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountProfileInput {
     #[serde(default)]
@@ -364,8 +389,7 @@ pub struct AccountProfileInput {
     #[serde(default)]
     pub gear_score: Option<String>,
     pub account_name: String,
-    #[serde(default)]
-    pub password: Option<String>,
+    pub credential: AccountProfileCredentialInput,
     #[serde(default)]
     pub current_score: Option<i64>,
     #[serde(default)]
@@ -383,7 +407,7 @@ impl fmt::Debug for AccountProfileInput {
         formatter
             .debug_struct("AccountProfileInput")
             .field("account_name", &self.account_name)
-            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("credential", &self.credential)
             .field("needs_review", &self.needs_review)
             .finish_non_exhaustive()
     }
@@ -495,6 +519,17 @@ mod tests {
             "\"in_progress\""
         );
         assert_eq!(SettlementStatus::NotApplicable.as_str(), "not_applicable");
+
+        let credential = AccountProfileCredentialInput::Replace {
+            password: "secret".into(),
+        };
+        let value = serde_json::to_value(credential).unwrap();
+        assert_eq!(value["kind"], "replace");
+        assert_eq!(value["password"], "secret");
+        assert_eq!(
+            serde_json::to_value(AccountProfileCredentialInput::Remove).unwrap()["kind"],
+            "remove"
+        );
     }
 
     #[test]
@@ -519,7 +554,9 @@ mod tests {
             specialization: None,
             gear_score: None,
             account_name: "demo".into(),
-            password: Some(secret.into()),
+            credential: AccountProfileCredentialInput::Replace {
+                password: secret.into(),
+            },
             current_score: None,
             highest_score: None,
             score_updated_at: None,

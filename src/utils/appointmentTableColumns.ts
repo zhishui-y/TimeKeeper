@@ -43,7 +43,8 @@ export const MIN_APPOINTMENT_TABLE_COLUMN_WIDTHS: AppointmentTableColumnWidths =
 };
 
 export const MAX_APPOINTMENT_TABLE_COLUMN_WIDTH = MAX_RESIZABLE_TABLE_COLUMN_WIDTH;
-export const APPOINTMENT_TABLE_FIXED_WIDTH = 44 + 112;
+export const APPOINTMENT_TABLE_ACTIONS_WIDTH = 108;
+export const APPOINTMENT_TABLE_FIXED_WIDTH = 44 + APPOINTMENT_TABLE_ACTIONS_WIDTH;
 
 export function clampAppointmentTableColumnWidth(
   key: AppointmentTableColumnKey,

@@ -116,7 +116,7 @@ describe("WeekSchedule", () => {
     );
     expect(chips[0]?.get(".schedule-chip__progress").text()).toBe("已预约");
     expect(chips[1]?.classes()).toContain("schedule-chip--completed");
-    expect(chips[1]?.get(".schedule-chip__progress").text()).toBe("已完成");
+    expect(chips[1]?.get(".schedule-chip__progress").text()).toBe("完成");
     expect(chips[2]?.classes()).toContain("schedule-chip--cancelled");
     expect(chips[2]?.get(".schedule-chip__progress").text()).toBe("已取消");
     expect(chips[0]?.attributes("title")).toContain("20:00–22:00");

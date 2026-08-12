@@ -1,23 +1,21 @@
-import { onScopeDispose, readonly, shallowRef } from "vue";
-import { api, errorMessage } from "../api/client";
+import { computed, onScopeDispose } from "vue";
+import { useOperationStore } from "../stores/operations";
 import type { AccountRoleDataRefreshProgress, AccountRoleDataRefreshResult } from "../types/domain";
 
 export interface UseAccountRoleDataRefreshOptions {
-  afterRefresh?: (result: AccountRoleDataRefreshResult) => Promise<void> | void;
   onProgress?: (progress: AccountRoleDataRefreshProgress) => void;
 }
 
 const SUCCESS_DISMISS_DELAY_MS = 3_000;
 
-export function useAccountRoleDataRefresh({
-  afterRefresh,
-  onProgress,
-}: UseAccountRoleDataRefreshOptions = {}) {
-  const busy = shallowRef(false);
-  const targetIds = shallowRef<ReadonlySet<string>>(new Set());
-  const result = shallowRef<AccountRoleDataRefreshResult | null>(null);
-  const error = shallowRef<string | null>(null);
+export function useAccountRoleDataRefresh({ onProgress }: UseAccountRoleDataRefreshOptions = {}) {
+  const operations = useOperationStore();
+  const busy = computed(() => operations.current?.kind === "accountRoleRefresh");
+  const targetIds = computed(() => operations.roleRefreshTargetIds);
+  const result = computed(() => operations.roleRefreshResult);
+  const error = computed(() => operations.roleRefreshError);
   let dismissTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  let disposed = false;
 
   function cancelDismissTimer(): void {
     if (dismissTimer === undefined) return;
@@ -26,57 +24,44 @@ export function useAccountRoleDataRefresh({
   }
 
   function scheduleDismiss(nextResult: AccountRoleDataRefreshResult): void {
-    if (nextResult.failedCount > 0) return;
+    if (disposed || nextResult.failedCount > 0) return;
     dismissTimer = globalThis.setTimeout(() => {
-      result.value = null;
+      operations.roleRefreshResult = null;
       dismissTimer = undefined;
     }, SUCCESS_DISMISS_DELAY_MS);
   }
 
   async function refresh(ids: readonly string[]): Promise<AccountRoleDataRefreshResult | null> {
-    if (busy.value) return null;
+    if (operations.busy) return null;
     const normalizedIds = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
     if (!normalizedIds.length) return null;
 
     cancelDismissTimer();
-    busy.value = true;
-    targetIds.value = new Set(normalizedIds);
-    result.value = null;
-    error.value = null;
     try {
-      const nextResult = await api.refreshAccountProfileRoleData(normalizedIds, (progress) => {
-        const pendingIds = new Set(targetIds.value);
-        pendingIds.delete(progress.item.accountId);
-        targetIds.value = pendingIds;
-        onProgress?.(progress);
-      });
-      result.value = nextResult;
-      await afterRefresh?.(nextResult);
+      const nextResult = await operations.refreshRoleData(normalizedIds, onProgress);
       scheduleDismiss(nextResult);
       return nextResult;
-    } catch (cause) {
-      result.value = null;
-      error.value = errorMessage(cause);
+    } catch {
       return null;
-    } finally {
-      targetIds.value = new Set();
-      busy.value = false;
     }
   }
 
   function clearResult(): void {
     cancelDismissTimer();
-    result.value = null;
-    error.value = null;
+    operations.roleRefreshResult = null;
+    operations.roleRefreshError = null;
   }
 
-  onScopeDispose(cancelDismissTimer);
+  onScopeDispose(() => {
+    disposed = true;
+    cancelDismissTimer();
+  });
 
   return {
-    busy: readonly(busy),
-    targetIds: readonly(targetIds),
-    result: readonly(result),
-    error: readonly(error),
+    busy,
+    targetIds,
+    result,
+    error,
     refresh,
     clearResult,
   };

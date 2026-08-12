@@ -7,7 +7,21 @@ use sqlx::{
 };
 
 pub const DATABASE_FILE_NAME: &str = "timekeeper.db";
+pub(crate) const JS_SAFE_INTEGER_MAX: i64 = 9_007_199_254_740_991;
 pub(crate) static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+
+pub(crate) fn literal_like_pattern(value: &str) -> String {
+    let mut pattern = String::with_capacity(value.len() + 2);
+    pattern.push('%');
+    for character in value.chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(character);
+    }
+    pattern.push('%');
+    pattern
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ImportWriteResult {
@@ -87,6 +101,14 @@ mod tests {
     }
 
     #[test]
+    fn escapes_like_wildcards_for_literal_substring_search() {
+        assert_eq!(
+            literal_like_pattern(r"50%_done\later"),
+            r"%50\%\_done\\later%"
+        );
+    }
+
+    #[test]
     fn runs_initial_migration() {
         run_async(async {
             let database = Database::in_memory().await.unwrap();
@@ -154,6 +176,7 @@ mod tests {
                 "app_access",
                 "app_access_recovery",
                 "legacy_credential_migration",
+                "legacy_numeric_repair_issues",
             ] {
                 assert!(tables.iter().any(|name| name == expected));
             }
@@ -208,6 +231,150 @@ mod tests {
                     .execute(&mut connection)
                     .await
                     .is_err()
+            );
+        });
+    }
+
+    #[test]
+    fn reminder_bounds_migration_disables_invalid_values_and_rejects_new_ones() {
+        run_async(async {
+            let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:")
+                .await
+                .unwrap();
+            sqlx::raw_sql(
+                "CREATE TABLE appointments (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    reminder_minutes INTEGER
+                 );
+                 INSERT INTO appointments (id, reminder_minutes)
+                 VALUES ('valid', 1440), ('invalid', 1441);",
+            )
+            .execute(&mut connection)
+            .await
+            .unwrap();
+
+            sqlx::raw_sql(include_str!(
+                "../migrations/0009_appointment_reminder_bounds.sql"
+            ))
+            .execute(&mut connection)
+            .await
+            .unwrap();
+
+            assert_eq!(
+                sqlx::query_scalar::<_, Option<i64>>(
+                    "SELECT reminder_minutes FROM appointments WHERE id = 'invalid'",
+                )
+                .fetch_one(&mut connection)
+                .await
+                .unwrap(),
+                None
+            );
+            assert!(
+                sqlx::query(
+                    "INSERT INTO appointments (id, reminder_minutes) VALUES ('too-large', 1441)",
+                )
+                .execute(&mut connection)
+                .await
+                .is_err()
+            );
+            assert!(
+                sqlx::query("UPDATE appointments SET reminder_minutes = -1 WHERE id = 'valid'")
+                    .execute(&mut connection)
+                    .await
+                    .is_err()
+            );
+        });
+    }
+
+    #[test]
+    fn numeric_repair_migration_preserves_exact_legacy_values_and_enforces_safe_bounds() {
+        run_async(async {
+            let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:")
+                .await
+                .unwrap();
+            for migration in [
+                include_str!("../migrations/0001_initial.sql"),
+                include_str!("../migrations/0002_account_profile_sort_order.sql"),
+                include_str!("../migrations/0003_account_profile_usage_info.sql"),
+                include_str!("../migrations/0004_appointment_embedded_account_voice.sql"),
+                include_str!("../migrations/0005_app_access_sqlite_credentials.sql"),
+                include_str!("../migrations/0006_appointment_account_snapshot_source.sql"),
+                include_str!("../migrations/0007_app_access_recovery.sql"),
+                include_str!("../migrations/0008_account_weekly_wins.sql"),
+                include_str!("../migrations/0009_appointment_reminder_bounds.sql"),
+            ] {
+                sqlx::raw_sql(migration)
+                    .execute(&mut connection)
+                    .await
+                    .unwrap();
+            }
+            sqlx::query(
+                "INSERT INTO account_profiles (
+                    id, account_name, current_score, highest_score, weekly_wins,
+                    created_at, updated_at
+                 ) VALUES ('profile-unsafe', '旧账号', 9007199254740992,
+                           9007199254740993, 9007199254740994, '2026-01-01', '2026-01-01')",
+            )
+            .execute(&mut connection)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO appointments (
+                    id, service_date, contact_name, mode, service_status, settlement_status,
+                    amount_minor, created_at, updated_at
+                 ) VALUES ('appointment-unsafe', '2026-01-02', '旧预约', 'business',
+                           'completed', 'settled', 9007199254740995, '2026-01-01', '2026-01-01')",
+            )
+            .execute(&mut connection)
+            .await
+            .unwrap();
+
+            sqlx::raw_sql(include_str!("../migrations/0010_legacy_numeric_repair.sql"))
+                .execute(&mut connection)
+                .await
+                .unwrap();
+
+            let values = sqlx::query_scalar::<_, String>(
+                "SELECT original_value FROM legacy_numeric_repair_issues ORDER BY original_value",
+            )
+            .fetch_all(&mut connection)
+            .await
+            .unwrap();
+            assert_eq!(
+                values,
+                [
+                    "9007199254740992",
+                    "9007199254740993",
+                    "9007199254740994",
+                    "9007199254740995",
+                ]
+            );
+            let repaired = sqlx::query(
+                "SELECT amount_minor, settlement_status FROM appointments
+                 WHERE id = 'appointment-unsafe'",
+            )
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+            assert_eq!(repaired.get::<Option<i64>, _>("amount_minor"), None);
+            assert_eq!(repaired.get::<String, _>("settlement_status"), "unsettled");
+            assert!(
+                sqlx::query(
+                    "UPDATE account_profiles SET current_score = 9007199254740992
+                     WHERE id = 'profile-unsafe'",
+                )
+                .execute(&mut connection)
+                .await
+                .is_err()
+            );
+            assert!(
+                sqlx::query(
+                    "UPDATE appointments SET amount_minor = 9007199254740992
+                     WHERE id = 'appointment-unsafe'",
+                )
+                .execute(&mut connection)
+                .await
+                .is_err()
             );
         });
     }

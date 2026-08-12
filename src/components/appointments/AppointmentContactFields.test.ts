@@ -90,4 +90,26 @@ describe("AppointmentContactFields", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("南枝");
   });
+
+  it("supports arrow navigation, active descendant, Enter selection, and Escape", async () => {
+    vi.useFakeTimers();
+    const secondPreset = { ...preset, sourceAppointmentId: "preset-2", contactName: "青禾" };
+    vi.spyOn(mockApi, "listContactPresets").mockResolvedValue([preset, secondPreset]);
+    const wrapper = mount(AppointmentContactFields, { props: { modelValue: "" } });
+    const input = wrapper.get('input[aria-label="联系人"]');
+
+    await input.trigger("focus");
+    await vi.advanceTimersByTimeAsync(200);
+    await flushPromises();
+    await input.trigger("keydown", { key: "ArrowDown" });
+    expect(input.attributes("aria-activedescendant")).toBe("contact-preset-0");
+    expect(wrapper.get("#contact-preset-0").attributes("aria-selected")).toBe("true");
+    await input.trigger("keydown", { key: "ArrowDown" });
+    await input.trigger("keydown", { key: "Enter" });
+    expect(wrapper.emitted("select")?.[0]?.[0]).toEqual(secondPreset);
+
+    await input.trigger("focus");
+    await input.trigger("keydown", { key: "Escape" });
+    expect(input.attributes("aria-expanded")).toBe("false");
+  });
 });

@@ -2,6 +2,7 @@ import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 import type { AccountProfile } from "../../types/domain";
 import {
+  ACCOUNT_TABLE_ACTIONS_WIDTH,
   accountTableTotalWidth,
   DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS,
 } from "../../utils/accountTableColumns";
@@ -47,6 +48,25 @@ const profiles: AccountProfile[] = [
 ];
 
 describe("AccountTable", () => {
+  it("keeps drag reordering without rendering move buttons", () => {
+    const wrapper = mount(AccountTable, {
+      props: {
+        profiles,
+        selectedIds: [],
+        sortKey: null,
+        sortDirection: "asc",
+        reorderEnabled: true,
+        reorderDisabledReason: "",
+        columnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
+        savingColumnWidths: false,
+      },
+    });
+
+    expect(wrapper.find('button[aria-label^="上移账号"]').exists()).toBe(false);
+    expect(wrapper.find('button[aria-label^="下移账号"]').exists()).toBe(false);
+    expect(wrapper.find('[draggable="true"]').exists()).toBe(true);
+  });
+
   it("selects all visible profiles and supports clearing one row", async () => {
     const wrapper = mount(AccountTable, {
       props: {
@@ -318,6 +338,9 @@ describe("AccountTable", () => {
     expect(wrapper.findAll('button[aria-label^="调整"]')).toHaveLength(12);
     expect(wrapper.get("table").attributes("style")).toContain(
       `min-width: ${accountTableTotalWidth(columnWidths)}px`,
+    );
+    expect(wrapper.get("col:last-child").attributes("style")).toContain(
+      `width: ${ACCOUNT_TABLE_ACTIONS_WIDTH}px`,
     );
     expect(wrapper.find('input[aria-label^="编辑本周"]').exists()).toBe(false);
     expect(wrapper.text()).toContain("本周胜场");

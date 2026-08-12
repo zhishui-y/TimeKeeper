@@ -118,6 +118,26 @@ describe("RevenueChart", () => {
     expect(wrapper.emitted("periodSelect")).toEqual([[points[0]]]);
   });
 
+  it("moves the active keyboard point and drills into that exact period", async () => {
+    const wrapper = mount(RevenueChart, {
+      props: {
+        points,
+        granularity: "day",
+        from: "2026-07-27",
+        to: "2026-08-03",
+        drillable: true,
+      },
+    });
+    const chart = wrapper.get(".revenue-chart");
+
+    await chart.trigger("keydown", { key: "ArrowRight" });
+    expect(wrapper.get('[aria-live="polite"]').text()).toContain("2026-08-03");
+    await chart.trigger("keydown", { key: "Enter" });
+    expect(wrapper.emitted("periodSelect")).toEqual([[points[1]]]);
+    await chart.trigger("keydown", { key: "Home" });
+    expect(wrapper.get('[aria-live="polite"]').text()).toContain("2026-07-27");
+  });
+
   it("emits line clicks and ignores non-series or disabled clicks", async () => {
     const wrapper = mount(RevenueChart, {
       props: {

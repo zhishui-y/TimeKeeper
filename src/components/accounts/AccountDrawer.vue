@@ -2,7 +2,12 @@
 import { Save, X } from "@lucide/vue";
 import { reactive, shallowRef, useTemplateRef, watch } from "vue";
 import { useModalFocus } from "../../composables/useModalFocus";
-import type { AccountProfile, AccountProfileInput } from "../../types/domain";
+import type {
+  AccountProfile,
+  AccountProfileCredentialInput,
+  AccountProfileInput,
+} from "../../types/domain";
+import { parseOptionalAccountScore } from "../../utils/accounts";
 
 interface Draft {
   contactName: string;
@@ -48,6 +53,7 @@ const draft = reactive<Draft>({
   needsReview: false,
 });
 const errors = shallowRef<string[]>([]);
+const credentialKind = shallowRef<"keep" | "remove">("keep");
 const drawerRef = useTemplateRef("accountDrawer");
 
 function reset(): void {
@@ -66,25 +72,36 @@ function reset(): void {
     needsReview: props.profile?.needsReview ?? false,
   });
   errors.value = [];
+  credentialKind.value = "keep";
 }
 
-function optionalNumber(value: string): number | null {
-  if (!value) return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
+function credentialInput(): AccountProfileCredentialInput {
+  if (draft.password) return { kind: "replace", password: draft.password };
+  return credentialKind.value === "remove" ? { kind: "remove" } : { kind: "keep" };
+}
+
+function requestPasswordRemoval(): void {
+  if (props.saving || !props.profile?.password) return;
+  if (!globalThis.confirm("确认删除此账号在本机保存的密码？账号档案本身会保留。")) return;
+  draft.password = "";
+  credentialKind.value = "remove";
+}
+
+function undoPasswordRemoval(): void {
+  credentialKind.value = "keep";
 }
 
 function submit(): void {
   if (props.saving) return;
   const nextErrors: string[] = [];
+  const currentScore = parseOptionalAccountScore(draft.currentScore);
+  const highestScore = parseOptionalAccountScore(draft.highestScore);
   if (!draft.accountName.trim()) nextErrors.push("请填写登录账号");
   if (!props.profile && !draft.password) nextErrors.push("新建账号必须填写密码");
-  if (draft.currentScore && optionalNumber(draft.currentScore) === null)
-    nextErrors.push("当前分格式不正确");
-  if (draft.highestScore && optionalNumber(draft.highestScore) === null)
-    nextErrors.push("最高分格式不正确");
+  if (!currentScore.ok) nextErrors.push("当前分必须是 0 或更大的有效整数");
+  if (!highestScore.ok) nextErrors.push("最高分必须是 0 或更大的有效整数");
   errors.value = nextErrors;
-  if (nextErrors.length) return;
+  if (nextErrors.length || !currentScore.ok || !highestScore.ok) return;
 
   emit("save", {
     contactName: draft.contactName.trim() || null,
@@ -93,9 +110,9 @@ function submit(): void {
     specialization: draft.specialization.trim() || null,
     gearScore: draft.gearScore.trim() || null,
     accountName: draft.accountName.trim(),
-    password: draft.password || null,
-    currentScore: optionalNumber(draft.currentScore),
-    highestScore: optionalNumber(draft.highestScore),
+    credential: credentialInput(),
+    currentScore: currentScore.value,
+    highestScore: highestScore.value,
     scoreUpdatedAt: draft.scoreUpdatedAt || null,
     notes: draft.notes.trim() || null,
     needsReview: draft.needsReview,
@@ -147,7 +164,7 @@ useModalFocus({
             </button>
           </header>
           <form class="account-drawer__body" @submit.prevent="submit">
-            <div v-if="errors.length" class="account-errors">
+            <div v-if="errors.length" class="account-errors" role="alert">
               <span v-for="error in errors" :key="error">{{ error }}</span>
             </div>
 
@@ -164,9 +181,45 @@ useModalFocus({
                   class="input"
                   type="password"
                   autocomplete="new-password"
-                  :placeholder="profile ? '留空则不修改' : '仅保存在本机数据库'"
+                  :disabled="credentialKind === 'remove'"
+                  :aria-describedby="
+                    credentialKind === 'remove' ? 'account-password-removal' : undefined
+                  "
+                  :placeholder="
+                    profile
+                      ? credentialKind === 'remove'
+                        ? '已标记删除保存的密码'
+                        : '留空则不修改'
+                      : '仅保存在本机数据库'
+                  "
                 />
               </label>
+              <div
+                v-if="profile && credentialKind === 'remove'"
+                id="account-password-removal"
+                class="credential-action credential-action--pending"
+                role="status"
+              >
+                <span>保存后将删除本机密码，账号档案会保留。</span>
+                <button
+                  class="button button--ghost button--compact"
+                  type="button"
+                  :disabled="saving"
+                  @click="undoPasswordRemoval"
+                >
+                  撤销删除
+                </button>
+              </div>
+              <button
+                v-else-if="profile?.password && !draft.password"
+                class="button button--ghost button--compact credential-action__remove"
+                type="button"
+                aria-label="删除已保存密码"
+                :disabled="saving"
+                @click="requestPasswordRemoval"
+              >
+                删除已保存密码
+              </button>
             </section>
 
             <section class="account-section">
@@ -209,6 +262,7 @@ useModalFocus({
                     class="input mono-number"
                     type="number"
                     min="0"
+                    step="1"
                   />
                 </label>
                 <label class="field">
@@ -218,6 +272,7 @@ useModalFocus({
                     class="input mono-number"
                     type="number"
                     min="0"
+                    step="1"
                   />
                 </label>
               </div>
@@ -342,6 +397,24 @@ useModalFocus({
   color: #963f2f;
   background: #fff4f1;
   font-size: calc(12px + var(--app-font-size-offset, 0px));
+}
+
+.credential-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--amber) 40%, var(--line));
+  border-radius: var(--radius);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--amber) 8%, var(--surface));
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+}
+
+.credential-action__remove {
+  align-self: flex-start;
+  color: var(--danger, #963f2f);
 }
 
 .review-check {

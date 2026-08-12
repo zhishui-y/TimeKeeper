@@ -1,13 +1,20 @@
-import { readonly, shallowRef } from "vue";
-import { api, errorMessage } from "../api/client";
+import { computed } from "vue";
+import { api } from "../api/client";
 import type { ReportGranularity, RevenueSummary } from "../types/domain";
+import { useAsyncResource } from "./useAsyncResource";
+
+export interface RevenueRequestKey {
+  from: string;
+  to: string;
+  granularity: ReportGranularity;
+}
 
 export function useRevenue() {
-  const summary = shallowRef<RevenueSummary | null>(null);
-  const loading = shallowRef(false);
-  const error = shallowRef<string | null>(null);
+  const resource = useAsyncResource<RevenueSummary, RevenueRequestKey>(
+    (left, right) =>
+      left.from === right.from && left.to === right.to && left.granularity === right.granularity,
+  );
   const inFlight = new Map<string, Promise<RevenueSummary>>();
-  let requestVersion = 0;
 
   function requestKey(from: string, to: string, granularity: ReportGranularity): string {
     return JSON.stringify([from, to, granularity]);
@@ -32,23 +39,23 @@ export function useRevenue() {
   }
 
   async function load(from: string, to: string, granularity: ReportGranularity): Promise<void> {
-    const version = ++requestVersion;
-    loading.value = true;
-    error.value = null;
-    try {
-      const nextSummary = await fetchSummary(from, to, granularity);
-      if (version === requestVersion) summary.value = nextSummary;
-    } catch (cause) {
-      if (version === requestVersion) error.value = errorMessage(cause);
-    } finally {
-      if (version === requestVersion) loading.value = false;
-    }
+    const key = { from, to, granularity };
+    await resource.load(key, () => fetchSummary(from, to, granularity));
   }
 
   return {
-    summary: readonly(summary),
-    loading: readonly(loading),
-    error: readonly(error),
+    summary: resource.data,
+    loading: resource.loading,
+    error: resource.error,
+    status: resource.status,
+    stale: resource.stale,
+    actionsDisabled: resource.actionsDisabled,
+    requestedKey: resource.requestedKey,
+    resolvedKey: resource.resolvedKey,
+    resolvedRange: computed(() => {
+      const key = resource.resolvedKey.value;
+      return key ? { from: key.from, to: key.to } : null;
+    }),
     load,
   };
 }

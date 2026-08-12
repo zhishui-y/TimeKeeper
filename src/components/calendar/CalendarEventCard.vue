@@ -8,13 +8,17 @@ import {
   isShortCalendarAppointment,
 } from "../../utils/calendar";
 
-const props = defineProps<{
-  appointment: Appointment;
-  compact: boolean;
-  allDay: boolean;
-  timeText?: string;
-  isNext?: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    appointment: Appointment;
+    compact: boolean;
+    allDay: boolean;
+    timeText?: string;
+    isNext?: boolean;
+    detailsHidden?: boolean;
+  }>(),
+  { detailsHidden: false, timeText: "" },
+);
 
 const contentLabel = computed(() => props.appointment.content?.trim() || "未填写内容");
 const progressLabel = computed(() => calendarCardProgressLabel(props.appointment));
@@ -24,7 +28,7 @@ const timeLabel = computed(
 );
 const tooltip = computed(() => {
   const details = calendarEventTooltip(props.appointment);
-  return props.isNext ? `下一时段\n${details}` : details;
+  return props.isNext && !props.detailsHidden ? `下一时段\n${details}` : details;
 });
 const shortEvent = computed(
   () => props.compact && !props.allDay && isShortCalendarAppointment(props.appointment),
@@ -40,19 +44,25 @@ const shortEvent = computed(
       'calendar-event-card--pending': compact && allDay,
       'calendar-event-card--short': shortEvent,
       'calendar-event-card--next': isNext,
+      'calendar-event-card--private': detailsHidden,
     }"
-    :title="tooltip"
-    :aria-label="tooltip"
+    :title="detailsHidden ? undefined : tooltip"
+    :aria-label="detailsHidden ? timeLabel : tooltip"
   >
-    <strong class="calendar-event-card__contact">{{ appointment.contactName }}</strong>
-    <time class="calendar-event-card__time">{{ timeLabel }}</time>
-    <small v-if="!shortEvent" class="calendar-event-card__content">{{ contentLabel }}</small>
-    <span
-      v-if="!shortEvent && progressLabel"
-      class="fc-event-progress calendar-event-card__progress"
-    >
-      {{ progressLabel }}
-    </span>
+    <template v-if="detailsHidden">
+      <time class="calendar-event-card__private-time">{{ allDay ? "待定" : timeLabel }}</time>
+    </template>
+    <template v-else>
+      <strong class="calendar-event-card__contact">{{ appointment.contactName }}</strong>
+      <time class="calendar-event-card__time">{{ timeLabel }}</time>
+      <small v-if="!shortEvent" class="calendar-event-card__content">{{ contentLabel }}</small>
+      <span
+        v-if="!shortEvent && progressLabel"
+        class="fc-event-progress calendar-event-card__progress"
+      >
+        {{ progressLabel }}
+      </span>
+    </template>
   </div>
 </template>
 
@@ -87,6 +97,22 @@ const shortEvent = computed(
 .calendar-event-card--short {
   grid-template-rows: minmax(0, 1fr);
   padding-block: 0;
+}
+
+.calendar-event-card--private {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 4px;
+}
+
+.calendar-event-card__private-time {
+  overflow: hidden;
+  font-family: var(--app-font-family), "Bahnschrift", var(--font-sans);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .calendar-event-card__contact,

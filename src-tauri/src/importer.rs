@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
     time::{Duration as StdDuration, Instant},
 };
 
@@ -21,7 +21,7 @@ use crate::{
     app_access::AppAccessState,
     appointments::{insert_imported_appointment, restore_notifications_for_ids},
     backup::BackupState,
-    db::Database,
+    db::{Database, JS_SAFE_INTEGER_MAX},
     models::VoicePlatform,
     notifications::NotificationState,
 };
@@ -116,26 +116,152 @@ pub(crate) struct ParsedLegacyData {
 }
 
 struct PreviewEntry {
+    token: String,
     created_at: Instant,
     parsed: ParsedLegacyData,
 }
 
 #[derive(Default)]
+struct PreviewRegistry {
+    entry: Option<PreviewEntry>,
+    expiry_task: Option<tauri::async_runtime::JoinHandle<()>>,
+}
+
+impl Drop for PreviewRegistry {
+    fn drop(&mut self) {
+        abort_task(self.expiry_task.take());
+    }
+}
+
+#[derive(Default)]
 pub struct ImportState {
-    previews: Arc<Mutex<HashMap<String, PreviewEntry>>>,
+    registry: Arc<Mutex<PreviewRegistry>>,
 }
 
 impl ImportState {
     pub(crate) fn take(&self, token: &str) -> Result<ParsedLegacyData, String> {
-        let mut previews = self
-            .previews
+        let mut registry = self
+            .registry
             .lock()
             .map_err(|_| "导入预览状态不可用".to_string())?;
-        previews.retain(|_, entry| entry.created_at.elapsed() <= PREVIEW_TTL);
-        previews
-            .remove(token)
-            .map(|entry| entry.parsed)
-            .ok_or_else(|| "导入预览已过期，请重新预览".to_string())
+        if registry
+            .entry
+            .as_ref()
+            .is_some_and(|entry| entry.created_at.elapsed() > PREVIEW_TTL)
+        {
+            registry.entry.take();
+            let expiry_task = registry.expiry_task.take();
+            drop(registry);
+            abort_task(expiry_task);
+            return Err("导入预览已过期，请重新预览".to_string());
+        }
+        if !registry
+            .entry
+            .as_ref()
+            .is_some_and(|entry| entry.token == token)
+        {
+            return Err("导入预览已过期，请重新预览".to_string());
+        }
+        let parsed = registry
+            .entry
+            .take()
+            .expect("matching preview must still exist")
+            .parsed;
+        let expiry_task = registry.expiry_task.take();
+        drop(registry);
+        abort_task(expiry_task);
+        Ok(parsed)
+    }
+
+    pub(crate) fn clear(&self) {
+        let mut registry = self
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registry.entry.take();
+        let expiry_task = registry.expiry_task.take();
+        drop(registry);
+        abort_task(expiry_task);
+    }
+
+    fn replace_if_unlocked(
+        &self,
+        token: String,
+        parsed: ParsedLegacyData,
+        access: &AppAccessState,
+    ) -> Result<(), String> {
+        self.replace_checked(token, parsed, || access.require_unlocked())
+    }
+
+    fn replace_checked(
+        &self,
+        token: String,
+        parsed: ParsedLegacyData,
+        check: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
+        let created_at = Instant::now();
+        let weak_registry = Arc::downgrade(&self.registry);
+        let token_for_task = token.clone();
+
+        let mut registry = self
+            .registry
+            .lock()
+            .map_err(|_| "导入预览状态不可用".to_string())?;
+        check()?;
+
+        let (start_sender, start_receiver) = tokio::sync::oneshot::channel();
+        let handle = tauri::async_runtime::spawn(async move {
+            if start_receiver.await.is_err() {
+                return;
+            }
+            expire_preview_after(weak_registry, token_for_task, created_at, PREVIEW_TTL).await;
+        });
+
+        let previous_task = registry.expiry_task.replace(handle);
+        registry.entry = Some(PreviewEntry {
+            token,
+            created_at,
+            parsed,
+        });
+        drop(registry);
+        abort_task(previous_task);
+        let _ = start_sender.send(());
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains(&self, token: &str) -> bool {
+        self.registry
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry
+            .as_ref()
+            .is_some_and(|entry| entry.token == token)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_for_test(&self, token: &str) {
+        let parsed = ParsedLegacyData {
+            source_path: String::new(),
+            base_year: 2026,
+            appointments: Vec::new(),
+            profiles: Vec::new(),
+            unmatched_profiles: Vec::new(),
+            warnings: Vec::new(),
+            account_sheet_present: false,
+            yy_channel_count: 0,
+            cross_midnight_count: 0,
+            password_conflict_count: 0,
+            skipped_count: 0,
+        };
+        self.replace_checked(token.to_string(), parsed, || Ok(()))
+            .unwrap();
+    }
+}
+
+fn abort_task(task: Option<tauri::async_runtime::JoinHandle<()>>) {
+    if let Some(task) = task {
+        task.abort();
     }
 }
 
@@ -190,12 +316,27 @@ pub async fn preview_excel_import(
     state: State<'_, ImportState>,
     access: State<'_, AppAccessState>,
 ) -> Result<ExcelImportPreview, String> {
+    preview_excel_import_impl(
+        base_year,
+        state.inner(),
+        access.inner(),
+        parse_legacy_workbook_in_background(path, base_year),
+    )
+    .await
+}
+
+async fn preview_excel_import_impl(
+    base_year: i32,
+    state: &ImportState,
+    access: &AppAccessState,
+    parsed_workbook: impl std::future::Future<Output = Result<ParsedLegacyData, String>>,
+) -> Result<ExcelImportPreview, String> {
     access.require_unlocked()?;
     if !(2000..=2100).contains(&base_year) {
         return Err("基准年份必须在 2000 到 2100 之间".to_string());
     }
 
-    let parsed = parse_legacy_workbook_in_background(path, base_year).await?;
+    let parsed = parsed_workbook.await?;
     let token = Uuid::now_v7().to_string();
     let preview = ExcelImportPreview {
         source_path: parsed.source_path.clone(),
@@ -212,38 +353,32 @@ pub async fn preview_excel_import(
         preview_token: token.clone(),
     };
 
-    let mut previews = state
-        .previews
-        .lock()
-        .map_err(|_| "导入预览状态不可用".to_string())?;
-    previews.retain(|_, entry| entry.created_at.elapsed() <= PREVIEW_TTL);
-    let created_at = Instant::now();
-    previews.insert(token.clone(), PreviewEntry { created_at, parsed });
-    drop(previews);
-    tauri::async_runtime::spawn(expire_preview_after(
-        state.previews.clone(),
-        token,
-        created_at,
-        PREVIEW_TTL,
-    ));
+    // The registry lock linearizes preview publication with lock_app_access:
+    // a lock either clears this entry afterwards, or this second check rejects it.
+    state.replace_if_unlocked(token, parsed, access)?;
     Ok(preview)
 }
 
 async fn expire_preview_after(
-    previews: Arc<Mutex<HashMap<String, PreviewEntry>>>,
+    registry: Weak<Mutex<PreviewRegistry>>,
     token: String,
     created_at: Instant,
     ttl: StdDuration,
 ) {
     tokio::time::sleep(ttl).await;
-    let mut previews = previews
+    let Some(registry) = registry.upgrade() else {
+        return;
+    };
+    let mut registry = registry
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if previews
-        .get(&token)
-        .is_some_and(|entry| entry.created_at == created_at)
+    if registry
+        .entry
+        .as_ref()
+        .is_some_and(|entry| entry.token == token && entry.created_at == created_at)
     {
-        previews.remove(&token);
+        registry.entry.take();
+        registry.expiry_task.take();
     }
 }
 
@@ -269,9 +404,9 @@ pub async fn commit_excel_import<R: Runtime>(
     access: State<'_, AppAccessState>,
 ) -> Result<ExcelImportResult, String> {
     access.require_unlocked()?;
+    let parsed = imports.take(&preview_token)?;
     let selection = selection.validate()?;
     let operation_guard = backup.lock_data_operation().await;
-    let parsed = imports.take(&preview_token)?;
     let mut outcome = commit_excel_import_to_sqlite(database.inner(), parsed, selection).await?;
 
     drop(operation_guard);
@@ -535,9 +670,21 @@ pub(crate) fn parse_legacy_workbook(
         ) {
             warnings.push(warning);
         }
-        let (amount_minor, negative_amount_note) =
-            normalize_import_amount(money_minor(row.get(12)));
+        let parsed_amount = match money_minor(row.get(12)) {
+            Ok(value) => value,
+            Err(()) => {
+                settlement_status = "unsettled";
+                warnings.push(format!(
+                    "记录第 {excel_row} 行金额不是有限且安全的数值，未计入账单；原值已保留在备注"
+                ));
+                None
+            }
+        };
+        let (amount_minor, negative_amount_note) = normalize_import_amount(parsed_amount);
         let mut note_values = text_values_at(row, &record_note_columns);
+        if parsed_amount.is_none() && !text_at(row, 12).trim().is_empty() {
+            note_values.push(format!("历史金额：{}（无法安全转换）", text_at(row, 12)));
+        }
         if let Some(note) = negative_amount_note {
             settlement_status = "unsettled";
             warnings.push(format!(
@@ -608,13 +755,34 @@ pub(crate) fn parse_legacy_workbook(
             let character_name = optional_text(text_at(row, 2));
             let specialization = optional_text(text_at(row, 3));
             let gear_score = optional_text(text_at(row, 4));
-            let needs_review = profile_metadata_needs_review(
+            let mut needs_review = profile_metadata_needs_review(
                 &contact_name,
                 &server,
                 &character_name,
                 &specialization,
                 &gear_score,
             );
+
+            let current_score = match integer_value(row.get(7)) {
+                Ok(value) => value,
+                Err(()) => {
+                    needs_review = true;
+                    warnings.push(format!(
+                        "account 第 {excel_row} 行当前分不是非负安全整数，已留空并标记待完善"
+                    ));
+                    None
+                }
+            };
+            let highest_score = match integer_value(row.get(8)) {
+                Ok(value) => value,
+                Err(()) => {
+                    needs_review = true;
+                    warnings.push(format!(
+                        "account 第 {excel_row} 行最高分不是非负安全整数，已留空并标记待完善"
+                    ));
+                    None
+                }
+            };
 
             profiles.push(LegacyAccountProfile {
                 contact_name,
@@ -624,8 +792,8 @@ pub(crate) fn parse_legacy_workbook(
                 gear_score,
                 account_name: account_name.clone(),
                 password,
-                current_score: integer_value(row.get(7)),
-                highest_score: integer_value(row.get(8)),
+                current_score,
+                highest_score,
                 score_updated_at: score_updated_at_column
                     .and_then(|column| row.get(column))
                     .and_then(|cell| parse_date_cell(cell, base_year)),
@@ -831,24 +999,51 @@ fn extract_yy_channel(
     (join_note_values(values), None, None, None)
 }
 
-fn integer_value(cell: Option<&Data>) -> Option<i64> {
-    cell.and_then(DataType::as_i64).or_else(|| {
-        cell.and_then(DataType::as_f64)
-            .map(|value| value.round() as i64)
-    })
+fn integer_value(cell: Option<&Data>) -> Result<Option<i64>, ()> {
+    let Some(cell) = cell else {
+        return Ok(None);
+    };
+    if cell.is_empty() {
+        return Ok(None);
+    }
+    let value = cell
+        .as_f64()
+        .or_else(|| cell.as_string().and_then(|value| value.trim().parse().ok()))
+        .ok_or(())?;
+    if !value.is_finite()
+        || value.fract() != 0.0
+        || !(0.0..=JS_SAFE_INTEGER_MAX as f64).contains(&value)
+    {
+        return Err(());
+    }
+    Ok(Some(value as i64))
 }
 
-fn money_minor(cell: Option<&Data>) -> Option<i64> {
-    let value = cell.and_then(DataType::as_f64).or_else(|| {
-        cell.and_then(DataType::as_string).and_then(|value| {
+fn money_minor(cell: Option<&Data>) -> Result<Option<i64>, ()> {
+    let Some(cell) = cell else {
+        return Ok(None);
+    };
+    if cell.is_empty() {
+        return Ok(None);
+    }
+    let value = cell.as_f64().or_else(|| {
+        cell.as_string().and_then(|value| {
             value
                 .replace(['¥', '￥', ','], "")
                 .trim()
                 .parse::<f64>()
                 .ok()
         })
-    })?;
-    Some((value * 100.0).round() as i64)
+    });
+    let value = value.ok_or(())?;
+    let scaled = value * 100.0;
+    if !value.is_finite()
+        || !scaled.is_finite()
+        || !(-(JS_SAFE_INTEGER_MAX as f64)..=JS_SAFE_INTEGER_MAX as f64).contains(&scaled)
+    {
+        return Err(());
+    }
+    Ok(Some(scaled.round() as i64))
 }
 
 fn normalize_import_amount(amount_minor: Option<i64>) -> (Option<i64>, Option<String>) {
@@ -984,6 +1179,29 @@ mod tests {
     use super::*;
     use calamine::{ExcelDateTime, ExcelDateTimeType};
     use std::path::PathBuf;
+
+    #[test]
+    fn imported_numeric_values_require_finite_safe_ranges() {
+        assert_eq!(integer_value(Some(&Data::Int(12))), Ok(Some(12)));
+        assert_eq!(
+            integer_value(Some(&Data::String("34".into()))),
+            Ok(Some(34))
+        );
+        assert_eq!(integer_value(Some(&Data::Float(-1.0))), Err(()));
+        assert_eq!(integer_value(Some(&Data::Float(1.5))), Err(()));
+        assert_eq!(integer_value(Some(&Data::Float(f64::INFINITY))), Err(()));
+
+        assert_eq!(money_minor(Some(&Data::Float(10.005))), Ok(Some(1_001)));
+        assert_eq!(
+            money_minor(Some(&Data::String("￥1,234.56".into()))),
+            Ok(Some(123_456))
+        );
+        assert_eq!(money_minor(Some(&Data::Float(f64::NAN))), Err(()));
+        assert_eq!(
+            money_minor(Some(&Data::Float(JS_SAFE_INTEGER_MAX as f64))),
+            Err(())
+        );
+    }
 
     struct TestDataDir(PathBuf);
 
@@ -1440,38 +1658,35 @@ mod tests {
                 .join("fixtures")
                 .join("legacy_import.xlsx");
             let parsed = parse_legacy_workbook(&path, 2026).expect("fixture should parse");
-            let previews = Arc::new(Mutex::new(HashMap::new()));
+            let registry = Arc::new(Mutex::new(PreviewRegistry::default()));
 
             let reused_token = "reused-token".to_string();
             let original_created_at = Instant::now();
-            previews.lock().unwrap().insert(
-                reused_token.clone(),
-                PreviewEntry {
-                    created_at: original_created_at,
-                    parsed: parsed.clone(),
-                },
-            );
+            registry.lock().unwrap().entry = Some(PreviewEntry {
+                token: reused_token.clone(),
+                created_at: original_created_at,
+                parsed: parsed.clone(),
+            });
             let replacement_created_at = original_created_at + StdDuration::from_secs(1);
-            previews.lock().unwrap().insert(
-                reused_token.clone(),
-                PreviewEntry {
-                    created_at: replacement_created_at,
-                    parsed: parsed.clone(),
-                },
-            );
+            registry.lock().unwrap().entry = Some(PreviewEntry {
+                token: reused_token.clone(),
+                created_at: replacement_created_at,
+                parsed: parsed.clone(),
+            });
 
             expire_preview_after(
-                previews.clone(),
+                Arc::downgrade(&registry),
                 reused_token.clone(),
                 original_created_at,
                 StdDuration::from_millis(1),
             )
             .await;
             assert_eq!(
-                previews
+                registry
                     .lock()
                     .unwrap()
-                    .get(&reused_token)
+                    .entry
+                    .as_ref()
                     .expect("replacement preview must remain")
                     .created_at,
                 replacement_created_at
@@ -1479,21 +1694,96 @@ mod tests {
 
             let matching_token = "matching-token".to_string();
             let matching_created_at = Instant::now();
-            previews.lock().unwrap().insert(
-                matching_token.clone(),
-                PreviewEntry {
-                    created_at: matching_created_at,
-                    parsed,
-                },
-            );
+            registry.lock().unwrap().entry = Some(PreviewEntry {
+                token: matching_token.clone(),
+                created_at: matching_created_at,
+                parsed,
+            });
             expire_preview_after(
-                previews.clone(),
-                matching_token.clone(),
+                Arc::downgrade(&registry),
+                matching_token,
                 matching_created_at,
                 StdDuration::from_millis(1),
             )
             .await;
-            assert!(!previews.lock().unwrap().contains_key(&matching_token));
+            assert!(registry.lock().unwrap().entry.is_none());
+        });
+    }
+
+    #[test]
+    fn preview_state_replaces_consumes_expires_and_clears_its_single_token() {
+        tauri::async_runtime::block_on(async {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("fixtures")
+                .join("legacy_import.xlsx");
+            let parsed = parse_legacy_workbook(&path, 2026).expect("fixture should parse");
+            let state = ImportState::default();
+
+            state
+                .replace_checked("first-token".into(), parsed.clone(), || Ok(()))
+                .unwrap();
+            state
+                .replace_checked("second-token".into(), parsed.clone(), || Ok(()))
+                .unwrap();
+            assert!(state.registry.lock().unwrap().expiry_task.is_some());
+            assert!(state.take("first-token").is_err());
+            assert!(state.take("second-token").is_ok());
+            assert!(state.take("second-token").is_err());
+            assert!(state.registry.lock().unwrap().expiry_task.is_none());
+
+            state.registry.lock().unwrap().entry = Some(PreviewEntry {
+                token: "expired-token".into(),
+                created_at: Instant::now() - PREVIEW_TTL - StdDuration::from_secs(1),
+                parsed: parsed.clone(),
+            });
+            assert!(state.take("expired-token").is_err());
+            assert!(state.registry.lock().unwrap().entry.is_none());
+
+            state
+                .replace_checked("clear-token".into(), parsed, || Ok(()))
+                .unwrap();
+            state.clear();
+            assert!(state.take("clear-token").is_err());
+            assert!(state.registry.lock().unwrap().expiry_task.is_none());
+        });
+    }
+
+    #[test]
+    fn preview_finishing_after_lock_cannot_restore_a_token() {
+        tauri::async_runtime::block_on(async {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("fixtures")
+                .join("legacy_import.xlsx");
+            let parsed = parse_legacy_workbook(&path, 2026).expect("fixture should parse");
+            let state = ImportState::default();
+            let access = AppAccessState::new();
+            access.set_unlocked_for_test(true);
+            let (parse_started_sender, parse_started_receiver) = tokio::sync::oneshot::channel();
+            let (finish_parse_sender, finish_parse_receiver) = tokio::sync::oneshot::channel();
+
+            let preview = preview_excel_import_impl(2026, &state, &access, async move {
+                let _ = parse_started_sender.send(());
+                finish_parse_receiver
+                    .await
+                    .expect("test should release the suspended parser");
+                Ok(parsed)
+            });
+            let lock = async {
+                parse_started_receiver
+                    .await
+                    .expect("preview should reach the suspended parser");
+                access.set_unlocked_for_test(false);
+                state.clear();
+                let _ = finish_parse_sender.send(());
+            };
+
+            let (preview_result, ()) = futures_util::future::join(preview, lock).await;
+
+            assert_eq!(preview_result.unwrap_err(), "应用已锁定，请先输入入口密码");
+            assert!(state.registry.lock().unwrap().entry.is_none());
+            assert!(state.registry.lock().unwrap().expiry_task.is_none());
         });
     }
 

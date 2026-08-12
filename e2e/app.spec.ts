@@ -1,12 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
-import { format, startOfWeek } from "date-fns";
+import { chinaDateKey, startOfChinaWeek } from "./china-date";
 
 interface BusinessAppointmentDraft {
   contactName: string;
   startTime: string;
   endTime: string;
   amountYuan: string;
-  progressStatus?: "scheduled" | "in_progress" | "pending_settlement" | "completed";
+  serviceStatus?: "scheduled" | "in_progress" | "completed" | "cancelled";
+  settlementStatus?: "unsettled" | "settled";
 }
 
 async function createBusinessAppointment(
@@ -22,9 +23,15 @@ async function createBusinessAppointment(
   await drawer.getByLabel("结束时间（可留空）", { exact: true }).fill(draft.endTime);
   await drawer.getByLabel("联系人", { exact: true }).fill(draft.contactName);
   await drawer.getByLabel("金额（元）").fill(draft.amountYuan);
-  await drawer.getByRole("button", { name: "不使用账号", exact: true }).click();
-  if (draft.progressStatus) {
-    await drawer.getByLabel("预约进度").selectOption(draft.progressStatus);
+  await drawer.locator(".account-kind__item", { hasText: "不使用账号" }).click();
+  if (draft.serviceStatus) {
+    const progressStatus =
+      draft.serviceStatus === "completed"
+        ? draft.settlementStatus === "settled"
+          ? "completed"
+          : "pending_settlement"
+        : draft.serviceStatus;
+    await drawer.getByLabel("预约状态").selectOption(progressStatus);
   }
   await drawer.getByRole("button", { name: "保存预约" }).click();
   await expect(drawer).toBeHidden();
@@ -42,6 +49,84 @@ async function expectOnlyGlobalCreateAction(page: Page): Promise<void> {
   await expect(
     page.locator(".header").getByRole("button", { name: "新建预约", exact: true }),
   ).toHaveCount(1);
+}
+
+async function expectIndependentWeekDayScrolling(page: Page): Promise<void> {
+  const tracks = page.locator(".week-day__track");
+  await expect(tracks).toHaveCount(7);
+
+  const trackIndexes = await tracks.evaluateAll((elements) => {
+    const overflowByIndex = elements.map((element) => element.scrollHeight - element.clientHeight);
+    const largestOverflow = Math.max(...overflowByIndex);
+    const appointmentCounts = elements.map(
+      (element) => element.querySelectorAll(".schedule-chip").length,
+    );
+    return {
+      overflow: largestOverflow > 0 ? overflowByIndex.indexOf(largestOverflow) : -1,
+      populated: appointmentCounts.indexOf(Math.max(...appointmentCounts)),
+    };
+  });
+  expect(trackIndexes.populated, "演示数据应至少包含一天预约").toBeGreaterThanOrEqual(0);
+
+  const targetIndex = trackIndexes.overflow >= 0 ? trackIndexes.overflow : trackIndexes.populated;
+  const targetTrack = tracks.nth(targetIndex);
+  const scrollbarStyles = await tracks.evaluateAll((elements) => {
+    return elements.map((element) => {
+      const style = globalThis.getComputedStyle(element);
+      const webkitScrollbar = globalThis.getComputedStyle(element, "::-webkit-scrollbar");
+      return {
+        overflowY: style.overflowY,
+        scrollbarWidth: style.scrollbarWidth,
+        webkitWidth: webkitScrollbar.width,
+        webkitHeight: webkitScrollbar.height,
+      };
+    });
+  });
+  for (const style of scrollbarStyles) {
+    expect(style.overflowY).toBe("auto");
+    expect(style.scrollbarWidth).toBe("none");
+    expect(Number.parseFloat(style.webkitWidth || "0")).toBe(0);
+    expect(Number.parseFloat(style.webkitHeight || "0")).toBe(0);
+  }
+
+  if (trackIndexes.overflow >= 0) {
+    const before = await tracks.evaluateAll((elements) =>
+      elements.map((element) => element.scrollTop),
+    );
+    await targetTrack.hover();
+    await page.mouse.wheel(0, 800);
+    await expect
+      .poll(() => targetTrack.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(before[targetIndex] ?? 0);
+
+    const after = await tracks.evaluateAll((elements) =>
+      elements.map((element) => element.scrollTop),
+    );
+    for (const [index, scrollTop] of after.entries()) {
+      if (index !== targetIndex) expect(scrollTop).toBe(before[index]);
+    }
+  }
+
+  const lastAppointment = targetTrack.locator(".schedule-chip").last();
+  await expect(lastAppointment).toBeVisible();
+  expect(
+    await lastAppointment.evaluate((appointment) => {
+      const track = appointment.closest<HTMLElement>(".week-day__track");
+      if (!track) return false;
+      const appointmentBounds = appointment.getBoundingClientRect();
+      const trackBounds = track.getBoundingClientRect();
+      return (
+        appointmentBounds.top >= trackBounds.top - 0.5 &&
+        appointmentBounds.bottom <= trackBounds.bottom + 0.5
+      );
+    }),
+  ).toBe(true);
+
+  await lastAppointment.click({ position: { x: 16, y: 16 } });
+  const drawer = page.getByRole("dialog", { name: "编辑预约" });
+  await expect(drawer).toBeVisible();
+  await drawer.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(drawer).toBeHidden();
 }
 
 async function calendarShowsDefaultTimedRange(page: Page): Promise<boolean> {
@@ -101,7 +186,7 @@ test("核心页面在桌面窗口中可访问且没有横向溢出", async ({ pa
   await expect(page.getByRole("heading", { name: "今日工作台" })).toBeVisible();
   await expectOnlyGlobalCreateAction(page);
   await expect(page.getByRole("button", { name: "记一笔预约", exact: true })).toHaveCount(0);
-  const dateHeading = page.getByRole("heading", { name: /今天 · \d+月\d+日 星期/ });
+  const dateHeading = page.getByRole("heading", { name: /今天 · \d+月\d+日 周[一二三四五六日]/ });
   await expect(dateHeading).toBeVisible();
   expect(await dateHeading.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
     true,
@@ -110,16 +195,7 @@ test("核心页面在桌面窗口中可访问且没有横向溢出", async ({ pa
   expect(
     await nextCountdown.evaluate((element) => element.scrollWidth <= element.clientWidth),
   ).toBe(true);
-  const weekContentIsClipped = await page.locator(".week-schedule").evaluate((schedule) => {
-    const scheduleBounds = schedule.getBoundingClientRect();
-    return Array.from(schedule.querySelectorAll<HTMLElement>(".schedule-chip, .week-day__more"))
-      .filter((element) => {
-        const style = globalThis.getComputedStyle(element);
-        return style.display !== "none" && style.visibility !== "hidden";
-      })
-      .some((element) => element.getBoundingClientRect().bottom > scheduleBounds.bottom + 0.5);
-  });
-  expect(weekContentIsClipped).toBe(false);
+  await expectIndependentWeekDayScrolling(page);
 
   const lastTodayAppointment = page.locator(".today-list .appointment-row").last();
   if (await lastTodayAppointment.count()) {
@@ -145,7 +221,7 @@ test("核心页面在桌面窗口中可访问且没有横向溢出", async ({ pa
     await expect(page.getByRole("heading", { name: headingName, level: 1 })).toBeVisible();
     await expectOnlyGlobalCreateAction(page);
     if (linkName === "预约记录") {
-      await expect(page.getByPlaceholder("搜索联系人、内容或账号")).toBeVisible();
+      await expect(page.getByPlaceholder("搜索联系人、内容、账号、YY频道或备注")).toBeVisible();
       await expect(page.getByLabel("预约模式")).toBeVisible();
       await expect(
         page.locator(".appointments-workspace").getByRole("button", { name: "新建", exact: true }),
@@ -337,6 +413,38 @@ test("排班日历显示完整起止时间且时间标签未被截断", async ({
   await expect(page.locator(".fc-event-resizable")).toHaveCount(0);
 });
 
+test("排班日历隐私开关只保留时间并且仍可打开预约", async ({ page }) => {
+  await page.goto("/#/calendar");
+  const contact = (
+    await page.locator(".calendar-event-card__contact").first().textContent()
+  )?.trim();
+  expect(contact).toBeTruthy();
+
+  await page.getByRole("button", { name: "隐藏预约详情" }).click();
+  await expect(page.locator(".calendar-event-card__private-time").first()).toBeVisible();
+  await expect(page.locator(".calendar-event-card__contact")).toHaveCount(0);
+  await expect(page.locator(".calendar-event-card__content")).toHaveCount(0);
+  await expect(page.locator(".calendar-event-card__progress")).toHaveCount(0);
+  await expect(page.locator(".appointment-event--private").first()).not.toHaveAttribute("title");
+  await expect(page.locator(".fc-event[class*='appointment-event--business']")).toHaveCount(0);
+  await expect(page.locator(".fc-event[class*='appointment-event--scheduled']")).toHaveCount(0);
+  await expect(page.locator(".calendar-day-heading__count")).toHaveCount(0);
+  expect(
+    (await page.locator(".appointment-event--private").first().getAttribute("aria-label")) ?? "",
+  ).not.toContain(contact!);
+
+  await page.locator(".appointment-event--private").first().click();
+  await expect(page.getByRole("dialog", { name: "编辑预约" })).toBeVisible();
+  await page
+    .getByRole("dialog", { name: "编辑预约" })
+    .getByRole("button", { name: "关闭", exact: true })
+    .click();
+  await page.getByRole("link", { name: "今日", exact: true }).click();
+  await page.getByRole("link", { name: "排班日历" }).click();
+  await expect(page.getByRole("button", { name: "隐藏预约详情" })).toBeVisible();
+  await expect(page.locator(".calendar-event-card__contact").first()).toBeVisible();
+});
+
 test("排班日历按窗口高度默认显示12时至次日1时半格", async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on("console", (message) => {
@@ -360,7 +468,7 @@ test("排班日历按窗口高度默认显示12时至次日1时半格", async ({
 });
 
 test("相邻短预约保持整列且不遮挡后续预约", async ({ page }) => {
-  const serviceDate = format(startOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd");
+  const serviceDate = startOfChinaWeek(chinaDateKey());
   const shortContact = "短预约回归";
   const followingContact = "后续预约回归";
 
@@ -436,14 +544,14 @@ test("娱乐预约不会显示账单字段", async ({ page }) => {
   await page.getByRole("button", { name: "新建预约" }).click();
   await expect(page.getByRole("heading", { name: "账单信息" })).toBeVisible();
 
-  await page.getByRole("button", { name: /娱乐模式/ }).click();
+  await page.locator(".mode-switch__item", { hasText: "娱乐模式" }).click();
   await expect(page.getByRole("heading", { name: "账单信息" })).toBeHidden();
   await expect(page.getByRole("button", { name: "保存预约" })).toBeVisible();
 });
 
 test("完整业务流程可从解锁走到收益与备份恢复", async ({ page }) => {
   test.setTimeout(60_000);
-  const today = format(new Date(), "yyyy-MM-dd");
+  const today = chinaDateKey();
   const targetAmountMinor = 28_888;
   const liveRefreshAmountMinor = 123;
 
@@ -481,22 +589,22 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
   await expect(targetRow).toContainText("已预约");
   await targetRow.getByRole("button", { name: "编辑预约" }).click();
   const progressDrawer = page.getByRole("dialog", { name: "编辑预约" });
-  await progressDrawer.getByLabel("预约进度").selectOption("in_progress");
+  await progressDrawer.getByLabel("预约状态").selectOption("in_progress");
   await progressDrawer.getByRole("button", { name: "保存预约" }).click();
   await expect(progressDrawer).toBeHidden();
   await expect(targetRow).toContainText("进行中");
   await targetRow.getByRole("button", { name: "完成预约" }).click();
   await expect(targetRow).toContainText("待结算");
 
-  await targetRow.getByRole("button", { name: "编辑结算" }).click();
+  await targetRow.getByRole("button", { name: "填写闭环验收目标 的结算金额", exact: true }).click();
   const settlementDrawer = page.getByRole("dialog", { name: "编辑预约" });
   await expect(settlementDrawer.getByLabel("金额（元）")).toBeFocused();
-  await settlementDrawer.getByLabel("预约进度").selectOption("completed");
+  await settlementDrawer.getByLabel("预约状态").selectOption("completed");
   await settlementDrawer.getByLabel("收款方式").fill("微信");
   await settlementDrawer.getByRole("button", { name: "保存预约" }).click();
   await expect(settlementDrawer).toBeHidden();
   await expect(page.getByRole("status")).toContainText("已完成；该预约仍与");
-  await expect(targetRow).toContainText("已完成");
+  await expect(targetRow).toContainText("完成");
 
   await page.getByRole("link", { name: "收益总结" }).click();
   await expect.poll(() => readSettledMinor(page)).toBe(baselineSettledMinor + targetAmountMinor);
@@ -506,7 +614,8 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
     startTime: "11:00",
     endTime: "12:00",
     amountYuan: "1.23",
-    progressStatus: "completed",
+    serviceStatus: "completed",
+    settlementStatus: "settled",
   });
   const settledAfterLiveRefresh = baselineSettledMinor + targetAmountMinor + liveRefreshAmountMinor;
   await expect.poll(() => readSettledMinor(page)).toBe(settledAfterLiveRefresh);
@@ -537,7 +646,7 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
 
   await page.getByRole("link", { name: "预约记录" }).click();
   const restoredRow = page.locator("tbody tr").filter({ hasText: "闭环验收目标" });
-  await expect(restoredRow).toContainText("已完成");
+  await expect(restoredRow).toContainText("完成");
   await expect(restoredRow).not.toContainText("已取消");
 
   await page.getByRole("link", { name: "收益总结" }).click();

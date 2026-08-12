@@ -3,6 +3,7 @@ import { CopyPlus, Pencil, Trash2 } from "@lucide/vue";
 import { computed, useTemplateRef, watch } from "vue";
 import type { Appointment, AppointmentTableColumnWidths } from "../../types/domain";
 import {
+  APPOINTMENT_TABLE_ACTIONS_WIDTH,
   appointmentTableTotalWidth,
   type AppointmentTableColumnKey,
 } from "../../utils/appointmentTableColumns";
@@ -12,8 +13,8 @@ import {
   formatTimeRange,
   modeLabels,
 } from "../../utils/formatters";
-import { appointmentProgressStatus } from "../../utils/appointmentProgress";
 import StatusBadge from "../common/StatusBadge.vue";
+import { appointmentProgressStatus } from "../../utils/appointmentProgress";
 import AppointmentAccountSummary from "./AppointmentAccountSummary.vue";
 import AppointmentColumnResizeHandle from "./AppointmentColumnResizeHandle.vue";
 import AppointmentVoiceSummary from "./AppointmentVoiceSummary.vue";
@@ -26,6 +27,7 @@ const props = defineProps<{
   allSelected: boolean;
   selectionIndeterminate: boolean;
   selectingAll: boolean;
+  interactionsDisabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -46,7 +48,6 @@ const emit = defineEmits<{
 const allSelectRef = useTemplateRef("all-select");
 const selectedIdSet = computed(() => new Set(props.selectedIds));
 const tableMinimumWidth = computed(() => appointmentTableTotalWidth(props.columnWidths));
-
 watch(
   () => props.selectionIndeterminate,
   (value) => {
@@ -72,6 +73,7 @@ function toggleSelection(appointmentId: string): void {
 }
 
 function toggleRow(appointmentId: string, event: { target: unknown }): void {
+  if (props.interactionsDisabled) return;
   const target = event.target as { closest?: (selector: string) => unknown } | null;
   if (
     typeof target?.closest === "function" &&
@@ -122,7 +124,7 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
           <col :style="{ width: `${columnWidths.serviceStatus}px` }" />
           <col :style="{ width: `${columnWidths.amount}px` }" />
           <col :style="{ width: `${columnWidths.notes}px` }" />
-          <col style="width: 112px" />
+          <col :style="{ width: `${APPOINTMENT_TABLE_ACTIONS_WIDTH}px` }" />
         </colgroup>
         <thead>
           <tr>
@@ -132,7 +134,7 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
                 ref="all-select"
                 type="checkbox"
                 :checked="allSelected"
-                :disabled="selectingAll || appointments.length === 0"
+                :disabled="interactionsDisabled || selectingAll || appointments.length === 0"
                 aria-label="全选全部筛选结果"
                 @change="toggleAll"
                 @click.stop
@@ -273,6 +275,7 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
               <input
                 type="checkbox"
                 :checked="selectedIdSet.has(appointment.id)"
+                :disabled="interactionsDisabled"
                 aria-label="选择该预约"
                 @change="toggleOne(appointment.id, $event)"
               />
@@ -297,6 +300,7 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
               <AppointmentAccountSummary
                 :account="appointment.account"
                 :contact-name="appointment.contactName"
+                :disabled="interactionsDisabled"
                 @copy-account="copyAccount(appointment)"
                 @copy-password="copyPassword(appointment)"
               />
@@ -305,6 +309,7 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
               <AppointmentVoiceSummary
                 :voice-platform="appointment.voicePlatform"
                 :voice-channel="appointment.voiceChannel"
+                :disabled="interactionsDisabled"
                 @copy-voice-channel="emit('copyVoiceChannel', appointment)"
               />
             </td>
@@ -314,17 +319,20 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
               </span>
             </td>
             <td>
-              <button
-                v-if="appointmentProgressStatus(appointment) === 'pending_settlement'"
-                class="settlement-status-button"
-                type="button"
-                title="点击填写结算金额"
-                :aria-label="`填写${appointment.contactName} 的结算金额`"
-                @click="emit('settle', appointment)"
-              >
-                <StatusBadge progress-status="pending_settlement" />
-              </button>
-              <StatusBadge v-else :progress-status="appointmentProgressStatus(appointment)" />
+              <div class="status-stack">
+                <button
+                  v-if="appointmentProgressStatus(appointment) === 'pending_settlement'"
+                  class="settlement-status-button"
+                  type="button"
+                  :disabled="interactionsDisabled"
+                  title="点击填写结算金额"
+                  :aria-label="`填写${appointment.contactName} 的结算金额`"
+                  @click="emit('settle', appointment)"
+                >
+                  <StatusBadge progress-status="pending_settlement" />
+                </button>
+                <StatusBadge v-else :progress-status="appointmentProgressStatus(appointment)" />
+              </div>
             </td>
             <td class="mono-number amount-cell">
               {{ appointment.mode === "business" ? formatCurrency(appointment.amountMinor) : "—" }}
@@ -339,6 +347,7 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
                 <button
                   class="icon-button"
                   type="button"
+                  :disabled="interactionsDisabled"
                   title="编辑"
                   aria-label="编辑"
                   @click="emit('edit', appointment)"
@@ -348,6 +357,7 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
                 <button
                   class="icon-button"
                   type="button"
+                  :disabled="interactionsDisabled"
                   title="复制预约"
                   aria-label="复制预约"
                   @click="emit('duplicate', appointment)"
@@ -357,6 +367,7 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
                 <button
                   class="icon-button action-danger"
                   type="button"
+                  :disabled="interactionsDisabled"
                   title="删除"
                   aria-label="删除"
                   @click="emit('delete', appointment)"
@@ -433,6 +444,45 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
   cursor: pointer;
 }
 
+.status-stack {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.compact-status {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-muted);
+  background: var(--surface-soft);
+  font-size: calc(11px + var(--app-font-size-offset, 0px));
+  font-weight: 680;
+}
+
+.compact-status--scheduled {
+  border-color: var(--blue-border);
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.compact-status--in_progress {
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.compact-status--completed,
+.compact-status--settled {
+  border-color: var(--brand-border);
+  color: var(--brand-strong);
+  background: var(--brand-soft);
+}
+
 .settlement-status-button:hover {
   filter: brightness(0.96);
 }
@@ -448,9 +498,9 @@ function cancelColumnResize(columnKey: AppointmentTableColumnKey, width: number)
 }
 
 .row-actions .icon-button {
-  width: 29px;
-  height: 29px;
-  flex-basis: 29px;
+  width: 28px;
+  height: 28px;
+  flex-basis: 28px;
 }
 
 .row-actions .action-danger:hover {

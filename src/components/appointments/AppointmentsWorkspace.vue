@@ -6,6 +6,7 @@ import { useAppointmentPage } from "../../composables/useAppointmentPage";
 import { useAppointmentRouteFilters } from "../../composables/useAppointmentRouteFilters";
 import { useAppointmentSelection } from "../../composables/useAppointmentSelection";
 import { useUiStore } from "../../stores/ui";
+import { useOperationStore } from "../../stores/operations";
 import type {
   Appointment,
   AppointmentFilters,
@@ -25,6 +26,7 @@ import AppointmentPagination from "./AppointmentPagination.vue";
 import AppointmentTable from "./AppointmentTable.vue";
 
 const ui = useUiStore();
+const operations = useOperationStore();
 const routeFilters = useAppointmentRouteFilters();
 const history = useAppointmentPage(routeFilters.initialFilters, { pageSize: 100 });
 const selection = useAppointmentSelection();
@@ -49,8 +51,23 @@ const selectionIndeterminate = computed(
   () => selection.selectedCount.value > 0 && !allSelected.value,
 );
 const operationBusy = computed(
-  () => deleteOperationPending.value || batchDeletePending.value || selection.selectingAll.value,
+  () =>
+    history.actionsDisabled.value ||
+    operations.busy ||
+    deleteOperationPending.value ||
+    batchDeletePending.value ||
+    selection.selectingAll.value,
 );
+const resolvedHistoryLabel = computed(() => {
+  const key = history.resolvedKey.value;
+  if (!key) return "上一组条件";
+  const parts = [
+    key.filters.query ? `搜索“${key.filters.query}”` : "全部预约",
+    key.filters.from && key.filters.to ? `${key.filters.from} 至 ${key.filters.to}` : null,
+    key.filters.progressStatus ? `进度 ${key.filters.progressStatus}` : null,
+  ].filter(Boolean);
+  return `${parts.join("、")}，第 ${key.page} 页`;
+});
 
 async function loadColumnWidths(): Promise<void> {
   try {
@@ -112,10 +129,12 @@ async function resetFilters(): Promise<void> {
 }
 
 async function changePage(page: number): Promise<void> {
+  if (operationBusy.value) return;
   await history.goToPage(page);
 }
 
 async function toggleAll(selected: boolean): Promise<void> {
+  if (operationBusy.value) return;
   if (!selected) {
     selection.clear();
     return;
@@ -125,11 +144,13 @@ async function toggleAll(selected: boolean): Promise<void> {
 }
 
 function duplicate(appointment: Appointment): void {
+  if (operationBusy.value) return;
   ui.openDuplicateAppointment(duplicateAppointmentDraft(appointment));
   ui.notify("已复制到今日的新建预约，请确认后保存", "success");
 }
 
 async function copyAccount(appointment: Appointment): Promise<void> {
+  if (operationBusy.value) return;
   try {
     await api.copyAppointmentAccountName(appointment.id);
     ui.notify("账号已复制", "success");
@@ -139,6 +160,7 @@ async function copyAccount(appointment: Appointment): Promise<void> {
 }
 
 async function copyPassword(appointment: Appointment): Promise<void> {
+  if (operationBusy.value) return;
   try {
     await api.copyAppointmentAccountPassword(appointment.id);
     ui.notify("账号密码已复制，30秒后自动清空剪贴板", "success");
@@ -148,6 +170,7 @@ async function copyPassword(appointment: Appointment): Promise<void> {
 }
 
 async function copyVoiceChannel(appointment: Appointment): Promise<void> {
+  if (operationBusy.value) return;
   try {
     await api.copyAppointmentVoiceChannel(appointment.id);
     ui.notify("YY频道号已复制", "success");
@@ -268,6 +291,11 @@ onMounted(loadColumnWidths);
       <span v-else>取消记录默认保留，可筛选后回顾</span>
     </div>
     <div v-if="history.error.value" class="error-banner">{{ history.error.value }}</div>
+    <div v-if="history.stale.value" class="stale-banner" role="status">
+      筛选更新失败或仍在加载，当前展示的是{{
+        resolvedHistoryLabel
+      }}的旧结果；编辑、删除、选择和翻页已暂停。
+    </div>
     <div class="appointments-workspace__table-region">
       <div
         v-show="history.loading.value"
@@ -282,6 +310,7 @@ onMounted(loadColumnWidths);
         :all-selected="allSelected"
         :selection-indeterminate="selectionIndeterminate"
         :selecting-all="selection.selectingAll.value"
+        :interactions-disabled="operationBusy"
         @toggle-all="toggleAll"
         @toggle-one="selection.toggleOne"
         @edit="ui.openEditAppointment"
@@ -302,6 +331,7 @@ onMounted(loadColumnWidths);
       :total-pages="history.totalPages.value"
       :total-count="history.totalCount.value"
       :loading="history.loading.value"
+      :disabled="operationBusy"
       @change-page="changePage"
     />
     <AppointmentDeleteDialog
@@ -329,6 +359,15 @@ onMounted(loadColumnWidths);
   border-radius: var(--radius-lg, 14px);
   background: color-mix(in srgb, var(--surface) 92%, transparent);
   box-shadow: var(--shadow-xs, 0 3px 14px rgba(31, 49, 42, 0.04));
+}
+
+.stale-banner {
+  padding: 8px 11px;
+  border: 1px solid var(--amber-border);
+  border-radius: var(--radius-sm, 9px);
+  color: var(--ink);
+  background: var(--amber-soft);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .appointments-workspace__table-region {

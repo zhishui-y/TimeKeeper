@@ -19,7 +19,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = "0.13"
@@ -37,6 +36,7 @@ thiserror = "2.0.18"
 calamine = { version = "0.36.0", features = ["chrono"] }
 sha2 = "0.11.0"
 hex = "0.4.3"
+fs2 = "0.4.3"
 arboard = { version = "3.6.1", default-features = false }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 tokio = { version = "1.52.3", features = ["sync", "time", "rt"] }

@@ -1,7 +1,5 @@
 <script setup lang="ts">
 import { ArrowLeft, CalendarDays, ChevronRight, Clock3, Coins, X } from "@lucide/vue";
-import { format, parseISO } from "date-fns";
-import { zhCN } from "date-fns/locale";
 import { computed, nextTick, shallowRef, useTemplateRef, type DeepReadonly } from "vue";
 import { useModalFocus } from "../../composables/useModalFocus";
 import type {
@@ -11,6 +9,7 @@ import type {
   RevenueSummary,
 } from "../../types/domain";
 import { formatCurrency } from "../../utils/formatters";
+import { dateKeyWeekday, formatChinaDate } from "../../utils/chinaDateTime";
 import RevenueDayAppointments from "./RevenueDayAppointments.vue";
 
 const props = defineProps<{
@@ -20,9 +19,14 @@ const props = defineProps<{
   summary: DeepReadonly<RevenueSummary> | null;
   loading: boolean;
   error: string | null;
+  stale?: boolean;
+  actionsDisabled?: boolean;
   appointments: DeepReadonly<Appointment[]>;
   appointmentsLoading: boolean;
   appointmentsError: string | null;
+  appointmentsStale?: boolean;
+  appointmentsActionsDisabled?: boolean;
+  appointmentsResolvedDate?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -51,15 +55,15 @@ const dateRangeLabel = computed(() => {
 });
 
 function formatDate(date: string): string {
-  return format(parseISO(date), "yyyy年M月d日");
+  return formatChinaDate(date, { year: true });
 }
 
 function formatPointDate(date: string): string {
-  return format(parseISO(date), "M月d日 EEE", { locale: zhCN });
+  return `${formatChinaDate(date, { year: false })} ${dateKeyWeekday(date, true)}`;
 }
 
 async function selectDay(point: RevenuePoint): Promise<void> {
-  if (point.appointmentCount <= 0) return;
+  if (point.appointmentCount <= 0 || props.actionsDisabled) return;
   selectedDay.value = point;
   emit("daySelect", point);
   await nextTick();
@@ -129,6 +133,13 @@ useModalFocus({
         <div class="period-detail__body">
           <div v-if="loading" class="loading-line" />
           <div v-if="error" class="error-banner" role="alert">{{ error }}</div>
+          <div v-if="stale" class="detail-stale" role="status">
+            正在保留 {{ from }} — {{ to }} 的旧汇总，相关下钻操作已暂停。
+          </div>
+          <div v-if="appointmentsStale" class="detail-stale" role="status">
+            当前预约列表来自
+            {{ appointmentsResolvedDate || "上一日期" }}，新日期加载失败或尚未完成。
+          </div>
 
           <section class="detail-summary" aria-label="选中时间段汇总">
             <div>
@@ -162,6 +173,7 @@ useModalFocus({
             :appointments="appointments"
             :loading="appointmentsLoading"
             :error="appointmentsError"
+            :inert="appointmentsActionsDisabled"
           />
 
           <section v-else class="daily-detail">
@@ -189,7 +201,7 @@ useModalFocus({
                   class="daily-table__row"
                   type="button"
                   :data-period="point.period"
-                  :disabled="point.appointmentCount === 0"
+                  :disabled="actionsDisabled || point.appointmentCount === 0"
                   :aria-label="`查看${formatPointDate(point.period)}业务预约`"
                   @click="selectDay(point)"
                 >
@@ -213,6 +225,15 @@ useModalFocus({
 </template>
 
 <style scoped>
+.detail-stale {
+  padding: 8px 10px;
+  border: 1px solid var(--amber-border);
+  border-radius: var(--radius-sm, 8px);
+  color: #815414;
+  background: var(--amber-soft);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+}
+
 .period-detail-layer {
   position: fixed;
   z-index: 70;

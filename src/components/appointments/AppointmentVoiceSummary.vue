@@ -5,6 +5,7 @@ import type { VoicePlatform } from "../../types/domain";
 const props = defineProps<{
   voicePlatform?: VoicePlatform | null;
   voiceChannel?: string | null;
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -24,6 +25,7 @@ const validYyChannel = computed(() => {
       v-if="validYyChannel"
       class="appointment-voice-summary__channel"
       type="button"
+      :disabled="disabled"
       :title="`复制YY频道 ${validYyChannel}`"
       :aria-label="`复制YY频道 ${validYyChannel}`"
       @click="emit('copyVoiceChannel')"

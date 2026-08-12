@@ -19,7 +19,7 @@ const props = defineProps<{
   contacts: readonly RevenueBreakdownItem[];
 }>();
 
-const dimension = shallowRef<BreakdownDimension>("paymentMethods");
+const dimension = shallowRef<BreakdownDimension>("contacts");
 const chartType = shallowRef<BreakdownChartType>("pie");
 const sourceItems = computed(() =>
   dimension.value === "paymentMethods" ? props.paymentMethods : props.contacts,

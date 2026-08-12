@@ -1,23 +1,23 @@
 <script setup lang="ts">
 import { Info } from "@lucide/vue";
-import { format } from "date-fns";
 import { computed, onBeforeUnmount, onMounted, shallowRef, watch } from "vue";
 import { useAppointments } from "../../composables/useAppointments";
 import { useUiStore } from "../../stores/ui";
 import { findNextScheduledAppointment } from "../../utils/appointment";
+import { chinaDateKey } from "../../utils/chinaDateTime";
 import CalendarBoard from "./CalendarBoard.vue";
 
 const ui = useUiStore();
-const { filters, items, loading, error, load } = useAppointments({}, { immediate: false });
+const { filters, items, loading, error, stale, actionsDisabled, resolvedKey, load } =
+  useAppointments({}, { immediate: false });
 const now = shallowRef(new Date());
+const detailsHidden = shallowRef(false);
 let clockTimer: ReturnType<typeof globalThis.setInterval> | undefined;
 
 const nextAppointmentId = computed(
   () =>
     findNextScheduledAppointment(
-      items.value.filter(
-        (appointment) => appointment.serviceDate === format(now.value, "yyyy-MM-dd"),
-      ),
+      items.value.filter((appointment) => appointment.serviceDate === chinaDateKey(now.value)),
       now.value,
     )?.id ?? null,
 );
@@ -50,7 +50,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="calendar-workspace page-stack">
     <div class="page-toolbar">
-      <div class="calendar-legend" aria-label="日历颜色说明">
+      <div v-if="!detailsHidden" class="calendar-legend" aria-label="日历颜色说明">
         <span class="legend-item--scheduled">
           <i class="legend-dot" />
           已预约
@@ -69,7 +69,7 @@ onBeforeUnmount(() => {
         </span>
         <span class="legend-item--completed">
           <i class="legend-dot" />
-          已完成
+          完成
         </span>
         <span class="legend-item--cancelled">
           <i class="legend-dot" />
@@ -89,13 +89,23 @@ onBeforeUnmount(() => {
           冲突只提醒，不阻止保存
         </span>
       </div>
+      <div v-else class="calendar-privacy-notice" role="status">
+        已隐藏预约详情，仅显示日期和时间
+      </div>
     </div>
     <div v-if="loading" class="loading-line" />
     <div v-if="error" class="error-banner">{{ error }}</div>
+    <div v-if="stale" class="stale-banner" role="status">
+      当前显示 {{ resolvedKey?.from }} 至
+      {{ resolvedKey?.to }} 的旧数据；新范围加载失败或尚未完成，编辑与新建操作已暂停。
+    </div>
     <CalendarBoard
       class="calendar-workspace__board"
       :appointments="items"
       :next-appointment-id="nextAppointmentId"
+      :interactions-disabled="actionsDisabled"
+      :details-hidden="detailsHidden"
+      @update:details-hidden="detailsHidden = $event"
       @edit="ui.openEditAppointment"
       @create="(date, startTime) => ui.openCreateAppointment(date, startTime)"
       @range-change="loadRange"
@@ -121,6 +131,15 @@ onBeforeUnmount(() => {
 
 .calendar-workspace > .page-toolbar {
   min-height: 42px;
+}
+
+.stale-banner {
+  padding: 8px 12px;
+  border: 1px solid var(--amber-border);
+  border-radius: var(--radius-sm, 8px);
+  color: #815414;
+  background: var(--amber-soft);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
 }
 
 .calendar-legend {

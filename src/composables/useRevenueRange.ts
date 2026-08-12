@@ -20,7 +20,7 @@ function copyRange(range: RevenuePeriodRange): RevenuePeriodRange {
 }
 
 export function useRevenueRange(options: UseRevenueRangeOptions = {}) {
-  const referenceDate = new Date(options.referenceDate ?? new Date());
+  let referenceDate = new Date(options.referenceDate ?? new Date());
   const initialRange = revenueNaturalRange("week", referenceDate);
   const rangeKind = shallowRef<RevenueRangeKind>("week");
   const appliedRange = shallowRef<RevenuePeriodRange>(initialRange);
@@ -94,6 +94,15 @@ export function useRevenueRange(options: UseRevenueRangeOptions = {}) {
     appliedRange.value = revenueNaturalRange(kind, referenceDate);
   }
 
+  function refreshCurrentPeriod(nextReferenceDate = new Date()): boolean {
+    const kind = rangeKind.value;
+    const wasCurrent = isCurrentPeriod.value;
+    referenceDate = new Date(nextReferenceDate);
+    if (!wasCurrent || (kind !== "week" && kind !== "month")) return false;
+    appliedRange.value = revenueNaturalRange(kind, referenceDate);
+    return true;
+  }
+
   function updateCustomDate(field: RevenueCustomDateField, value: string): void {
     customDraft.value = { ...customDraft.value, [field]: value };
     validateAndApplyCustomDraft();
@@ -122,6 +131,7 @@ export function useRevenueRange(options: UseRevenueRangeOptions = {}) {
     selectRange,
     navigatePeriod,
     returnToCurrentPeriod,
+    refreshCurrentPeriod,
     updateCustomDate,
     resolveAllRange,
     setGranularity,

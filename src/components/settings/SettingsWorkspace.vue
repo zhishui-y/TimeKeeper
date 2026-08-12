@@ -12,122 +12,83 @@ import {
   Upload,
   Palette,
 } from "@lucide/vue";
-import { computed, onMounted, reactive, shallowRef, useTemplateRef, watch } from "vue";
-import { api, errorMessage, isTauri } from "../../api/client";
-import { useAppAppearance } from "../../composables/useAppAppearance";
-import { useAppAccessStore } from "../../stores/appAccess";
+import { computed, shallowRef, useTemplateRef } from "vue";
+import { api, errorMessage } from "../../api/client";
+import { useSettingsWorkspaceBackup } from "../../composables/useSettingsWorkspaceBackup";
+import { useSettingsWorkspaceExcel } from "../../composables/useSettingsWorkspaceExcel";
+import { useSettingsWorkspaceLeave } from "../../composables/useSettingsWorkspaceLeave";
+import { useSettingsWorkspaceSettings } from "../../composables/useSettingsWorkspaceSettings";
+import { useModalFocus } from "../../composables/useModalFocus";
+import { useOperationStore } from "../../stores/operations";
 import { useUiStore } from "../../stores/ui";
-import type {
-  AppSettings,
-  BackupResult,
-  ExcelImportPreview,
-  ExcelImportResult,
-  ExcelImportSelection,
-} from "../../types/domain";
 import type { AppNotificationPermission } from "../../api/types";
 import { formatFileSize } from "../../utils/formatters";
-import { DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS } from "../../utils/accountTableColumns";
-import { DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS } from "../../utils/appointmentTableColumns";
-import {
-  DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
-  validateAccountRoleDataServerUrl,
-} from "../../utils/accountRoleData";
 import AccountRoleDataServerPanel from "./AccountRoleDataServerPanel.vue";
 import OperationProgress from "./OperationProgress.vue";
 import ExcelImportScopeSelector from "./ExcelImportScopeSelector.vue";
 import AppAccessSettingsPanel from "./AppAccessSettingsPanel.vue";
 import AppearanceSettingsPanel from "./AppearanceSettingsPanel.vue";
 
-type ImportOperation = "preview" | "commit";
-type BackupOperation = "export" | "restore";
 type HtmlElement = InstanceType<typeof globalThis.HTMLElement>;
 
 const ui = useUiStore();
-const access = useAppAccessStore();
-const appearance = useAppAppearance();
-const settings = reactive<AppSettings>({
-  fontFamily: "Microsoft YaHei UI",
-  baseFontSize: 15,
-  defaultReminderMinutes: 30,
-  backupRetention: 30,
-  lastAutomaticBackupDate: null,
-  accountTableColumnWidths: { ...DEFAULT_ACCOUNT_TABLE_COLUMN_WIDTHS },
-  appointmentTableColumnWidths: { ...DEFAULT_APPOINTMENT_TABLE_COLUMN_WIDTHS },
-  accountRoleDataServerUrl: DEFAULT_ACCOUNT_ROLE_DATA_SERVER_URL,
-  accountRoleDataApiKey: "",
-});
-const loadingSettings = shallowRef(false);
-const importPath = shallowRef("");
-const baseYear = shallowRef(new Date().getFullYear());
-const importPreview = shallowRef<ExcelImportPreview | null>(null);
-const importResult = shallowRef<ExcelImportResult | null>(null);
-const importSelection = reactive<ExcelImportSelection>({ appointments: true, accounts: true });
-const importOperation = shallowRef<ImportOperation | null>(null);
-const backupOperation = shallowRef<BackupOperation | null>(null);
-const lastBackup = shallowRef<BackupResult | null>(null);
+const operations = useOperationStore();
+const {
+  settings,
+  loadingSettings,
+  savingSettings,
+  settingsState,
+  settingsError,
+  settingsDirty,
+  serverUrlError,
+  appearance,
+  loadSettings,
+  saveSettings,
+  updateAppearance,
+  rollbackAppearance,
+  discardSettings,
+} = useSettingsWorkspaceSettings();
+const {
+  importPath,
+  baseYear,
+  importSelection,
+  importPreview,
+  importResult,
+  importOperation,
+  importBusy,
+  hasImportSelection,
+  importSelectionLabel,
+  importButtonLabel,
+  importProgress,
+  chooseExcel,
+  previewImport,
+  commitImport,
+} = useSettingsWorkspaceExcel();
+const { backupOperation, backupBusy, lastBackup, backupProgress, createBackup, restoreBackup } =
+  useSettingsWorkspaceBackup({ reloadSettings: loadSettings });
+const { leaveDialogOpen, finishLeaveDecision, saveAndLeave, discardAndLeave } =
+  useSettingsWorkspaceLeave({
+    dirty: settingsDirty,
+    save: saveSettings,
+    discard: discardSettings,
+    rollbackPreview: () => appearance.rollback(),
+  });
 const notificationPermission = shallowRef<AppNotificationPermission>("default");
 const settingsGrid = useTemplateRef<HtmlElement>("settingsGrid");
-
-const importBusy = computed(() => importOperation.value !== null);
-const hasImportSelection = computed(() => importSelection.appointments || importSelection.accounts);
-const importSelectionLabel = computed(() => {
-  if (importSelection.appointments && importSelection.accounts) return "预约与账号";
-  if (importSelection.appointments) return "预约记录";
-  if (importSelection.accounts) return "账号档案";
-  return "未选择导入内容";
-});
-const importButtonLabel = computed(() => {
-  if (importOperation.value === "commit") return "正在导入";
-  if (!hasImportSelection.value) return "请选择导入内容";
-  return `导入${importSelectionLabel.value}`;
-});
-const backupBusy = computed(() => backupOperation.value !== null);
-const serverUrlError = computed(() =>
-  validateAccountRoleDataServerUrl(settings.accountRoleDataServerUrl),
+const leaveDialog = useTemplateRef<HtmlElement>("leaveDialog");
+const settingsInteractionBusy = computed(
+  () =>
+    loadingSettings.value ||
+    savingSettings.value ||
+    operations.busy ||
+    settingsState.value !== "ready",
 );
-const importProgress = computed(() => {
-  if (importOperation.value === "preview") {
-    return {
-      title: "正在生成导入预览",
-      detail: "正在读取并解析 Excel 工作表，完成前请保持应用开启。",
-    };
-  }
-  if (importOperation.value === "commit") {
-    return {
-      title: `正在导入${importSelectionLabel.value}`,
-      detail: "正在写入所选数据并检查重复内容，请勿关闭应用。",
-    };
-  }
-  return null;
-});
-const backupProgress = computed(() => {
-  if (backupOperation.value === "export") {
-    return {
-      title: "正在导出完整备份",
-      detail: "正在快照数据库与设置；如仍有待迁移密码，会一并保留成对的旧密码迁移文件。",
-    };
-  }
-  if (backupOperation.value === "restore") {
-    return {
-      title: "正在校验并准备恢复",
-      detail: "正在验证备份内容并保存当前版本，完成后应用将自动重启。",
-    };
-  }
-  return null;
-});
 
-async function loadSettings(): Promise<void> {
-  loadingSettings.value = true;
-  try {
-    Object.assign(settings, await api.getSettings());
-    appearance.preview(settings);
-    ui.setAppointmentDefaultReminderMinutes(settings.defaultReminderMinutes);
-  } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
-  } finally {
-    loadingSettings.value = false;
-  }
-}
+useModalFocus({
+  open: () => leaveDialogOpen.value,
+  container: leaveDialog,
+  close: () => finishLeaveDecision(false),
+});
 
 function scrollToSettingsSection(sectionId: string): void {
   const grid = settingsGrid.value;
@@ -141,84 +102,6 @@ function scrollToSettingsSection(sectionId: string): void {
   section.focus({ preventScroll: true });
 }
 
-async function saveSettings(): Promise<void> {
-  try {
-    Object.assign(settings, await appearance.persist({ ...settings }));
-    ui.setAppointmentDefaultReminderMinutes(settings.defaultReminderMinutes);
-    ui.notify("设置已保存", "success");
-  } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
-  }
-}
-
-function updateAppearance(value: { fontFamily: string; baseFontSize: number }): void {
-  settings.fontFamily = value.fontFamily;
-  settings.baseFontSize = value.baseFontSize;
-  appearance.preview(value);
-}
-
-function rollbackAppearance(): void {
-  const restored = appearance.rollback();
-  settings.fontFamily = restored.fontFamily;
-  settings.baseFontSize = restored.baseFontSize;
-}
-
-async function chooseExcel(): Promise<void> {
-  const selected = await api.selectExcelFile();
-  if (!selected) return;
-  importPath.value = selected;
-  importPreview.value = null;
-  importResult.value = null;
-}
-
-async function previewImport(): Promise<void> {
-  if (!importPath.value) {
-    ui.notify("请先选择 Excel 账本", "warning");
-    return;
-  }
-  importOperation.value = "preview";
-  importPreview.value = null;
-  importResult.value = null;
-  const path = importPath.value;
-  const year = baseYear.value;
-  try {
-    const preview = await api.previewExcelImport(path, year);
-    if (path !== importPath.value || year !== baseYear.value) return;
-    importPreview.value = preview;
-    ui.notify("导入预览已生成，请确认后再提交", "success");
-  } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
-  } finally {
-    importOperation.value = null;
-  }
-}
-
-async function commitImport(): Promise<void> {
-  if (!importPreview.value) return;
-  if (!hasImportSelection.value) {
-    ui.notify("请至少选择导入预约或账号", "warning");
-    return;
-  }
-  const previewToken = importPreview.value.previewToken;
-  const selection = { ...importSelection };
-  importOperation.value = "commit";
-  try {
-    importResult.value = await api.commitExcelImport(previewToken, selection);
-    importPreview.value = null;
-    if (selection.appointments) ui.markDataChanged();
-    if (selection.accounts) ui.markAccountsChanged();
-    if (importResult.value.warnings.length > 0) {
-      ui.notify(`Excel 账本已导入，并有 ${importResult.value.warnings.length} 条提示`, "warning");
-    } else {
-      ui.notify("Excel 账本导入完成", "success");
-    }
-  } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
-  } finally {
-    importOperation.value = null;
-  }
-}
-
 async function requestNotifications(): Promise<void> {
   try {
     notificationPermission.value = await api.requestNotificationPermission();
@@ -230,56 +113,19 @@ async function requestNotifications(): Promise<void> {
     ui.notify(errorMessage(cause), "danger");
   }
 }
-
-async function createBackup(): Promise<void> {
-  const destination = await api.selectBackupDestination();
-  if (!destination) return;
-  backupOperation.value = "export";
-  try {
-    lastBackup.value = await api.createBackup(destination);
-    ui.notify("完整备份已创建", "success");
-  } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
-  } finally {
-    backupOperation.value = null;
-  }
-}
-
-async function restoreBackup(): Promise<void> {
-  const path = await api.selectBackupFile();
-  if (!path) return;
-  if (!globalThis.confirm("恢复备份会先保存当前数据，成功后应用将重启。是否继续？")) return;
-  backupOperation.value = "restore";
-  try {
-    await api.restoreBackup(path);
-    if (!isTauri) {
-      ui.markDataChanged();
-      await loadSettings();
-      await access.bootstrap();
-    }
-    ui.notify(
-      isTauri ? "备份已恢复，正在重启应用" : "演示模式：备份校验与恢复流程已完成",
-      "success",
-    );
-  } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
-  } finally {
-    backupOperation.value = null;
-  }
-}
-
-watch(baseYear, () => {
-  importPreview.value = null;
-});
-
-onMounted(() => {
-  void loadSettings();
-});
 </script>
 
 <template>
   <div class="settings-workspace page-stack">
     <div v-if="loadingSettings" class="loading-line" />
+    <div v-if="settingsState === 'error'" class="settings-load-error" role="alert">
+      <span>{{ settingsError || "设置加载失败" }}</span>
+      <button class="button button--compact" type="button" @click="loadSettings">重试</button>
+    </div>
+    <div v-else-if="settingsState === 'stale'" class="stale-banner" role="status">
+      设置刷新失败，当前保留上次成功加载的快照；重新加载成功前不能保存。
+      <button class="button button--compact" type="button" @click="loadSettings">重新加载</button>
+    </div>
     <nav class="settings-nav" aria-label="设置分类">
       <button
         type="button"
@@ -308,7 +154,12 @@ onMounted(() => {
         <DatabaseBackup :size="15" />备份
       </button>
     </nav>
-    <div ref="settingsGrid" class="settings-grid">
+    <div
+      ref="settingsGrid"
+      class="settings-grid"
+      :inert="settingsInteractionBusy"
+      :aria-busy="settingsInteractionBusy"
+    >
       <section id="appearance" class="settings-section settings-section--appearance" tabindex="-1">
         <header class="settings-section__header">
           <div class="settings-section__icon"><Palette :size="19" /></div>
@@ -569,6 +420,7 @@ onMounted(() => {
       <button
         class="button button--ghost button--compact"
         type="button"
+        :disabled="settingsInteractionBusy"
         @click="rollbackAppearance"
       >
         撤销外观预览
@@ -576,12 +428,54 @@ onMounted(() => {
       <button
         class="button button--primary"
         type="button"
-        :disabled="Boolean(serverUrlError) || loadingSettings"
+        :disabled="Boolean(serverUrlError) || settingsInteractionBusy || !settingsDirty"
         @click="saveSettings"
       >
-        <Save :size="15" />保存设置
+        <Save :size="15" />{{ savingSettings ? "正在保存…" : "保存设置" }}
       </button>
     </footer>
+
+    <Teleport to="body">
+      <div v-if="leaveDialogOpen" class="leave-dialog-layer">
+        <div
+          ref="leaveDialog"
+          class="leave-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="leave-title"
+          tabindex="-1"
+        >
+          <h2 id="leave-title">设置尚未保存</h2>
+          <p>外观预览和其他修改尚未写入。你可以保存后离开、放弃修改，或继续编辑。</p>
+          <div class="leave-dialog__actions">
+            <button
+              class="button"
+              type="button"
+              :disabled="savingSettings"
+              @click="finishLeaveDecision(false)"
+            >
+              继续编辑
+            </button>
+            <button
+              class="button"
+              type="button"
+              :disabled="savingSettings"
+              @click="discardAndLeave"
+            >
+              放弃修改
+            </button>
+            <button
+              class="button button--primary"
+              type="button"
+              :disabled="savingSettings || operations.busy"
+              @click="saveAndLeave"
+            >
+              {{ savingSettings ? "正在保存…" : "保存并离开" }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -593,6 +487,56 @@ onMounted(() => {
   min-height: 0;
   grid-template-rows: max-content minmax(0, 1fr) 56px;
   gap: 14px;
+}
+
+.settings-load-error,
+.stale-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--amber-border);
+  border-radius: var(--radius-sm, 8px);
+  color: #815414;
+  background: var(--amber-soft);
+}
+
+.leave-dialog-layer {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(24, 35, 31, 0.42);
+}
+
+.leave-dialog {
+  width: min(460px, 100%);
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg, 16px);
+  background: var(--surface);
+  box-shadow: 0 24px 64px rgba(20, 35, 29, 0.24);
+}
+
+.leave-dialog h2 {
+  color: var(--ink-strong);
+  font-size: calc(18px + var(--app-font-size-offset, 0px));
+}
+
+.leave-dialog p {
+  margin-top: 10px;
+  color: var(--ink-muted);
+  line-height: 1.6;
+}
+
+.leave-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
 }
 
 .settings-nav {

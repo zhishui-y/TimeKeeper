@@ -5,8 +5,7 @@ import interactionPlugin from "@fullcalendar/interaction";
 import timeGridPlugin from "@fullcalendar/timegrid";
 import zhCnLocale from "@fullcalendar/core/locales/zh-cn";
 import type { CalendarOptions, EventApi, EventInput } from "@fullcalendar/core";
-import { CalendarDays, ChevronLeft, ChevronRight } from "@lucide/vue";
-import { format, subDays } from "date-fns";
+import { CalendarDays, ChevronLeft, ChevronRight, Eye, EyeOff } from "@lucide/vue";
 import {
   computed,
   nextTick,
@@ -17,6 +16,7 @@ import {
   type CSSProperties,
 } from "vue";
 import type { Appointment } from "../../types/domain";
+import { addDateKeyDays, calendarDateKey, chinaCivilDateTime } from "../../utils/chinaDateTime";
 import {
   calendarAppointmentCounts,
   calendarEventClassNames,
@@ -26,15 +26,21 @@ import CalendarEventCard from "./CalendarEventCard.vue";
 
 const DEFAULT_SCROLL_SLOT_OFFSET = 8;
 
-const props = defineProps<{
-  appointments: readonly Appointment[];
-  nextAppointmentId?: string | null;
-}>();
+const props = withDefaults(
+  defineProps<{
+    appointments: readonly Appointment[];
+    nextAppointmentId?: string | null;
+    interactionsDisabled?: boolean;
+    detailsHidden?: boolean;
+  }>(),
+  { detailsHidden: false, nextAppointmentId: null },
+);
 
 const emit = defineEmits<{
   edit: [appointment: Appointment];
   create: [serviceDate: string, startTime?: string];
   rangeChange: [from: string, to: string];
+  "update:detailsHidden": [hidden: boolean];
 }>();
 
 const calendarRef = useTemplateRef<InstanceType<typeof FullCalendar>>("calendar");
@@ -57,14 +63,16 @@ let resetScrollOnNextLayout = false;
 const events = computed<EventInput[]>(() =>
   props.appointments.map((appointment) => ({
     id: appointment.id,
-    title: appointment.contactName,
+    title: props.detailsHidden ? "" : appointment.contactName,
     start: appointment.startsAt ?? appointment.serviceDate,
     end: appointment.endsAt ?? undefined,
     allDay: !appointment.startsAt,
-    classNames: [
-      ...calendarEventClassNames(appointment),
-      ...(appointment.id === props.nextAppointmentId ? ["appointment-event--next"] : []),
-    ],
+    classNames: props.detailsHidden
+      ? ["appointment-event--private"]
+      : [
+          ...calendarEventClassNames(appointment),
+          ...(appointment.id === props.nextAppointmentId ? ["appointment-event--next"] : []),
+        ],
     extendedProps: { appointment },
   })),
 );
@@ -78,7 +86,7 @@ function appointmentFromEvent(event: EventApi): Appointment {
 }
 
 function appointmentCountForDate(date: Date): number {
-  return appointmentCounts.value.get(format(date, "yyyy-MM-dd")) ?? 0;
+  return appointmentCounts.value.get(calendarDateKey(date)) ?? 0;
 }
 
 const calendarOptions = computed<CalendarOptions>(() => ({
@@ -86,6 +94,7 @@ const calendarOptions = computed<CalendarOptions>(() => ({
   locale: zhCnLocale,
   initialView: "timeGridWeek",
   firstDay: 1,
+  now: chinaCivilDateTime(),
   headerToolbar: false,
   allDayText: "待定",
   allDaySlot: true,
@@ -112,16 +121,14 @@ const calendarOptions = computed<CalendarOptions>(() => ({
     currentTitle.value = info.view.title;
     activeView.value = info.view.type;
     scheduleCalendarLayout(true);
-    emit(
-      "rangeChange",
-      format(info.start, "yyyy-MM-dd"),
-      format(subDays(info.end, 1), "yyyy-MM-dd"),
-    );
+    emit("rangeChange", calendarDateKey(info.start), addDateKeyDays(calendarDateKey(info.end), -1));
   },
   eventClick(info) {
+    if (props.interactionsDisabled) return;
     emit("edit", info.event.extendedProps.appointment as Appointment);
   },
   dateClick(info) {
+    if (props.interactionsDisabled) return;
     emit("create", info.dateStr.slice(0, 10), info.allDay ? undefined : info.dateStr.slice(11, 16));
   },
 }));
@@ -227,34 +234,47 @@ onBeforeUnmount(() => {
         <CalendarDays :size="17" />
         <h2>{{ currentTitle }}</h2>
       </div>
-      <div class="segmented" role="group" aria-label="日历视图">
+      <div class="calendar-toolbar__actions">
         <button
-          class="segmented__item"
-          :class="{ 'is-active': activeView === 'timeGridDay' }"
-          :aria-pressed="activeView === 'timeGridDay'"
+          class="icon-button"
           type="button"
-          @click="changeView('timeGridDay')"
+          :title="detailsHidden ? '显示预约详情' : '隐藏预约详情'"
+          :aria-label="detailsHidden ? '显示预约详情' : '隐藏预约详情'"
+          :aria-pressed="detailsHidden"
+          @click="emit('update:detailsHidden', !detailsHidden)"
         >
-          日
+          <Eye v-if="detailsHidden" :size="17" />
+          <EyeOff v-else :size="17" />
         </button>
-        <button
-          class="segmented__item"
-          :class="{ 'is-active': activeView === 'timeGridWeek' }"
-          :aria-pressed="activeView === 'timeGridWeek'"
-          type="button"
-          @click="changeView('timeGridWeek')"
-        >
-          周
-        </button>
-        <button
-          class="segmented__item"
-          :class="{ 'is-active': activeView === 'dayGridMonth' }"
-          :aria-pressed="activeView === 'dayGridMonth'"
-          type="button"
-          @click="changeView('dayGridMonth')"
-        >
-          月
-        </button>
+        <div class="segmented" role="group" aria-label="日历视图">
+          <button
+            class="segmented__item"
+            :class="{ 'is-active': activeView === 'timeGridDay' }"
+            :aria-pressed="activeView === 'timeGridDay'"
+            type="button"
+            @click="changeView('timeGridDay')"
+          >
+            日
+          </button>
+          <button
+            class="segmented__item"
+            :class="{ 'is-active': activeView === 'timeGridWeek' }"
+            :aria-pressed="activeView === 'timeGridWeek'"
+            type="button"
+            @click="changeView('timeGridWeek')"
+          >
+            周
+          </button>
+          <button
+            class="segmented__item"
+            :class="{ 'is-active': activeView === 'dayGridMonth' }"
+            :aria-pressed="activeView === 'dayGridMonth'"
+            type="button"
+            @click="changeView('dayGridMonth')"
+          >
+            月
+          </button>
+        </div>
       </div>
     </header>
     <div ref="canvas" class="calendar-board__canvas" :style="canvasStyle">
@@ -266,16 +286,21 @@ onBeforeUnmount(() => {
             :all-day="content.event.allDay"
             :time-text="content.timeText"
             :is-next="appointmentFromEvent(content.event).id === nextAppointmentId"
+            :details-hidden="detailsHidden"
           />
         </template>
         <template #dayHeaderContent="header">
           <span
             v-if="isCompactTimeGrid(header.view.type)"
             class="calendar-day-heading"
-            :aria-label="`${header.text}，${appointmentCountForDate(header.date)}场预约`"
+            :aria-label="
+              detailsHidden
+                ? header.text
+                : `${header.text}，${appointmentCountForDate(header.date)}场预约`
+            "
           >
             <span class="calendar-day-heading__date">{{ header.text }}</span>
-            <small class="calendar-day-heading__count">
+            <small v-if="!detailsHidden" class="calendar-day-heading__count">
               {{ appointmentCountForDate(header.date) }}场
             </small>
           </span>
@@ -314,6 +339,12 @@ onBeforeUnmount(() => {
   min-width: 0;
   align-items: center;
   gap: 7px;
+}
+
+.calendar-toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .calendar-toolbar__date > svg {
@@ -480,6 +511,21 @@ onBeforeUnmount(() => {
   --event-ink: var(--ink-muted);
   box-shadow: none;
   opacity: 0.76;
+}
+
+.calendar-board__canvas :deep(.appointment-event--private) {
+  border-color: var(--line-strong);
+  border-left: 1px solid var(--line-strong);
+  color: var(--ink);
+  background: var(--surface-soft);
+  box-shadow: none;
+}
+
+.calendar-board__canvas :deep(.appointment-event--private:hover) {
+  border-color: var(--line-strong);
+  border-left-color: var(--line-strong);
+  box-shadow: var(--shadow-control, none);
+  filter: none;
 }
 
 .calendar-board__canvas :deep(.appointment-event--business) {

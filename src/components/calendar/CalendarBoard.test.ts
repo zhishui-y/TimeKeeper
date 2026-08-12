@@ -129,4 +129,18 @@ describe("CalendarBoard", () => {
     expect(wrapper.get(".calendar-day-heading").attributes("aria-label")).toBe("7/30周四，2场预约");
     expect(wrapper.get(".calendar-day-heading__count").text()).toBe("2场");
   });
+
+  it("removes status, mode, next-slot and daily-count metadata in privacy mode", async () => {
+    const { wrapper } = mountBoard("appointment-1");
+    await wrapper.setProps({ detailsHidden: true });
+    const options = wrapper
+      .findComponent({ name: "FullCalendarMock" })
+      .props("options") as CalendarOptions;
+    const events = options.events as Array<{ title?: string; classNames?: string[] }>;
+
+    expect(events[0]?.title).toBe("");
+    expect(events[0]?.classNames).toEqual(["appointment-event--private"]);
+    expect(wrapper.get(".calendar-day-heading").attributes("aria-label")).toBe("7/30周四");
+    expect(wrapper.find(".calendar-day-heading__count").exists()).toBe(false);
+  });
 });

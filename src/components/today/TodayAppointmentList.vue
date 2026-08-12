@@ -12,6 +12,7 @@ defineProps<{
   nextAppointmentId?: string | null;
   kicker: string;
   heading: string;
+  interactionsDisabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -26,7 +27,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <section class="today-list">
+  <section class="today-list" :inert="interactionsDisabled">
     <header class="today-list__header">
       <div>
         <span class="section-kicker">{{ kicker }}</span>

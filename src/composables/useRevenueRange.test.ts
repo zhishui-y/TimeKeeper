@@ -97,4 +97,14 @@ describe("useRevenueRange", () => {
     expect(range.resolveAllRange({ from: "2026-08-04", to: "2025-01-01" })).toBe(false);
     expect(range.resolvedAllRange.value).toEqual({ from: "2025-01-01", to: "2026-08-04" });
   });
+
+  it("rolls a current natural period across Beijing boundaries without moving history", () => {
+    const range = useRevenueRange({ referenceDate });
+
+    expect(range.refreshCurrentPeriod(new Date(2026, 7, 10, 0, 1))).toBe(true);
+    expect(range.appliedRange.value).toEqual({ from: "2026-08-10", to: "2026-08-16" });
+    range.navigatePeriod(-1);
+    expect(range.refreshCurrentPeriod(new Date(2026, 7, 17, 0, 1))).toBe(false);
+    expect(range.appliedRange.value).toEqual({ from: "2026-08-03", to: "2026-08-09" });
+  });
 });
