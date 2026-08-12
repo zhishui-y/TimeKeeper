@@ -193,14 +193,14 @@ Migration `0010` 隔离历史超出 JavaScript safe integer 的账号分数、�
 worker 全部设为 `'none'`；只对 `style-src` 禁用 Tauri asset CSP 自动修改。开发 CSP 额外允许
 `connect-src 'self' ... ws:`，Vite 开发响应头保持一致。
 
-Windows CI 依次执行 format、零 warning lint、Vue/Node 双 typecheck、全源 coverage、前端 build、
+发布前在本地依次执行 format、零 warning lint、Vue/Node 双 typecheck、全源 coverage、前端 build、
 Rust fmt/check/clippy/release tests、`pnpm audit --prod` 与 RustSec。覆盖率初始门槛为 Statements 75%、
 Branches 73%、Functions 72%、Lines 78%，只允许提高。Tauri 对外 command 总数保持 46，不因内部
 composable、store、事件或 Rust 模块拆分而变化。
 
 RustSec 配置仅忽略 `RUSTSEC-2023-0071`：相关 `rsa` 是 SQLx MySQL 的未启用可选锁项，不在
-Windows/SQLite 生产依赖树中，且上游尚无修复版本。CI 先反向检查生产依赖树；如果
-`rsa` 变为可达，则在执行带例外的 `cargo audit` 前直接失败。
+Windows/SQLite 生产依赖树中，且上游尚无修复版本。执行带例外的 `cargo audit` 前，必须先用
+`cargo tree --locked --manifest-path src-tauri/Cargo.toml -e normal -i rsa` 确认 `rsa` 仍不可达。
 
 构建产物另设性能预算：初始 JavaScript 不超过 70 KiB gzip，收益图表 chunk 不超过 205 KiB gzip。
-预算由 `scripts/check-bundle-size.mjs` 在本地 build 和 Windows CI 中共同执行。
+预算由 `scripts/check-bundle-size.mjs` 在本地 build 中执行。

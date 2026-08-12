@@ -63,14 +63,14 @@ pnpm tauri build
 ```
 
 `pnpm typecheck` 同时检查 Vue 应用和 Vite、Vitest、Playwright、E2E 等 Node 侧配置。覆盖率门槛固定为
-Statements 75%、Branches 73%、Functions 72%、Lines 78%，ESLint 不允许 warning。Windows CI
+Statements 75%、Branches 73%、Functions 72%、Lines 78%，ESLint 不允许 warning。发布前应在本地
 执行上述格式、lint、双类型检查、覆盖率、构建、Rust 检查/release 测试以及两侧依赖审计。
 `pnpm build` 还会校验 bundle 预算：初始 JavaScript 不超过 70 KiB gzip，收益图表 chunk 不超过
-205 KiB gzip；Windows CI 使用同一门槛。
+205 KiB gzip。
 
 RustSec 仅对 `RUSTSEC-2023-0071` 设有受监控例外：`rsa` 只是 SQLx MySQL 的可选锁文件条目，
-TimeKeeper 只启用 SQLite，Windows 生产依赖树不包含 `rsa`。CI 会在审计前验证该不可达约束；
-一旦 `rsa` 进入生产依赖树，质量门将立即失败。
+TimeKeeper 只启用 SQLite，Windows 生产依赖树不包含 `rsa`。执行 RustSec 审计时还应先用
+`cargo tree --locked --manifest-path src-tauri/Cargo.toml -e normal -i rsa` 验证该依赖仍不可达。
 
 ## 数据与安全
 
