@@ -68,4 +68,13 @@ describe("native API command payloads", () => {
     expect(invoke).toHaveBeenCalledWith("create_appointment", { input });
     expect(JSON.stringify(invoke.mock.calls[0])).not.toMatch(/[zZ]|[+-]\d{2}:\d{2}/u);
   });
+
+  it("forwards recent embedded account preset limits without exposing credentials", async () => {
+    invoke.mockResolvedValue([]);
+    const { api } = await import("./client");
+
+    await api.listRecentEmbeddedAccountPresets(10);
+
+    expect(invoke).toHaveBeenCalledWith("list_recent_embedded_account_presets", { limit: 10 });
+  });
 });

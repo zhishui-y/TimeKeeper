@@ -47,11 +47,21 @@ fn embedded_account_input(
     account_name: &str,
     credential: AppointmentAccountCredentialInput,
 ) -> AppointmentAccountInput {
+    embedded_account_input_with_details(account_name, "治疗", "测试区", "8888", credential)
+}
+
+fn embedded_account_input_with_details(
+    account_name: &str,
+    specialization: &str,
+    server: &str,
+    gear_score: &str,
+    credential: AppointmentAccountCredentialInput,
+) -> AppointmentAccountInput {
     AppointmentAccountInput::Embedded {
         details: AppointmentAccountDetails {
-            specialization: Some("治疗".into()),
-            gear_score: Some("8888".into()),
-            server: Some("测试区".into()),
+            specialization: Some(specialization.into()),
+            gear_score: Some(gear_score.into()),
+            server: Some(server.into()),
             account_name: account_name.into(),
         },
         credential,
@@ -699,6 +709,175 @@ fn appointment_search_treats_like_metacharacters_as_literals() {
                 .unwrap();
             assert_eq!(presets.len(), 1, "preset query {query:?} must be literal");
             assert_eq!(presets[0].source_appointment_id, literal.id);
+        }
+    });
+}
+
+#[test]
+fn contact_presets_return_recent_matching_appointments_but_keep_empty_query_distinct() {
+    run_async(async {
+        let database = Database::in_memory().await.unwrap();
+
+        let mut oldest = business_input("2026-08-01", "10:00", "11:00");
+        oldest.contact_name = "小林".into();
+        oldest.content = Some("第一场".into());
+        let oldest = create_appointment_impl(&database, oldest)
+            .await
+            .unwrap()
+            .appointment;
+
+        let mut related = business_input("2026-08-02", "10:00", "11:00");
+        related.contact_name = "小林助理".into();
+        related.content = Some("第二场".into());
+        let related = create_appointment_impl(&database, related)
+            .await
+            .unwrap()
+            .appointment;
+
+        let mut newest = business_input("2026-08-03", "10:00", "11:00");
+        newest.contact_name = "小林".into();
+        newest.content = Some("第三场".into());
+        let newest = create_appointment_impl(&database, newest)
+            .await
+            .unwrap()
+            .appointment;
+
+        let mut cancelled = business_input("2026-08-04", "10:00", "11:00");
+        cancelled.contact_name = "小林".into();
+        cancelled.service_status = ServiceStatus::Cancelled;
+        create_appointment_impl(&database, cancelled).await.unwrap();
+
+        let empty = list_contact_presets_impl(&database, None, Some(10))
+            .await
+            .unwrap();
+        assert_eq!(empty.len(), 2);
+        assert_eq!(empty[0].source_appointment_id, newest.id);
+        assert_eq!(empty[1].source_appointment_id, related.id);
+
+        let matching = list_contact_presets_impl(&database, Some("小林".into()), Some(10))
+            .await
+            .unwrap();
+        assert_eq!(matching.len(), 3);
+        assert_eq!(matching[0].source_appointment_id, newest.id);
+        assert_eq!(matching[0].service_date, "2026-08-03");
+        assert_eq!(matching[1].source_appointment_id, related.id);
+        assert_eq!(matching[2].source_appointment_id, oldest.id);
+
+        let limited = list_contact_presets_impl(&database, Some("小林".into()), Some(2))
+            .await
+            .unwrap();
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0].source_appointment_id, newest.id);
+        assert_eq!(limited[1].source_appointment_id, related.id);
+    });
+}
+
+#[test]
+fn recent_embedded_account_presets_filter_deduplicate_and_report_password_availability() {
+    run_async(async {
+        let database = Database::in_memory().await.unwrap();
+
+        let mut old_shared = business_input("2026-08-01", "10:00", "11:00");
+        old_shared.account = Some(embedded_account_input_with_details(
+            "SharedLogin",
+            "旧职业",
+            "旧区服",
+            "10000",
+            AppointmentAccountCredentialInput::Replace {
+                password: "old-secret".into(),
+            },
+        ));
+        create_appointment_impl(&database, old_shared)
+            .await
+            .unwrap();
+
+        let mut passwordless = business_input("2026-08-02", "10:00", "11:00");
+        passwordless.account = Some(AppointmentAccountInput::Snapshot {
+            source: AppointmentAccountSource::Embedded,
+            character_name: None,
+            details: AppointmentAccountDetails {
+                specialization: None,
+                gear_score: None,
+                server: None,
+                account_name: "no-secret".into(),
+            },
+            credential: AppointmentAccountCredentialInput::None,
+        });
+        let passwordless = create_appointment_impl(&database, passwordless)
+            .await
+            .unwrap()
+            .appointment;
+
+        let mut latest_shared = business_input("2026-08-03", "10:00", "11:00");
+        latest_shared.account = Some(embedded_account_input_with_details(
+            " sharedlogin ",
+            "新职业",
+            "新区服",
+            "20000",
+            AppointmentAccountCredentialInput::Replace {
+                password: "new-secret".into(),
+            },
+        ));
+        let latest_shared = create_appointment_impl(&database, latest_shared)
+            .await
+            .unwrap()
+            .appointment;
+
+        let mut profile_snapshot = business_input("2026-08-04", "10:00", "11:00");
+        profile_snapshot.account = Some(AppointmentAccountInput::Snapshot {
+            source: AppointmentAccountSource::Profile,
+            character_name: Some("档案角色".into()),
+            details: AppointmentAccountDetails {
+                specialization: Some("档案职业".into()),
+                gear_score: Some("30000".into()),
+                server: Some("档案区服".into()),
+                account_name: "profile-login".into(),
+            },
+            credential: AppointmentAccountCredentialInput::Replace {
+                password: "profile-secret".into(),
+            },
+        });
+        create_appointment_impl(&database, profile_snapshot)
+            .await
+            .unwrap();
+
+        let mut cancelled = business_input("2026-08-05", "10:00", "11:00");
+        cancelled.service_status = ServiceStatus::Cancelled;
+        cancelled.account = Some(embedded_account_input(
+            "cancelled-login",
+            AppointmentAccountCredentialInput::Replace {
+                password: "cancelled-secret".into(),
+            },
+        ));
+        create_appointment_impl(&database, cancelled).await.unwrap();
+
+        let presets = list_recent_embedded_account_presets_impl(&database, Some(10))
+            .await
+            .unwrap();
+        assert_eq!(presets.len(), 2);
+        assert_eq!(presets[0].source_appointment_id, latest_shared.id);
+        assert_eq!(presets[0].account_name, "sharedlogin");
+        assert_eq!(presets[0].specialization.as_deref(), Some("新职业"));
+        assert_eq!(presets[0].server.as_deref(), Some("新区服"));
+        assert_eq!(presets[0].gear_score.as_deref(), Some("20000"));
+        assert!(presets[0].has_password);
+        assert_eq!(presets[1].source_appointment_id, passwordless.id);
+        assert!(!presets[1].has_password);
+
+        assert_eq!(
+            list_recent_embedded_account_presets_impl(&database, Some(1))
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        for limit in [0, 51] {
+            assert_eq!(
+                list_recent_embedded_account_presets_impl(&database, Some(limit))
+                    .await
+                    .unwrap_err(),
+                "一次性账号模板数量必须在 1 到 50 之间"
+            );
         }
     });
 }

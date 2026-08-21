@@ -140,6 +140,7 @@ pub fn run() {
             appointments::list_appointment_page,
             appointments::create_appointment_selection,
             appointments::list_contact_presets,
+            appointments::list_recent_embedded_account_presets,
             appointments::get_appointment,
             appointments::create_appointment,
             appointments::update_appointment,

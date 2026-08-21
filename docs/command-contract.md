@@ -3,8 +3,8 @@
 所有 command payload 与 response 使用 camelCase JSON；Rust DTO 使用
 `#[serde(rename_all = "camelCase")]` 并与 `src/types/domain.ts` 一致。
 
-当前公开 Tauri command 共 46 个；本轮新增的异步资源状态、应用级长任务状态和 warning 事件都属于
-内部基础设施，不新增 command。业务日期字段使用北京时间民用时间：`serviceDate` 为 `YYYY-MM-DD`，
+当前公开 Tauri command 共 47 个；异步资源状态、应用级长任务状态和 warning 事件都属于内部基础
+设施。业务日期字段使用北京时间民用时间：`serviceDate` 为 `YYYY-MM-DD`，
 `startsAt` / `endsAt` 为不带 offset 的 `YYYY-MM-DDTHH:mm:ss`。`createdAt` / `updatedAt` 等审计字段
 继续使用 RFC3339 instant。
 
@@ -51,6 +51,7 @@
 - `delete_appointment(id) -> void`
 - `delete_appointments(selection) -> AppointmentDeleteResult`
 - `list_contact_presets(query?, limit=10) -> ContactPreset[]`
+- `list_recent_embedded_account_presets(limit=10) -> EmbeddedAccountPreset[]`
 - `copy_appointment_account_name(id) -> void`
 - `copy_appointment_voice_channel(id) -> void`
 - `copy_appointment_account_password(id) -> void`
@@ -115,9 +116,15 @@ create/update 在同一 SQLite 事务中完成详情写入、返回 DTO 查询�
 设置中的 `defaultReminderMinutes` 同样限制为 `0..=1440`。旧版本曾允许的 `1441..=10080` 在加载时
 自动归一为 `0`（关闭提醒）并原子写回；原先就不合法的更大值继续拒绝加载。
 
-联系人预设只取每个联系人最新的非取消预约，最多 10 条；可返回账号密码本身以便显示/复用，
-也保留 `sourceAppointmentId` 供 `copyFromAppointment` 协议使用。三种复制 command 都从 SQLite
-重读当前值；只有密码复制使用 30 秒内容匹配清理。
+联系人预设的空查询只取每个联系人最新的非取消预约；输入查询后按联系人部分匹配并返回最近 10 场
+非取消预约，允许同一联系人出现多次。`ContactPreset` 包含 `serviceDate` 供界面展示日期，可返回
+账号密码本身以便显示/复用，也保留 `sourceAppointmentId` 供 `copyFromAppointment` 协议使用。
+
+一次性账号预设只读取非取消且 `account_source = "embedded"` 的预约，按去首尾空白、忽略 ASCII
+大小写的账号名去重，并保留最近预约的职业、区服、装分和账号名。`EmbeddedAccountPreset` 只返回
+`hasPassword` 和 `sourceAppointmentId`，不返回密码；选择有密码的记录后，保存继续通过
+`copyFromAppointment` 在事务中复制。两个预设命令的 `limit` 默认 10，范围均为 1..=50。
+三种复制 command 都从 SQLite 重读当前值；只有密码复制使用 30 秒内容匹配清理。
 
 ## Accounts
 

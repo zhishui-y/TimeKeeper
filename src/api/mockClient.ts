@@ -9,6 +9,7 @@ import type {
   AppointmentInput,
   AppointmentMutationResult,
   ContactPreset,
+  EmbeddedAccountPreset,
   ReportGranularity,
   RevenuePoint,
   ServiceStatus,
@@ -555,10 +556,13 @@ export const mockApi: ApiClient = {
     const result: ContactPreset[] = [];
     for (const item of sorted) {
       const key = item.contactName.trim().toLocaleLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
+      if (!normalized) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
       result.push({
         sourceAppointmentId: item.id,
+        serviceDate: item.serviceDate,
         contactName: item.contactName,
         startTime: civilTime(item.startsAt),
         endTime: civilTime(item.endsAt),
@@ -574,6 +578,42 @@ export const mockApi: ApiClient = {
         voiceChannel: item.voiceChannel,
       });
       if (result.length >= safeLimit) break;
+    }
+    return structuredClone(result);
+  },
+  async listRecentEmbeddedAccountPresets(limit = 10) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+      throw new Error("一次性账号模板数量必须在 1 到 50 之间");
+    }
+    const seen = new Set<string>();
+    const result: EmbeddedAccountPreset[] = [];
+    const sorted = mockStore.appointments
+      .filter((item) => item.serviceStatus !== "cancelled" && item.account?.source === "embedded")
+      .sort((left, right) => {
+        const dateOrder = right.serviceDate.localeCompare(left.serviceDate);
+        if (dateOrder !== 0) return dateOrder;
+        const timeOrder = (right.startsAt ?? "").localeCompare(left.startsAt ?? "");
+        if (timeOrder !== 0) return timeOrder;
+        const createdOrder = right.createdAt.localeCompare(left.createdAt);
+        return createdOrder || right.id.localeCompare(left.id);
+      });
+    for (const item of sorted) {
+      const account = item.account;
+      if (!account) continue;
+      const accountName = account.accountName.trim();
+      if (!accountName) continue;
+      const key = accountName.toLocaleLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({
+        sourceAppointmentId: item.id,
+        accountName,
+        specialization: account.specialization,
+        server: account.server,
+        gearScore: account.gearScore,
+        hasPassword: Boolean(account.password),
+      });
+      if (result.length >= limit) break;
     }
     return structuredClone(result);
   },

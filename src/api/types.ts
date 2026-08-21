@@ -22,6 +22,7 @@ import type {
   BackupResult,
   ContactPreset,
   DashboardSummary,
+  EmbeddedAccountPreset,
   ExcelImportPreview,
   ExcelImportResult,
   ExcelImportSelection,
@@ -49,6 +50,7 @@ export interface ApiClient {
   setAppointmentServiceStatus(id: string, status: ServiceStatus): Promise<Appointment>;
   settleAppointment(id: string, amountMinor: number, paymentMethod?: string): Promise<Appointment>;
   listContactPresets(query?: string, limit?: number): Promise<ContactPreset[]>;
+  listRecentEmbeddedAccountPresets(limit?: number): Promise<EmbeddedAccountPreset[]>;
   copyAppointmentAccountName(id: string): Promise<void>;
   copyAppointmentVoiceChannel(id: string): Promise<void>;
   copyAppointmentAccountPassword(id: string): Promise<void>;

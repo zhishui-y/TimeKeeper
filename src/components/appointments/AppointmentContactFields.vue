@@ -3,6 +3,7 @@ import { Clock3, Search } from "@lucide/vue";
 import { computed, nextTick, shallowRef, watch } from "vue";
 import { useContactPresets } from "../../composables/useContactPresets";
 import type { ContactPreset } from "../../types/domain";
+import { formatCompactDate } from "../../utils/formatters";
 
 const contactName = defineModel<string>({ required: true });
 const emit = defineEmits<{
@@ -118,7 +119,7 @@ watch(items, () => {
           </span>
           <span class="contact-preset__meta">
             <Clock3 :size="12" />
-            {{ preset.startTime || "待定" }}
+            {{ formatCompactDate(preset.serviceDate) }} · {{ preset.startTime || "待定" }}
             <small v-if="preset.account?.password">可沿用密码</small>
           </span>
         </button>

@@ -19,7 +19,7 @@ use crate::{
         AppointmentConflict, AppointmentDeleteResult, AppointmentDeleteSelection,
         AppointmentFilters, AppointmentInput, AppointmentMode, AppointmentMutationResult,
         AppointmentPage, AppointmentProgressStatus, AppointmentSelectionSnapshot, ContactPreset,
-        ServiceStatus, SettlementStatus, VoicePlatform,
+        EmbeddedAccountPreset, ServiceStatus, SettlementStatus, VoicePlatform,
     },
     notifications::{
         NotificationState, cancel_appointment_notification, cancel_appointment_notifications,
@@ -1023,7 +1023,7 @@ pub(crate) async fn list_contact_presets_impl(
          SELECT ranked.*, c.password AS account_password
          FROM ranked
          LEFT JOIN appointment_credentials c ON c.appointment_id = ranked.id
-         WHERE contact_rank = 1
+         WHERE (? IS NOT NULL OR contact_rank = 1)
          ORDER BY service_date DESC,
                   CASE WHEN starts_at IS NULL THEN 1 ELSE 0 END,
                   starts_at DESC,
@@ -1031,6 +1031,7 @@ pub(crate) async fn list_contact_presets_impl(
                   id DESC
          LIMIT ?",
     )
+    .bind(pattern.as_deref())
     .bind(pattern.as_deref())
     .bind(pattern.as_deref())
     .bind(limit)
@@ -1043,6 +1044,7 @@ pub(crate) async fn list_contact_presets_impl(
             let appointment = appointment_from_row(row)?;
             Ok(ContactPreset {
                 source_appointment_id: appointment.id,
+                service_date: appointment.service_date,
                 contact_name: appointment.contact_name,
                 start_time: appointment
                     .starts_at
@@ -1064,6 +1066,85 @@ pub(crate) async fn list_contact_presets_impl(
                 notes: appointment.notes,
                 voice_platform: appointment.voice_platform,
                 voice_channel: appointment.voice_channel,
+            })
+        })
+        .collect()
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn list_recent_embedded_account_presets(
+    access: State<'_, AppAccessState>,
+    database: State<'_, Database>,
+    limit: Option<i64>,
+) -> Result<Vec<EmbeddedAccountPreset>, String> {
+    access.require_unlocked()?;
+    list_recent_embedded_account_presets_impl(database.inner(), limit).await
+}
+
+pub(crate) async fn list_recent_embedded_account_presets_impl(
+    database: &Database,
+    limit: Option<i64>,
+) -> Result<Vec<EmbeddedAccountPreset>, String> {
+    let limit = limit.unwrap_or(10);
+    if !(1..=50).contains(&limit) {
+        return Err("一次性账号模板数量必须在 1 到 50 之间".into());
+    }
+
+    let rows = sqlx::query(
+        "WITH ranked AS (
+            SELECT a.id AS source_appointment_id,
+                   a.account_name,
+                   a.account_specialization,
+                   a.account_server,
+                   a.account_gear_score,
+                   CASE WHEN c.appointment_id IS NULL THEN 0 ELSE 1 END AS has_password,
+                   a.service_date,
+                   a.starts_at,
+                   a.created_at,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY lower(trim(a.account_name))
+                       ORDER BY a.service_date DESC,
+                                CASE WHEN a.starts_at IS NULL THEN 1 ELSE 0 END,
+                                a.starts_at DESC,
+                                a.created_at DESC,
+                                a.id DESC
+                   ) AS account_rank
+            FROM appointments a
+            LEFT JOIN appointment_credentials c ON c.appointment_id = a.id
+            WHERE a.service_status != 'cancelled'
+              AND a.account_source = 'embedded'
+              AND a.account_name IS NOT NULL
+              AND length(trim(a.account_name)) > 0
+         )
+         SELECT source_appointment_id, account_name, account_specialization,
+                account_server, account_gear_score, has_password
+         FROM ranked
+         WHERE account_rank = 1
+         ORDER BY service_date DESC,
+                  CASE WHEN starts_at IS NULL THEN 1 ELSE 0 END,
+                  starts_at DESC,
+                  created_at DESC,
+                  source_appointment_id DESC
+         LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(database.pool())
+    .await
+    .map_err(db_error)?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(EmbeddedAccountPreset {
+                source_appointment_id: row.try_get("source_appointment_id").map_err(db_error)?,
+                account_name: row
+                    .try_get::<String, _>("account_name")
+                    .map_err(db_error)?
+                    .trim()
+                    .to_owned(),
+                specialization: row.try_get("account_specialization").map_err(db_error)?,
+                server: row.try_get("account_server").map_err(db_error)?,
+                gear_score: row.try_get("account_gear_score").map_err(db_error)?,
+                has_password: row.try_get::<i64, _>("has_password").map_err(db_error)? != 0,
             })
         })
         .collect()

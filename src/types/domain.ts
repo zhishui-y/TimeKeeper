@@ -105,6 +105,7 @@ export interface AppointmentRangeFilters extends AppointmentFilters {
 
 export interface ContactPreset {
   sourceAppointmentId: string;
+  serviceDate: string;
   contactName: string;
   startTime?: string | null;
   endTime?: string | null;
@@ -118,6 +119,11 @@ export interface ContactPreset {
   notes?: string | null;
   voicePlatform?: VoicePlatform | null;
   voiceChannel?: string | null;
+}
+
+export interface EmbeddedAccountPreset extends AppointmentAccountDetails {
+  sourceAppointmentId: string;
+  hasPassword: boolean;
 }
 
 export interface AppointmentConflict {

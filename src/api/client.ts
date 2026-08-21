@@ -16,6 +16,7 @@ import type {
   BackupResult,
   ContactPreset,
   DashboardSummary,
+  EmbeddedAccountPreset,
   ExcelImportPreview,
   ExcelImportResult,
   ExcelImportSelection,
@@ -49,6 +50,8 @@ const nativeApi: ApiClient = {
     invoke<Appointment>("settle_appointment", { id, amountMinor, paymentMethod }),
   listContactPresets: (query, limit) =>
     invoke<ContactPreset[]>("list_contact_presets", { query, limit }),
+  listRecentEmbeddedAccountPresets: (limit) =>
+    invoke<EmbeddedAccountPreset[]>("list_recent_embedded_account_presets", { limit }),
   copyAppointmentAccountName: (id) => invoke<void>("copy_appointment_account_name", { id }),
   copyAppointmentVoiceChannel: (id) => invoke<void>("copy_appointment_voice_channel", { id }),
   copyAppointmentAccountPassword: (id) => invoke<void>("copy_appointment_account_password", { id }),

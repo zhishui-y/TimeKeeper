@@ -29,6 +29,7 @@ function setup(options?: {
 function preset(): ContactPreset {
   return {
     sourceAppointmentId: "source-appointment",
+    serviceDate: "2026-08-01",
     contactName: "南枝",
     startTime: "19:30",
     endTime: "22:00",

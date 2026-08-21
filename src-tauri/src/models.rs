@@ -285,6 +285,7 @@ pub struct AppointmentDeleteResult {
 #[serde(rename_all = "camelCase")]
 pub struct ContactPreset {
     pub source_appointment_id: String,
+    pub service_date: String,
     pub contact_name: String,
     pub start_time: Option<String>,
     pub end_time: Option<String>,
@@ -298,6 +299,17 @@ pub struct ContactPreset {
     pub notes: Option<String>,
     pub voice_platform: Option<VoicePlatform>,
     pub voice_channel: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedAccountPreset {
+    pub source_appointment_id: String,
+    pub account_name: String,
+    pub specialization: Option<String>,
+    pub server: Option<String>,
+    pub gear_score: Option<String>,
+    pub has_password: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

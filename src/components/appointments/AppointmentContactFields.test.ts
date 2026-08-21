@@ -9,6 +9,7 @@ import AppointmentContactFields from "./AppointmentContactFields.vue";
 
 const preset: ContactPreset = {
   sourceAppointmentId: "preset-source",
+  serviceDate: "2026-08-20",
   contactName: "南枝",
   startTime: "19:30",
   endTime: "22:00",
@@ -63,6 +64,7 @@ describe("AppointmentContactFields", () => {
     await vi.advanceTimersByTimeAsync(200);
     await flushPromises();
     expect(listContactPresets).toHaveBeenLastCalledWith("南", 10);
+    expect(wrapper.get('[role="option"]').text()).toContain("08.20 · 19:30");
     expect(contactFields.emitted("select")).toBeUndefined();
 
     await wrapper.get('[role="option"]').trigger("mousedown");

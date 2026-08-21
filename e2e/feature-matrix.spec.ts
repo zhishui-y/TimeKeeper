@@ -367,14 +367,33 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       await expect(page.getByRole("status")).toContainText("账号密码已复制");
     });
 
+    await test.step("为同一联系人补充第二场历史记录", async () => {
+      await createBusinessAppointment(page, contactName, "第二场历史验收");
+    });
+
     await test.step("显式选择联系人建议后恢复模板", async () => {
       await page.getByRole("button", { name: "新建预约", exact: true }).click();
       const drawer = page.getByRole("dialog", { name: "新建预约" });
       const nextDate = addDateKeyDays(today, 1);
       await drawer.getByLabel("日期 *").fill(nextDate);
+
+      await drawer.locator(".account-kind__item", { hasText: "一次性账号" }).click();
+      const recentAccount = drawer.getByRole("button", {
+        name: "冰心诀-梦江南-20万-matrix_one_off",
+      });
+      await expect(recentAccount).toBeVisible();
+      await recentAccount.click();
+      await expect(drawer.getByLabel("账号 *")).toHaveValue("matrix_one_off");
+      await expect(drawer.getByText("保存时沿用所选历史预约的密码")).toBeVisible();
+      expect(await drawer.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+        true,
+      );
+
       const contact = drawer.getByLabel("联系人");
       await contact.fill(contactName);
-      const option = drawer.getByRole("option").filter({ hasText: contactName });
+      const options = drawer.getByRole("option").filter({ hasText: contactName });
+      await expect(options).toHaveCount(2);
+      const option = options.filter({ hasText: "模板恢复验收" });
       await expect(option).toBeVisible();
       await option.dispatchEvent("mousedown");
 
@@ -382,7 +401,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       await expect(drawer.getByLabel("预约内容")).toHaveValue("模板恢复验收");
       await expect(drawer.getByLabel("开始时间", { exact: true })).toHaveValue("18:30");
       await expect(drawer.getByLabel("账号 *")).toHaveValue("matrix_one_off");
-      await expect(drawer.getByText("保存时沿用该联系人上次预约的密码")).toBeVisible();
+      await expect(drawer.getByText("保存时沿用所选历史预约的密码")).toBeVisible();
       await expect(drawer.getByLabel("语音平台")).toHaveValue("yy");
       await expect(drawer.getByLabel("YY频道号码")).toHaveValue("12345678");
 

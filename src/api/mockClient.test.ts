@@ -44,6 +44,87 @@ describe("browser mock API", () => {
     expect(summary.appointmentCount).toBeGreaterThan(0);
   });
 
+  it("returns every recent matching contact appointment while keeping cancelled rows out", async () => {
+    const contactName = `联系人历史-${globalThis.crypto.randomUUID()}`;
+    const dates = ["2099-10-01", "2099-10-02", "2099-10-03"];
+    for (const [index, serviceDate] of dates.entries()) {
+      await mockApi.createAppointment(
+        businessInput(serviceDate, "10:00", "11:00", contactName, 1_000 + index),
+      );
+    }
+    await mockApi.createAppointment({
+      ...businessInput("2099-10-04", "10:00", "11:00", contactName, 2_000),
+      serviceStatus: "cancelled",
+    });
+
+    const presets = await mockApi.listContactPresets(contactName.slice(0, -4), 10);
+    const matching = presets.filter((preset) => preset.contactName === contactName);
+    expect(matching.map((preset) => preset.serviceDate)).toEqual([...dates].reverse());
+  });
+
+  it("returns distinct recent embedded accounts without password values", async () => {
+    const suffix = globalThis.crypto.randomUUID();
+    const sharedAccount = `Recent-${suffix}`;
+    await mockApi.createAppointment({
+      ...businessInput("2099-11-01", "10:00", "11:00", `旧账号-${suffix}`, 1_000),
+      account: {
+        kind: "embedded",
+        details: {
+          accountName: sharedAccount,
+          specialization: "旧职业",
+          server: "旧区服",
+          gearScore: "10万",
+        },
+        credential: { kind: "replace", password: "old-secret" },
+      },
+    });
+    const latest = await mockApi.createAppointment({
+      ...businessInput("2099-11-03", "10:00", "11:00", `新账号-${suffix}`, 1_000),
+      account: {
+        kind: "embedded",
+        details: {
+          accountName: sharedAccount.toLocaleLowerCase(),
+          specialization: "新职业",
+          server: "新区服",
+          gearScore: "20万",
+        },
+        credential: { kind: "replace", password: "new-secret" },
+      },
+    });
+    const passwordless = await mockApi.createAppointment({
+      ...businessInput("2099-11-02", "10:00", "11:00", `无密码-${suffix}`, 1_000),
+      account: {
+        kind: "snapshot",
+        source: "embedded",
+        characterName: null,
+        details: { accountName: `no-secret-${suffix}` },
+        credential: { kind: "none" },
+      },
+    });
+
+    const presets = await mockApi.listRecentEmbeddedAccountPresets(10);
+    const shared = presets.filter(
+      (preset) => preset.accountName.toLocaleLowerCase() === sharedAccount.toLocaleLowerCase(),
+    );
+    expect(shared).toEqual([
+      expect.objectContaining({
+        sourceAppointmentId: latest.appointment.id,
+        specialization: "新职业",
+        server: "新区服",
+        gearScore: "20万",
+        hasPassword: true,
+      }),
+    ]);
+    expect(presets).toContainEqual(
+      expect.objectContaining({
+        sourceAppointmentId: passwordless.appointment.id,
+        hasPassword: false,
+      }),
+    );
+    expect(JSON.stringify(presets)).not.toContain("new-secret");
+    expect(JSON.stringify(presets)).not.toContain("old-secret");
+  });
+
   it("uses the same preview token then commit import flow without exposing passwords", async () => {
     const preview = await mockApi.previewExcelImport("C:\\demo\\account.xlsm", 2026);
     expect(preview.previewToken).toBeTruthy();

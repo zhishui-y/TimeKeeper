@@ -115,6 +115,11 @@ service_date DESC, starts_at DESC, created_at DESC, id DESC
 字面子串语义，允许扫描，不引入 FTS。Rust 为 SQLite `LIKE` 转义 `%`、`_`、`\`，因此三者不再是
 wildcard；行查询、计数、全选快照、联系人预设与浏览器 Mock 使用同一规则。
 
+联系人预设在空查询时仍按联系人去重；输入联系人后返回部分匹配的最近 10 场非取消预约，允许同一
+联系人出现多次。一次性账号候选只读取 `embedded` 预约快照，按规范化账号名去重并返回最近记录的
+资料与密码可用标记；密码本身不进入候选 DTO，保存时继续通过 `copyFromAppointment` 在 Rust 事务
+边界复制。
+
 ## Native transaction boundaries
 
 前端只能调用有类型的 Tauri command。SQLite、Excel 解析、旧 Stronghold、备份文件、系统通知

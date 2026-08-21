@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { ClipboardCopy, FileKey2, UserRoundX } from "@lucide/vue";
 import { computed } from "vue";
-import type { AccountProfile, AppointmentAccountDetails } from "../../types/domain";
+import { useRecentEmbeddedAccountPresets } from "../../composables/useRecentEmbeddedAccountPresets";
+import type {
+  AccountProfile,
+  AppointmentAccountDetails,
+  EmbeddedAccountPreset,
+} from "../../types/domain";
 import type { AppointmentAccountDraft } from "../../composables/useAppointmentDraft";
 
 const props = withDefaults(
@@ -22,6 +27,12 @@ const selectedProfile = computed(() =>
   props.accounts.find((account) => account.id === model.value.profileId),
 );
 const canCopyExistingPassword = computed(() => model.value.hasPassword);
+const embeddedPresetsEnabled = computed(() => model.value.kind === "embedded");
+const {
+  items: embeddedPresets,
+  loading: embeddedPresetsLoading,
+  error: embeddedPresetsError,
+} = useRecentEmbeddedAccountPresets(embeddedPresetsEnabled);
 
 function profileOptionLabel(account: AccountProfile): string {
   return [
@@ -98,6 +109,35 @@ function replacePassword(password: string): void {
 function chooseNewPassword(): void {
   replacePassword("");
 }
+
+function embeddedPresetLabel(preset: EmbeddedAccountPreset): string {
+  return [
+    preset.specialization?.trim() || "职业未填",
+    preset.server?.trim() || "区服未填",
+    preset.gearScore?.trim() || "装分未填",
+    preset.accountName,
+  ].join("-");
+}
+
+function selectEmbeddedPreset(preset: EmbeddedAccountPreset): void {
+  model.value = {
+    kind: "embedded",
+    profileId: "",
+    details: {
+      accountName: preset.accountName,
+      specialization: preset.specialization ?? null,
+      gearScore: preset.gearScore ?? null,
+      server: preset.server ?? null,
+    },
+    credentialKind: preset.hasPassword ? "copyFromAppointment" : "replace",
+    password: "",
+    sourceAppointmentId: preset.hasPassword ? preset.sourceAppointmentId : "",
+    hasPassword: model.value.hasPassword,
+    source: "embedded",
+    characterName: null,
+    preservesSnapshot: false,
+  };
+}
 </script>
 
 <template>
@@ -144,6 +184,31 @@ function chooseNewPassword(): void {
         {{ model.preservesSnapshot && model.source === "profile" ? "档案账号快照" : "一次性账号" }}
       </label>
     </div>
+
+    <section
+      v-if="model.kind === 'embedded'"
+      class="embedded-presets"
+      aria-label="最近使用的一次性账号"
+    >
+      <span class="embedded-presets__title">最近使用</span>
+      <p v-if="embeddedPresetsLoading" class="embedded-presets__state">账号加载中…</p>
+      <p v-else-if="embeddedPresetsError" class="embedded-presets__state is-error">
+        {{ embeddedPresetsError }}
+      </p>
+      <ul v-else-if="embeddedPresets.length" class="embedded-presets__list">
+        <li v-for="preset in embeddedPresets" :key="preset.sourceAppointmentId">
+          <button
+            class="embedded-preset"
+            type="button"
+            :title="embeddedPresetLabel(preset)"
+            @click="selectEmbeddedPreset(preset)"
+          >
+            {{ embeddedPresetLabel(preset) }}
+          </button>
+        </li>
+      </ul>
+      <p v-else class="embedded-presets__state">暂无使用过的一次性账号</p>
+    </section>
 
     <div v-if="model.kind === 'profile'" class="profile-picker">
       <label class="field">
@@ -221,7 +286,7 @@ function chooseNewPassword(): void {
         </button>
       </div>
       <div v-else-if="model.credentialKind === 'copyFromAppointment'" class="credential-note">
-        <span>保存时沿用该联系人上次预约的密码</span>
+        <span>保存时沿用所选历史预约的密码</span>
         <button
           class="button button--compact button--ghost"
           type="button"
@@ -303,6 +368,64 @@ function chooseNewPassword(): void {
   color: var(--brand-strong);
   background: var(--brand-soft);
   box-shadow: inset 0 -2px 0 var(--brand);
+}
+
+.embedded-presets {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--brand) 16%, var(--line));
+  border-radius: var(--radius, 12px);
+  background: color-mix(in srgb, var(--surface) 96%, var(--brand-soft));
+}
+
+.embedded-presets__title {
+  color: var(--ink-strong);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+  font-weight: 700;
+}
+
+.embedded-presets__list {
+  display: grid;
+  max-height: 172px;
+  gap: 5px;
+  margin: 0;
+  overflow-y: auto;
+  padding: 0;
+  list-style: none;
+}
+
+.embedded-preset {
+  width: 100%;
+  overflow: hidden;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 8px);
+  color: var(--ink);
+  background: var(--surface);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.embedded-preset:hover,
+.embedded-preset:focus-visible {
+  border-color: var(--brand-border);
+  background: var(--brand-soft);
+}
+
+.embedded-presets__state {
+  margin: 0;
+  padding: 5px 0;
+  color: var(--ink-muted);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+  text-align: center;
+}
+
+.embedded-presets__state.is-error {
+  color: var(--danger);
 }
 
 .profile-picker,
