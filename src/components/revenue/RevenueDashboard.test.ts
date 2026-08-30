@@ -5,7 +5,8 @@ import { defineComponent, h } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockApi } from "../../api/mockClient";
-import type { ReportGranularity, RevenueSummary } from "../../types/domain";
+import { useUiStore } from "../../stores/ui";
+import type { Appointment, ReportGranularity, RevenueSummary } from "../../types/domain";
 import RevenueDashboard from "./RevenueDashboard.vue";
 
 const { routerPush } = vi.hoisted(() => ({ routerPush: vi.fn() }));
@@ -41,8 +42,8 @@ const RevenueChartStub = defineComponent({
 const RevenuePeriodDetailStub = defineComponent({
   name: "RevenuePeriodDetail",
   props: ["granularity", "from", "to", "appointments"],
-  emits: ["close", "daySelect"],
-  setup(props) {
+  emits: ["close", "daySelect", "appointmentSelect"],
+  setup(props, { emit }) {
     return () =>
       h(
         "div",
@@ -51,7 +52,17 @@ const RevenuePeriodDetailStub = defineComponent({
           "data-granularity": props.granularity,
           "data-appointments": props.appointments.length,
         },
-        `${props.from}—${props.to}`,
+        [
+          `${props.from}—${props.to}`,
+          h(
+            "button",
+            {
+              class: "period-appointment-select",
+              onClick: () => emit("appointmentSelect", dashboardAppointment),
+            },
+            "编辑预约",
+          ),
+        ],
       );
   },
 });
@@ -59,15 +70,59 @@ const RevenuePeriodDetailStub = defineComponent({
 const RevenueBreakdownPanelStub = defineComponent({
   name: "RevenueBreakdownPanel",
   props: ["from", "to", "paymentMethods", "contacts"],
-  setup: (props) => () =>
-    h("div", {
-      class: "breakdown-panel-stub",
-      "data-from": props.from,
-      "data-to": props.to,
-      "data-payment-methods": props.paymentMethods.length,
-      "data-contacts": props.contacts.length,
-    }),
+  emits: ["itemSelect"],
+  setup:
+    (props, { emit }) =>
+    () =>
+      h(
+        "button",
+        {
+          class: "breakdown-panel-stub",
+          "data-from": props.from,
+          "data-to": props.to,
+          "data-payment-methods": props.paymentMethods.length,
+          "data-contacts": props.contacts.length,
+          onClick: () =>
+            emit("itemSelect", {
+              name: "其他",
+              amountMinor: 20_000,
+              appointmentCount: 3,
+              memberNames: ["南枝", "小北"],
+            }),
+        },
+        "收款对象",
+      ),
 });
+
+const RevenueContactDetailStub = defineComponent({
+  name: "RevenueContactDetail",
+  props: ["item", "from", "to", "appointments", "loading", "error", "stale"],
+  emits: ["close", "appointmentSelect"],
+  setup(props, { emit }) {
+    return () =>
+      h(
+        "button",
+        {
+          class: "contact-detail-stub",
+          "data-appointments": props.appointments.length,
+          onClick: () => emit("appointmentSelect", dashboardAppointment),
+        },
+        props.item.name,
+      );
+  },
+});
+
+const dashboardAppointment: Appointment = {
+  id: "dashboard-appointment",
+  serviceDate: "2026-07-27",
+  contactName: "南枝",
+  mode: "business",
+  serviceStatus: "completed",
+  settlementStatus: "settled",
+  amountMinor: 20_000,
+  createdAt: "2026-07-27T00:00:00Z",
+  updatedAt: "2026-07-27T00:00:00Z",
+};
 
 function revenueSummary(from: string, to: string, granularity: ReportGranularity): RevenueSummary {
   return {
@@ -113,6 +168,7 @@ function mountDashboard() {
         RevenueChart: RevenueChartStub,
         RevenuePeriodDetail: RevenuePeriodDetailStub,
         RevenueBreakdownPanel: RevenueBreakdownPanelStub,
+        RevenueContactDetail: RevenueContactDetailStub,
       },
     },
   });
@@ -261,7 +317,7 @@ describe("RevenueDashboard", () => {
     await wrapper.get(".revenue-chart-stub").trigger("click");
     await flushPromises();
 
-    expect(wrapper.get(".period-detail-stub").text()).toBe("2026-07-29—2026-08-01");
+    expect(wrapper.get(".period-detail-stub").text()).toContain("2026-07-29—2026-08-01");
     expect(getRevenueSummary).toHaveBeenLastCalledWith("2026-07-29", "2026-08-01", "day");
 
     wrapper.unmount();
@@ -324,6 +380,50 @@ describe("RevenueDashboard", () => {
       mode: "business",
     });
 
+    wrapper.unmount();
+  });
+
+  it("unmounts the period detail before opening the selected appointment editor", async () => {
+    mockRevenueSummaryRequests();
+    vi.spyOn(mockApi, "listAppointments").mockResolvedValue([dashboardAppointment]);
+    const wrapper = mountDashboard();
+    await flushPromises();
+    await wrapper.get(".revenue-chart-stub").trigger("click");
+    await flushPromises();
+
+    await wrapper.get(".period-appointment-select").trigger("click");
+    await flushPromises();
+    const ui = useUiStore();
+    expect(wrapper.find(".period-detail-stub").exists()).toBe(false);
+    expect(ui.appointmentDrawerOpen).toBe(true);
+    expect(ui.activeAppointment?.id).toBe(dashboardAppointment.id);
+    wrapper.unmount();
+  });
+
+  it("loads all merged contact members and opens their appointment in the existing editor", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 1, 12, 0, 0));
+    mockRevenueSummaryRequests();
+    const listContactAppointments = vi
+      .spyOn(mockApi, "listRevenueContactAppointments")
+      .mockResolvedValue([dashboardAppointment]);
+    const wrapper = mountDashboard();
+    await flushPromises();
+
+    await wrapper.get(".breakdown-panel-stub").trigger("click");
+    await flushPromises();
+    expect(listContactAppointments).toHaveBeenCalledWith("2026-07-27", "2026-08-02", [
+      "南枝",
+      "小北",
+    ]);
+    expect(wrapper.get(".contact-detail-stub").attributes("data-appointments")).toBe("1");
+
+    await wrapper.get(".contact-detail-stub").trigger("click");
+    await flushPromises();
+    const ui = useUiStore();
+    expect(wrapper.find(".contact-detail-stub").exists()).toBe(false);
+    expect(ui.appointmentDrawerOpen).toBe(true);
+    expect(ui.activeAppointment?.id).toBe(dashboardAppointment.id);
     wrapper.unmount();
   });
 });

@@ -11,8 +11,8 @@ describe("compactRevenueBreakdownItems", () => {
     ];
 
     expect(compactRevenueBreakdownItems(items)).toEqual([
-      { name: "主要", amountMinor: 10_000, appointmentCount: 3 },
-      { name: "其他", amountMinor: 99, appointmentCount: 2 },
+      { name: "主要", amountMinor: 10_000, appointmentCount: 3, memberNames: ["主要"] },
+      { name: "其他", amountMinor: 99, appointmentCount: 2, memberNames: ["小额"] },
     ]);
     expect(items).toHaveLength(3);
   });
@@ -24,8 +24,8 @@ describe("compactRevenueBreakdownItems", () => {
         { name: "百分之一", amountMinor: 100, appointmentCount: 1 },
       ]),
     ).toEqual([
-      { name: "主要", amountMinor: 9_900, appointmentCount: 2 },
-      { name: "百分之一", amountMinor: 100, appointmentCount: 1 },
+      { name: "主要", amountMinor: 9_900, appointmentCount: 2, memberNames: ["主要"] },
+      { name: "百分之一", amountMinor: 100, appointmentCount: 1, memberNames: ["百分之一"] },
     ]);
   });
 
@@ -38,8 +38,13 @@ describe("compactRevenueBreakdownItems", () => {
     const result = compactRevenueBreakdownItems(items);
 
     expect(result).toEqual([
-      { name: "主要", amountMinor: 20_000, appointmentCount: 5 },
-      { name: "其他", amountMinor: 400, appointmentCount: 5 },
+      { name: "主要", amountMinor: 20_000, appointmentCount: 5, memberNames: ["主要"] },
+      {
+        name: "其他",
+        amountMinor: 400,
+        appointmentCount: 5,
+        memberNames: ["其他", "零散"],
+      },
     ]);
     expect(result.reduce((total, item) => total + item.amountMinor, 0)).toBe(20_400);
     expect(result.reduce((total, item) => total + item.appointmentCount, 0)).toBe(10);
@@ -53,7 +58,12 @@ describe("compactRevenueBreakdownItems", () => {
     }));
 
     expect(compactRevenueBreakdownItems(items)).toEqual([
-      { name: "其他", amountMinor: 101, appointmentCount: 101 },
+      {
+        name: "其他",
+        amountMinor: 101,
+        appointmentCount: 101,
+        memberNames: items.map((item) => item.name),
+      },
     ]);
   });
 

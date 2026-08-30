@@ -171,6 +171,7 @@ create/update 在同一 SQLite 事务中完成详情写入、返回 DTO 查询�
 
 - `get_dashboard_summary(date) -> DashboardSummary`
 - `get_revenue_summary(from, to, granularity) -> RevenueSummary`
+- `list_revenue_contact_appointments(from, to, contactNames) -> Appointment[]`
 
 Dashboard 只统计非取消业务预约的已结金额，待结数量只包含服务已完成但未结算的业务预约。
 收益查询要求 `from`/`to` 同时填写或同时为空；同时为空时从最早的非取消、正数、已结业务收入
@@ -184,6 +185,10 @@ Dashboard 只统计非取消业务预约的已结金额，待结数量只包含�
 大小写和分隔空格的 `QQ|` 前缀去除后精确合并，空后缀保留原名称；空收款渠道归入“未填写”。该规则
 只影响报表聚合，不改写预约。两组 `amountMinor` 之和都必须等于 `RevenueSummary.settledMinor`，
 零金额已结预约仍计入订单数。
+
+收益对象预约明细要求完整且有效的日期范围，以及至少一个去空、去重后的非空对象名。返回范围内
+非取消、业务、已结预约，并按收益汇总相同的联系人归一规则精确匹配；多对象用于“其他”合并分组。
+结果沿用预约列表的日期、开始时间、创建时间和 ID 稳定倒序，返回完整 `Appointment` 供现有编辑抽屉使用。
 
 所有金额响应都必须处于 JavaScript safe integer 范围；Rust 以 checked/i128 中间值聚合，若汇总
 无法安全响应则返回明确错误，不截断也不回绕。

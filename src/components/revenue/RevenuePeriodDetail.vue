@@ -10,7 +10,7 @@ import type {
 } from "../../types/domain";
 import { formatCurrency } from "../../utils/formatters";
 import { dateKeyWeekday, formatChinaDate } from "../../utils/chinaDateTime";
-import RevenueDayAppointments from "./RevenueDayAppointments.vue";
+import RevenueAppointmentList from "./RevenueAppointmentList.vue";
 
 const props = defineProps<{
   granularity: ReportGranularity;
@@ -33,6 +33,7 @@ const emit = defineEmits<{
   close: [];
   daySelect: [point: RevenuePoint];
   dayBack: [];
+  appointmentSelect: [appointment: Appointment];
 }>();
 
 const panelRef = useTemplateRef("panel");
@@ -168,12 +169,13 @@ useModalFocus({
             </div>
           </section>
 
-          <RevenueDayAppointments
+          <RevenueAppointmentList
             v-if="isDayView"
             :appointments="appointments"
             :loading="appointmentsLoading"
             :error="appointmentsError"
-            :inert="appointmentsActionsDisabled"
+            :actions-disabled="appointmentsActionsDisabled"
+            @appointment-select="emit('appointmentSelect', $event)"
           />
 
           <section v-else class="daily-detail">

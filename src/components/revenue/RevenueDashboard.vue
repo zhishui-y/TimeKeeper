@@ -1,12 +1,21 @@
 <script setup lang="ts">
 import { CheckCircle2, Clock3, Coins, Gauge } from "@lucide/vue";
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, shallowRef, watch } from "vue";
+import {
+  computed,
+  defineAsyncComponent,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  shallowRef,
+  watch,
+} from "vue";
 import { useRouter } from "vue-router";
 import { useAppointments } from "../../composables/useAppointments";
 import { useRevenue } from "../../composables/useRevenue";
+import { useRevenueContactAppointments } from "../../composables/useRevenueContactAppointments";
 import { useRevenueRange } from "../../composables/useRevenueRange";
 import { useUiStore } from "../../stores/ui";
-import type { ReportGranularity, RevenuePoint } from "../../types/domain";
+import type { Appointment, ReportGranularity, RevenuePoint } from "../../types/domain";
 import { appointmentFiltersToQuery } from "../../utils/appointmentRouteQuery";
 import { formatCurrency } from "../../utils/formatters";
 import {
@@ -16,6 +25,7 @@ import {
 } from "../../utils/revenue";
 import RevenueBreakdownPanel from "./RevenueBreakdownPanel.vue";
 import RevenueRangeNavigator from "./RevenueRangeNavigator.vue";
+import type { CompactRevenueBreakdownItem } from "../../utils/revenueBreakdown";
 
 const RevenueChart = defineAsyncComponent({
   loader: () => import("./RevenueCharts").then((module) => module.RevenueChart),
@@ -23,11 +33,19 @@ const RevenueChart = defineAsyncComponent({
   timeout: 20_000,
 });
 const RevenuePeriodDetail = defineAsyncComponent(() => import("./RevenuePeriodDetail.vue"));
+const RevenueContactDetail = defineAsyncComponent(() => import("./RevenueContactDetail.vue"));
 
 interface SelectedPeriod {
   granularity: ReportGranularity;
   from: string;
   to: string;
+}
+
+interface SelectedContact {
+  item: CompactRevenueBreakdownItem;
+  from: string;
+  to: string;
+  trigger: HTMLElement | null;
 }
 
 const router = useRouter();
@@ -54,6 +72,16 @@ const {
   load: loadDetailAppointments,
 } = useAppointments({}, { immediate: false });
 const selectedPeriod = shallowRef<SelectedPeriod | null>(null);
+const selectedContact = shallowRef<SelectedContact | null>(null);
+const {
+  appointments: contactAppointments,
+  loading: contactAppointmentsLoading,
+  error: contactAppointmentsError,
+  stale: contactAppointmentsStale,
+  actionsDisabled: contactAppointmentsActionsDisabled,
+  resolvedKey: contactAppointmentsResolvedKey,
+  load: loadContactAppointments,
+} = useRevenueContactAppointments();
 let periodClock: ReturnType<typeof globalThis.setInterval> | undefined;
 const detailSummaryForView = computed(() => detailSummary.value);
 const detailAppointmentsForView = computed(() => detailAppointments.value);
@@ -109,11 +137,25 @@ function showPeriodDetail(point: RevenuePoint): void {
       : periodRange;
   if (!selectedRange) return;
 
+  selectedContact.value = null;
   selectedPeriod.value = { granularity, ...selectedRange };
   void loadDetail(selectedRange.from, selectedRange.to, "day");
   if (granularity === "day") {
     loadAppointmentsForDay(selectedRange.from);
   }
+}
+
+function showContactDetail(item: CompactRevenueBreakdownItem): void {
+  if (actionsDisabled.value || !summary.value) return;
+  const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  selectedPeriod.value = null;
+  selectedContact.value = {
+    item,
+    from: summary.value.from,
+    to: summary.value.to,
+    trigger,
+  };
+  void loadContactAppointments(summary.value.from, summary.value.to, item.memberNames);
 }
 
 function showDayAppointments(point: RevenuePoint): void {
@@ -135,6 +177,17 @@ function openPendingAppointments(): void {
 
 function closePeriodDetail(): void {
   selectedPeriod.value = null;
+}
+
+function closeContactDetail(): void {
+  selectedContact.value = null;
+}
+
+async function openAppointmentEditor(appointment: Appointment): Promise<void> {
+  selectedPeriod.value = null;
+  selectedContact.value = null;
+  await nextTick();
+  ui.openEditAppointment(appointment);
 }
 
 watch(
@@ -171,7 +224,20 @@ watch(
       revenueRange.requestRange.value.to,
       revenueRange.granularity.value,
     ] as const,
-  closePeriodDetail,
+  () => {
+    closePeriodDetail();
+    closeContactDetail();
+  },
+);
+
+watch(
+  () => ui.dataRevision,
+  () => {
+    const selected = selectedContact.value;
+    if (selected) {
+      void loadContactAppointments(selected.from, selected.to, selected.item.memberNames);
+    }
+  },
 );
 </script>
 
@@ -321,6 +387,7 @@ watch(
         :to="summary?.to ?? revenueRange.displayRange.value?.to ?? ''"
         :payment-methods="summary?.paymentMethods ?? []"
         :contacts="summary?.contacts ?? []"
+        @item-select="showContactDetail"
       />
     </section>
 
@@ -341,7 +408,23 @@ watch(
       :appointments-actions-disabled="detailAppointmentsActionsDisabled"
       :appointments-resolved-date="detailAppointmentsResolvedKey?.from ?? null"
       @day-select="showDayAppointments"
+      @appointment-select="openAppointmentEditor"
       @close="closePeriodDetail"
+    />
+    <RevenueContactDetail
+      v-if="selectedContact"
+      :item="selectedContact.item"
+      :from="selectedContact.from"
+      :to="selectedContact.to"
+      :appointments="contactAppointments"
+      :loading="contactAppointmentsLoading"
+      :error="contactAppointmentsError"
+      :stale="contactAppointmentsStale"
+      :actions-disabled="contactAppointmentsActionsDisabled"
+      :resolved-contact-names="contactAppointmentsResolvedKey?.contactNames ?? null"
+      :restore-focus-element="selectedContact.trigger"
+      @appointment-select="openAppointmentEditor"
+      @close="closeContactDetail"
     />
   </div>
 </template>

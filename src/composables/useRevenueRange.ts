@@ -99,7 +99,11 @@ export function useRevenueRange(options: UseRevenueRangeOptions = {}) {
     const wasCurrent = isCurrentPeriod.value;
     referenceDate = new Date(nextReferenceDate);
     if (!wasCurrent || (kind !== "week" && kind !== "month")) return false;
-    appliedRange.value = revenueNaturalRange(kind, referenceDate);
+    const nextRange = revenueNaturalRange(kind, referenceDate);
+    if (appliedRange.value.from === nextRange.from && appliedRange.value.to === nextRange.to) {
+      return false;
+    }
+    appliedRange.value = nextRange;
     return true;
   }
 

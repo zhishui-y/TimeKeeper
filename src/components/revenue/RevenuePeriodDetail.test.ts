@@ -2,7 +2,7 @@
 
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it } from "vitest";
-import type { RevenueSummary } from "../../types/domain";
+import type { Appointment, RevenueSummary } from "../../types/domain";
 import RevenuePeriodDetail from "./RevenuePeriodDetail.vue";
 
 const summary: RevenueSummary = {
@@ -35,6 +35,20 @@ const summary: RevenueSummary = {
       appointmentCount: 1,
     },
   ],
+};
+
+const appointment: Appointment = {
+  id: "appointment-1",
+  serviceDate: "2026-08-01",
+  startsAt: "2026-08-01T13:00:00+08:00",
+  endsAt: "2026-08-01T14:00:00+08:00",
+  contactName: "小北",
+  mode: "business",
+  serviceStatus: "completed",
+  settlementStatus: "settled",
+  amountMinor: 12_000,
+  createdAt: "2026-08-01T00:00:00Z",
+  updatedAt: "2026-08-01T00:00:00Z",
 };
 
 describe("RevenuePeriodDetail", () => {
@@ -115,5 +129,25 @@ describe("RevenuePeriodDetail", () => {
 
     wrapper.unmount();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("forwards the selected day appointment", async () => {
+    const wrapper = mount(RevenuePeriodDetail, {
+      props: {
+        granularity: "day",
+        from: appointment.serviceDate,
+        to: appointment.serviceDate,
+        summary,
+        loading: false,
+        error: null,
+        appointments: [appointment],
+        appointmentsLoading: false,
+        appointmentsError: null,
+      },
+      global: { stubs: { Teleport: true } },
+    });
+
+    await wrapper.get(".revenue-appointment").trigger("click");
+    expect((wrapper.emitted("appointmentSelect")?.[0]?.[0] as Appointment).id).toBe(appointment.id);
   });
 });

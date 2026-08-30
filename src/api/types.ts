@@ -95,6 +95,11 @@ export interface ApiClient {
     to: string,
     granularity: ReportGranularity,
   ): Promise<RevenueSummary>;
+  listRevenueContactAppointments(
+    from: string,
+    to: string,
+    contactNames: readonly string[],
+  ): Promise<Appointment[]>;
   previewExcelImport(path: string, baseYear: number): Promise<ExcelImportPreview>;
   commitExcelImport(
     previewToken: string,

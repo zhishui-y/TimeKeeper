@@ -1104,6 +1104,31 @@ export const mockApi: ApiClient = {
       points,
     };
   },
+  async listRevenueContactAppointments(from, to, contactNames) {
+    const normalizedFrom = from.trim();
+    const normalizedTo = to.trim();
+    if (!normalizedFrom || !normalizedTo) {
+      throw new Error("收益对象明细必须同时提供开始日期和结束日期");
+    }
+    if (normalizedFrom > normalizedTo) throw new Error("开始日期不能晚于结束日期");
+    const normalizedNames = contactNames.map((name) => name.trim());
+    if (normalizedNames.length === 0 || normalizedNames.some((name) => !name)) {
+      throw new Error("收款对象不能为空");
+    }
+    const requestedNames = new Set(normalizedNames);
+    return structuredClone(
+      filteredAppointments({
+        from: normalizedFrom,
+        to: normalizedTo,
+        mode: "business",
+        settlementStatus: "settled",
+      }).filter(
+        (item) =>
+          item.serviceStatus !== "cancelled" &&
+          requestedNames.has(revenueContactName(item.contactName)),
+      ),
+    );
+  },
   ...createMockSettingsApi(mockStore),
   ...createMockImportBackupApi(mockStore, makeId),
 };

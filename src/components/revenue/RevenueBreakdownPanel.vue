@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, shallowRef } from "vue";
 import type { RevenueBreakdownItem } from "../../types/domain";
 import { compactRevenueBreakdownItems } from "../../utils/revenueBreakdown";
+import type { CompactRevenueBreakdownItem } from "../../utils/revenueBreakdown";
 
 const RevenueBreakdownChart = defineAsyncComponent({
   loader: () => import("./RevenueCharts").then((module) => module.RevenueBreakdownChart),
@@ -19,6 +20,10 @@ const props = defineProps<{
   contacts: readonly RevenueBreakdownItem[];
 }>();
 
+const emit = defineEmits<{
+  itemSelect: [item: CompactRevenueBreakdownItem];
+}>();
+
 const dimension = shallowRef<BreakdownDimension>("contacts");
 const chartType = shallowRef<BreakdownChartType>("pie");
 const sourceItems = computed(() =>
@@ -33,6 +38,12 @@ const chartAriaLabel = computed(
   () =>
     `${dimensionLabel.value}，${props.from} 至 ${props.to}，${activeItems.value.length} 项，${chartType.value === "bar" ? "横向柱状图" : "饼图"}`,
 );
+
+function selectItem(name: string): void {
+  if (dimension.value !== "contacts") return;
+  const item = activeItems.value.find((candidate) => candidate.name === name);
+  if (item) emit("itemSelect", item);
+}
 </script>
 
 <template>
@@ -85,6 +96,8 @@ const chartAriaLabel = computed(
       :items="activeItems"
       :chart-type="chartType"
       :dimension-label="dimensionLabel"
+      :selectable="dimension === 'contacts'"
+      @item-select="selectItem"
     />
   </aside>
 </template>

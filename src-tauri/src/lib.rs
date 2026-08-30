@@ -166,6 +166,7 @@ pub fn run() {
             accounts::refresh_account_profile_role_data,
             reports::get_dashboard_summary,
             reports::get_revenue_summary,
+            reports::list_revenue_contact_appointments,
             importer::preview_excel_import,
             importer::commit_excel_import,
             app_access::app_access_status,

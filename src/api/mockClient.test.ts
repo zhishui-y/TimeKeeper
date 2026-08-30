@@ -593,10 +593,78 @@ describe("browser mock API", () => {
         { name: "独行", amountMinor: 50, appointmentCount: 1 },
       ]);
       expect(compactRevenueBreakdownItems(summary.contacts)).toEqual([
-        { name: "主联系人", amountMinor: 9_700, appointmentCount: 1 },
-        { name: "其他", amountMinor: 200, appointmentCount: 4 },
-        { name: "可乐", amountMinor: 100, appointmentCount: 3 },
+        {
+          name: "主联系人",
+          amountMinor: 9_700,
+          appointmentCount: 1,
+          memberNames: ["主联系人"],
+        },
+        {
+          name: "其他",
+          amountMinor: 200,
+          appointmentCount: 4,
+          memberNames: ["QQ|", "QQ｜可乐", "好友QQ|可乐", "独行"],
+        },
+        {
+          name: "可乐",
+          amountMinor: 100,
+          appointmentCount: 3,
+          memberNames: ["可乐"],
+        },
       ]);
+    } finally {
+      await mockApi.deleteAppointments({ kind: "explicit", ids: createdIds });
+    }
+  });
+
+  it("lists settled contact revenue appointments with merged names and stable reverse order", async () => {
+    const createdIds: string[] = [];
+    try {
+      const create = async (input: AppointmentInput) => {
+        const result = await mockApi.createAppointment(input);
+        createdIds.push(result.appointment.id);
+      };
+      await create({
+        ...businessInput("2099-12-20", "10:00", "11:00", " QQ | 可乐 ", 1_000),
+        serviceStatus: "completed",
+        settlementStatus: "settled",
+      });
+      await create({
+        ...businessInput("2099-12-21", "12:00", "13:00", "小北", 2_000),
+        serviceStatus: "completed",
+        settlementStatus: "settled",
+      });
+      await create({
+        ...businessInput("2099-12-21", "11:00", "12:00", "可乐", 3_000),
+        serviceStatus: "completed",
+      });
+      await create({
+        ...businessInput("2099-12-21", "10:00", "11:00", "小北", 4_000),
+        serviceStatus: "cancelled",
+        settlementStatus: "settled",
+      });
+      await create({
+        ...businessInput("2099-12-21", "09:00", "10:00", "小北", 0),
+        mode: "entertainment",
+        serviceStatus: "completed",
+        settlementStatus: "not_applicable",
+      });
+      await create({
+        ...businessInput("2099-12-22", "10:00", "11:00", "可乐", 5_000),
+        serviceStatus: "completed",
+        settlementStatus: "settled",
+      });
+
+      const result = await mockApi.listRevenueContactAppointments("2099-12-20", "2099-12-21", [
+        "小北",
+        "可乐",
+        "小北",
+      ]);
+      expect(result.map((item) => item.contactName)).toEqual(["小北", "QQ | 可乐"]);
+      expect(result.every((item) => item.settlementStatus === "settled")).toBe(true);
+      await expect(
+        mockApi.listRevenueContactAppointments("2099-12-20", "2099-12-21", []),
+      ).rejects.toThrow("对象不能为空");
     } finally {
       await mockApi.deleteAppointments({ kind: "explicit", ids: createdIds });
     }

@@ -100,7 +100,10 @@ describe("useRevenueRange", () => {
 
   it("rolls a current natural period across Beijing boundaries without moving history", () => {
     const range = useRevenueRange({ referenceDate });
+    const currentRange = range.appliedRange.value;
 
+    expect(range.refreshCurrentPeriod(new Date(2026, 7, 5, 12, 0))).toBe(false);
+    expect(range.appliedRange.value).toBe(currentRange);
     expect(range.refreshCurrentPeriod(new Date(2026, 7, 10, 0, 1))).toBe(true);
     expect(range.appliedRange.value).toEqual({ from: "2026-08-10", to: "2026-08-16" });
     range.navigatePeriod(-1);

@@ -12,13 +12,16 @@ const RevenueBreakdownChartStub = defineComponent({
     items: { type: Array, required: true },
     chartType: { type: String, required: true },
     dimensionLabel: { type: String, required: true },
+    selectable: { type: Boolean, default: false },
   },
+  emits: ["itemSelect"],
   setup: (props) => () =>
     h("div", {
       class: "breakdown-chart-stub",
       "data-chart-type": props.chartType,
       "data-dimension": props.dimensionLabel,
       "data-items": props.items.length,
+      "data-selectable": props.selectable,
     }),
 });
 
@@ -54,6 +57,7 @@ describe("RevenueBreakdownPanel", () => {
       items: contacts,
       chartType: "pie",
       dimensionLabel: "收款对象",
+      selectable: true,
     });
     expect(
       wrapper
@@ -110,8 +114,13 @@ describe("RevenueBreakdownPanel", () => {
     });
 
     expect(wrapper.getComponent(RevenueBreakdownChartStub).props("items")).toEqual([
-      { name: "南枝", amountMinor: 20_000, appointmentCount: 4 },
-      { name: "其他", amountMinor: 200, appointmentCount: 3 },
+      { name: "南枝", amountMinor: 20_000, appointmentCount: 4, memberNames: ["南枝"] },
+      {
+        name: "其他",
+        amountMinor: 200,
+        appointmentCount: 3,
+        memberNames: ["其他", "临时联系人"],
+      },
     ]);
 
     const paymentMethodButton = wrapper
@@ -132,7 +141,32 @@ describe("RevenueBreakdownPanel", () => {
       ],
       chartType: "bar",
       dimensionLabel: "收款渠道",
+      selectable: false,
     });
+  });
+
+  it("emits compacted contacts but never drills into payment methods", async () => {
+    const wrapper = mountPanel({
+      contacts: [
+        { name: "南枝", amountMinor: 10_000, appointmentCount: 2 },
+        { name: "临时对象", amountMinor: 50, appointmentCount: 1 },
+      ],
+    });
+    wrapper.getComponent(RevenueBreakdownChartStub).vm.$emit("itemSelect", "其他");
+    expect(wrapper.emitted("itemSelect")?.[0]?.[0]).toEqual({
+      name: "其他",
+      amountMinor: 50,
+      appointmentCount: 1,
+      memberNames: ["临时对象"],
+    });
+
+    const paymentMethodButton = wrapper
+      .findAll('[aria-label="收款分析维度"] button')
+      .find((button) => button.text() === "收款渠道");
+    if (!paymentMethodButton) throw new Error("未找到收款渠道按钮");
+    await paymentMethodButton.trigger("click");
+    wrapper.getComponent(RevenueBreakdownChartStub).vm.$emit("itemSelect", "微信");
+    expect(wrapper.emitted("itemSelect")).toHaveLength(1);
   });
 
   it("shows the empty state when all default contact amounts are zero", () => {

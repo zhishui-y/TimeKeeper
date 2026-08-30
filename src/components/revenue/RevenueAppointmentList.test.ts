@@ -3,7 +3,7 @@
 import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 import type { Appointment } from "../../types/domain";
-import RevenueDayAppointments from "./RevenueDayAppointments.vue";
+import RevenueAppointmentList from "./RevenueAppointmentList.vue";
 
 const appointments: Appointment[] = [
   {
@@ -43,27 +43,54 @@ const appointments: Appointment[] = [
   },
 ];
 
-describe("RevenueDayAppointments", () => {
-  it("only shows non-cancelled business appointments that match the report", () => {
-    const wrapper = mount(RevenueDayAppointments, {
-      props: { appointments, loading: false, error: null },
+describe("RevenueAppointmentList", () => {
+  it("shows report appointments and emits the selected appointment from a keyboard-operable row", async () => {
+    const wrapper = mount(RevenueAppointmentList, {
+      props: { appointments, loading: false, error: null, showDate: true },
     });
 
     expect(wrapper.get("h3").text()).toBe("当日业务预约");
-    expect(wrapper.findAll(".day-appointment")).toHaveLength(1);
+    expect(wrapper.findAll(".revenue-appointment")).toHaveLength(1);
+    expect(wrapper.text()).toContain("2026年8月1日");
     expect(wrapper.text()).toContain("13:30–15:00");
     expect(wrapper.text()).toContain("小北");
     expect(wrapper.text()).toContain("¥180");
     expect(wrapper.text()).toContain("待结算");
     expect(wrapper.text()).not.toContain("青禾");
-    expect(wrapper.text()).not.toContain("已取消业务");
+
+    const row = wrapper.get(".revenue-appointment");
+    expect(row.element.tagName).toBe("BUTTON");
+    await row.trigger("click");
+    expect((wrapper.emitted("appointmentSelect")?.[0]?.[0] as Appointment).id).toBe(
+      appointments[0]?.id,
+    );
   });
 
-  it("shows an empty state after loading", () => {
-    const wrapper = mount(RevenueDayAppointments, {
-      props: { appointments: [], loading: false, error: null },
+  it("disables selection while loading, errored, stale, or explicitly disabled", async () => {
+    const wrapper = mount(RevenueAppointmentList, {
+      props: {
+        appointments,
+        loading: false,
+        error: null,
+        actionsDisabled: true,
+      },
     });
 
-    expect(wrapper.text()).toContain("当天没有符合收益口径的业务预约");
+    expect(wrapper.get(".revenue-appointment").attributes("disabled")).toBeDefined();
+    await wrapper.get(".revenue-appointment").trigger("click");
+    expect(wrapper.emitted("appointmentSelect")).toBeUndefined();
+  });
+
+  it("shows a configurable empty state after loading", () => {
+    const wrapper = mount(RevenueAppointmentList, {
+      props: {
+        appointments: [],
+        loading: false,
+        error: null,
+        emptyMessage: "暂无计入收益的预约",
+      },
+    });
+
+    expect(wrapper.text()).toContain("暂无计入收益的预约");
   });
 });

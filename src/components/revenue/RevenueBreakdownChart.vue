@@ -2,8 +2,9 @@
 import { BarChart as EChartsBarChart, PieChart as EChartsPieChart } from "echarts/charts";
 import { GridComponent, TooltipComponent } from "echarts/components";
 import { use } from "echarts/core";
+import type { ECElementEvent } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
-import { computed, useTemplateRef } from "vue";
+import { computed, shallowRef, useTemplateRef } from "vue";
 import VChart from "vue-echarts";
 import { useAppAppearance } from "../../composables/useAppAppearance";
 import {
@@ -27,10 +28,17 @@ const props = defineProps<{
   items: readonly RevenueBreakdownItem[];
   chartType: BreakdownChartType;
   dimensionLabel: string;
+  selectable?: boolean;
+}>();
+
+const emit = defineEmits<{
+  itemSelect: [name: string];
 }>();
 
 const appearance = useAppAppearance();
 const chartInstance = useTemplateRef<ResizableEChartsInstance>("chartInstance");
+const chartRoot = useTemplateRef<HTMLElement>("chartRoot");
+const activeIndex = shallowRef(0);
 const { prefersReducedMotion } = useEChartsLifecycle(chartInstance);
 const palette = ["#2d6854", "#4e7184", "#a86f26", "#b5523e", "#759288", "#7b6a9a"];
 
@@ -43,6 +51,44 @@ const chartDescription = computed(
   () =>
     `${props.dimensionLabel}${props.chartType === "bar" ? "横向柱状图" : "饼图"}，共${props.items.length}项，合计${formatCurrency(totalAmount.value)}`,
 );
+
+function selectItem(name: string | undefined): void {
+  if (!props.selectable || !name || !props.items.some((item) => item.name === name)) return;
+  emit("itemSelect", name);
+}
+
+function selectChartItem(event: ECElementEvent): void {
+  if (event.componentType !== "series") return;
+  const chartItems = props.chartType === "bar" ? barItems.value : props.items;
+  selectItem(chartItems[event.dataIndex]?.name);
+}
+
+function focusChart(): void {
+  if (props.selectable) chartRoot.value?.focus();
+}
+
+function handleKeydown(event: KeyboardEvent): void {
+  if (!props.selectable || props.items.length === 0) return;
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    selectItem(props.items[activeIndex.value]?.name);
+    return;
+  }
+  const lastIndex = props.items.length - 1;
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    event.preventDefault();
+    activeIndex.value = activeIndex.value >= lastIndex ? 0 : activeIndex.value + 1;
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+    event.preventDefault();
+    activeIndex.value = activeIndex.value <= 0 ? lastIndex : activeIndex.value - 1;
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    activeIndex.value = 0;
+  } else if (event.key === "End") {
+    event.preventDefault();
+    activeIndex.value = lastIndex;
+  }
+}
 
 function tooltipText(params: TooltipParams | TooltipParams[]): string {
   const item = Array.isArray(params) ? params[0] : params;
@@ -136,6 +182,7 @@ const option = computed(() => {
         type: "bar",
         barMaxWidth: 16,
         data: barItems.value.map((item) => ({
+          name: item.name,
           value: item.amountMinor,
           appointmentCount: item.appointmentCount,
           itemStyle: { borderRadius: [0, 4, 4, 0] },
@@ -154,7 +201,18 @@ const option = computed(() => {
 </script>
 
 <template>
-  <div class="breakdown-chart" role="img" :aria-label="chartDescription">
+  <div
+    ref="chartRoot"
+    class="breakdown-chart"
+    :class="{ 'breakdown-chart--selectable': selectable }"
+    :role="selectable ? 'group' : 'img'"
+    :tabindex="selectable ? 0 : undefined"
+    :aria-label="
+      selectable ? `${chartDescription}，可使用方向键选择并按回车查看预约` : chartDescription
+    "
+    @keydown="handleKeydown"
+    @pointerdown="focusChart"
+  >
     <div v-if="chartType === 'bar'" class="breakdown-chart__bar-scroll">
       <VChart
         ref="chartInstance"
@@ -163,6 +221,7 @@ const option = computed(() => {
         :option="option"
         :init-options="{ renderer: 'canvas' }"
         :autoresize="{ throttle: 120 }"
+        @click="selectChartItem"
       />
     </div>
     <div v-else class="breakdown-chart__pie-layout">
@@ -172,16 +231,36 @@ const option = computed(() => {
         :option="option"
         :init-options="{ renderer: 'canvas' }"
         :autoresize="{ throttle: 120 }"
+        @click="selectChartItem"
       />
       <div class="breakdown-chart__legend" :aria-label="`${dimensionLabel}明细`">
-        <div v-for="(item, index) in items" :key="item.name" class="breakdown-chart__legend-row">
-          <i :style="{ backgroundColor: palette[index % palette.length] }" />
-          <div>
-            <strong :title="item.name">{{ item.name }}</strong>
-            <small>{{ item.appointmentCount }} 笔 · {{ percentage(item.amountMinor) }}</small>
+        <template v-if="selectable">
+          <button
+            v-for="(item, index) in items"
+            :key="item.name"
+            class="breakdown-chart__legend-row"
+            type="button"
+            :aria-label="`查看${item.name}的收益预约明细`"
+            @click="selectItem(item.name)"
+          >
+            <i :style="{ backgroundColor: palette[index % palette.length] }" />
+            <div>
+              <strong :title="item.name">{{ item.name }}</strong>
+              <small>{{ item.appointmentCount }} 笔 · {{ percentage(item.amountMinor) }}</small>
+            </div>
+            <span class="mono-number">{{ formatCurrency(item.amountMinor) }}</span>
+          </button>
+        </template>
+        <template v-else>
+          <div v-for="(item, index) in items" :key="item.name" class="breakdown-chart__legend-row">
+            <i :style="{ backgroundColor: palette[index % palette.length] }" />
+            <div>
+              <strong :title="item.name">{{ item.name }}</strong>
+              <small>{{ item.appointmentCount }} 笔 · {{ percentage(item.amountMinor) }}</small>
+            </div>
+            <span class="mono-number">{{ formatCurrency(item.amountMinor) }}</span>
           </div>
-          <span class="mono-number">{{ formatCurrency(item.amountMinor) }}</span>
-        </div>
+        </template>
       </div>
     </div>
     <ul class="breakdown-chart__accessible-list">
@@ -197,6 +276,11 @@ const option = computed(() => {
   width: 100%;
   height: 100%;
   min-height: 0;
+}
+
+.breakdown-chart--selectable:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
 }
 
 .breakdown-chart__bar-scroll {
@@ -238,6 +322,23 @@ const option = computed(() => {
   gap: 7px;
   padding: 8px 0;
   border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+button.breakdown-chart__legend-row {
+  width: 100%;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.breakdown-chart__legend-row:hover,
+button.breakdown-chart__legend-row:focus-visible {
+  background: color-mix(in srgb, var(--brand-soft) 42%, transparent);
 }
 
 .breakdown-chart__legend-row > i {

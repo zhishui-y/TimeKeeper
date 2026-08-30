@@ -97,6 +97,12 @@ const nativeApi: ApiClient = {
   getDashboardSummary: (date) => invoke<DashboardSummary>("get_dashboard_summary", { date }),
   getRevenueSummary: (from, to, granularity) =>
     invoke<RevenueSummary>("get_revenue_summary", { from, to, granularity }),
+  listRevenueContactAppointments: (from, to, contactNames) =>
+    invoke<Appointment[]>("list_revenue_contact_appointments", {
+      from,
+      to,
+      contactNames,
+    }),
   previewExcelImport: (path, baseYear) =>
     invoke<ExcelImportPreview>("preview_excel_import", { path, baseYear }),
   commitExcelImport: (previewToken, selection: ExcelImportSelection) =>

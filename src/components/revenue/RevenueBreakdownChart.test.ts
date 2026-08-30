@@ -13,6 +13,7 @@ vi.mock("vue-echarts", async () => {
       props: {
         option: { type: Object, required: true },
       },
+      emits: ["click"],
       setup: () => () => h("div", { class: "v-chart-stub" }),
     }),
   };
@@ -65,5 +66,45 @@ describe("RevenueBreakdownChart", () => {
     expect(legendRows[0]?.text()).toContain("2 笔");
     expect(legendRows[0]?.text()).toContain("66.7%");
     expect(legendRows[1]?.text()).toContain("¥100");
+  });
+
+  it("selects pie slices, bar items, legend rows, and keyboard items when enabled", async () => {
+    const pie = mount(RevenueBreakdownChart, {
+      props: { items, chartType: "pie", dimensionLabel: "收款对象", selectable: true },
+    });
+    expect(pie.get('[role="group"]').attributes("tabindex")).toBe("0");
+    pie.getComponent({ name: "VChart" }).vm.$emit("click", {
+      componentType: "series",
+      dataIndex: 1,
+    });
+    expect(pie.emitted("itemSelect")?.[0]).toEqual(["小北"]);
+
+    await pie.findAll("button.breakdown-chart__legend-row")[0]!.trigger("click");
+    expect(pie.emitted("itemSelect")?.[1]).toEqual([items[0]?.name]);
+
+    await pie.get('[role="group"]').trigger("keydown", { key: "ArrowRight" });
+    await pie.get('[role="group"]').trigger("keydown", { key: "Enter" });
+    expect(pie.emitted("itemSelect")?.[2]).toEqual(["小北"]);
+
+    const bar = mount(RevenueBreakdownChart, {
+      props: { items, chartType: "bar", dimensionLabel: "收款对象", selectable: true },
+    });
+    bar.getComponent({ name: "VChart" }).vm.$emit("click", {
+      componentType: "series",
+      dataIndex: 0,
+    });
+    expect(bar.emitted("itemSelect")?.[0]).toEqual(["小北"]);
+  });
+
+  it("keeps payment-method charts read-only", async () => {
+    const wrapper = mount(RevenueBreakdownChart, {
+      props: { items, chartType: "pie", dimensionLabel: "收款渠道", selectable: false },
+    });
+    wrapper.getComponent({ name: "VChart" }).vm.$emit("click", {
+      componentType: "series",
+      dataIndex: 0,
+    });
+    expect(wrapper.emitted("itemSelect")).toBeUndefined();
+    expect(wrapper.find("button.breakdown-chart__legend-row").exists()).toBe(false);
   });
 });

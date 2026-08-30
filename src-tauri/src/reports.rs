@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, str::FromStr};
+use std::{
+    collections::{BTreeMap, HashSet},
+    str::FromStr,
+};
 
 use chrono::{Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, Utc};
 use sqlx::Row;
@@ -6,11 +9,11 @@ use tauri::State;
 
 use crate::{
     app_access::AppAccessState,
-    appointments::get_appointment_impl,
+    appointments::{get_appointment_impl, list_appointments_impl},
     db::{Database, JS_SAFE_INTEGER_MAX},
     models::{
-        DashboardSummary, ReportGranularity, RevenueBreakdownItem, RevenuePoint, RevenueSummary,
-        ServiceStatus, SettlementStatus,
+        Appointment, AppointmentFilters, AppointmentMode, DashboardSummary, ReportGranularity,
+        RevenueBreakdownItem, RevenuePoint, RevenueSummary, ServiceStatus, SettlementStatus,
     },
 };
 
@@ -457,6 +460,68 @@ pub(crate) async fn get_revenue_summary_impl(
     })
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub async fn list_revenue_contact_appointments(
+    database: State<'_, Database>,
+    access: State<'_, AppAccessState>,
+    from: String,
+    to: String,
+    contact_names: Vec<String>,
+) -> Result<Vec<Appointment>, String> {
+    access.require_unlocked()?;
+    list_revenue_contact_appointments_impl(database.inner(), &from, &to, contact_names).await
+}
+
+pub(crate) async fn list_revenue_contact_appointments_impl(
+    database: &Database,
+    from: &str,
+    to: &str,
+    contact_names: Vec<String>,
+) -> Result<Vec<Appointment>, String> {
+    let from = from.trim();
+    let to = to.trim();
+    if from.is_empty() || to.is_empty() {
+        return Err("收益对象明细必须同时提供开始日期和结束日期".into());
+    }
+    let from_date = parse_date(from, "开始日期")?;
+    let to_date = parse_date(to, "结束日期")?;
+    if from_date > to_date {
+        return Err("开始日期不能晚于结束日期".into());
+    }
+
+    let mut normalized_names = HashSet::with_capacity(contact_names.len());
+    for name in contact_names {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("收款对象不能为空".into());
+        }
+        normalized_names.insert(name.to_owned());
+    }
+    if normalized_names.is_empty() {
+        return Err("收款对象不能为空".into());
+    }
+
+    let appointments = list_appointments_impl(
+        database,
+        AppointmentFilters {
+            from: Some(from_date.format(DATE_FORMAT).to_string()),
+            to: Some(to_date.format(DATE_FORMAT).to_string()),
+            mode: Some(AppointmentMode::Business),
+            settlement_status: Some(SettlementStatus::Settled),
+            ..AppointmentFilters::default()
+        },
+    )
+    .await?;
+
+    Ok(appointments
+        .into_iter()
+        .filter(|appointment| {
+            appointment.service_status != ServiceStatus::Cancelled
+                && normalized_names.contains(&revenue_contact_name(&appointment.contact_name))
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,6 +578,124 @@ mod tests {
         ] {
             assert_eq!(revenue_contact_name(input), expected);
         }
+    }
+
+    #[test]
+    fn lists_only_settled_report_appointments_for_normalized_contact_members() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+
+            let mut older = input(
+                "2026-07-13",
+                "18:00",
+                "19:00",
+                SettlementStatus::Settled,
+                10_000,
+            );
+            older.contact_name = " QQ | 可乐 ".into();
+            create_appointment_impl(&database, older).await.unwrap();
+
+            let mut newer = input(
+                "2026-07-14",
+                "20:00",
+                "21:00",
+                SettlementStatus::Settled,
+                20_000,
+            );
+            newer.contact_name = "小北".into();
+            create_appointment_impl(&database, newer).await.unwrap();
+
+            let mut unsettled = input(
+                "2026-07-14",
+                "19:00",
+                "20:00",
+                SettlementStatus::Unsettled,
+                8_000,
+            );
+            unsettled.contact_name = "可乐".into();
+            create_appointment_impl(&database, unsettled).await.unwrap();
+
+            let mut cancelled = input(
+                "2026-07-14",
+                "18:00",
+                "19:00",
+                SettlementStatus::Settled,
+                7_000,
+            );
+            cancelled.contact_name = "小北".into();
+            cancelled.service_status = ServiceStatus::Cancelled;
+            create_appointment_impl(&database, cancelled).await.unwrap();
+
+            let mut entertainment = input(
+                "2026-07-14",
+                "17:00",
+                "18:00",
+                SettlementStatus::NotApplicable,
+                0,
+            );
+            entertainment.contact_name = "小北".into();
+            entertainment.mode = AppointmentMode::Entertainment;
+            create_appointment_impl(&database, entertainment)
+                .await
+                .unwrap();
+
+            let mut outside = input(
+                "2026-07-15",
+                "21:00",
+                "22:00",
+                SettlementStatus::Settled,
+                30_000,
+            );
+            outside.contact_name = "可乐".into();
+            create_appointment_impl(&database, outside).await.unwrap();
+
+            let result = list_revenue_contact_appointments_impl(
+                &database,
+                "2026-07-13",
+                "2026-07-14",
+                vec!["小北".into(), "可乐".into(), "小北".into()],
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                result
+                    .iter()
+                    .map(|item| item.contact_name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["小北", "QQ | 可乐"]
+            );
+            assert!(
+                result
+                    .iter()
+                    .all(|item| item.mode == AppointmentMode::Business
+                        && item.service_status != ServiceStatus::Cancelled
+                        && item.settlement_status == SettlementStatus::Settled)
+            );
+
+            assert!(
+                list_revenue_contact_appointments_impl(
+                    &database,
+                    "2026-07-13",
+                    "2026-07-14",
+                    vec![]
+                )
+                .await
+                .unwrap_err()
+                .contains("对象不能为空")
+            );
+            assert!(
+                list_revenue_contact_appointments_impl(
+                    &database,
+                    "2026-07-15",
+                    "2026-07-14",
+                    vec!["可乐".into()]
+                )
+                .await
+                .unwrap_err()
+                .contains("不能晚于")
+            );
+        });
     }
 
     #[test]
