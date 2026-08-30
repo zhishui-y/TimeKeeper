@@ -1,14 +1,6 @@
 <script setup lang="ts">
 import { CheckCircle2, Clock3, Coins, Gauge } from "@lucide/vue";
-import {
-  computed,
-  defineAsyncComponent,
-  nextTick,
-  onBeforeUnmount,
-  onMounted,
-  shallowRef,
-  watch,
-} from "vue";
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, shallowRef, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useAppointments } from "../../composables/useAppointments";
 import { useRevenue } from "../../composables/useRevenue";
@@ -24,6 +16,7 @@ import {
   type RevenuePeriodRange,
 } from "../../utils/revenue";
 import RevenueBreakdownPanel from "./RevenueBreakdownPanel.vue";
+import RevenuePeriodDetail from "./RevenuePeriodDetail.vue";
 import RevenueRangeNavigator from "./RevenueRangeNavigator.vue";
 import type { CompactRevenueBreakdownItem } from "../../utils/revenueBreakdown";
 
@@ -32,7 +25,6 @@ const RevenueChart = defineAsyncComponent({
   delay: 180,
   timeout: 20_000,
 });
-const RevenuePeriodDetail = defineAsyncComponent(() => import("./RevenuePeriodDetail.vue"));
 const RevenueContactDetail = defineAsyncComponent(() => import("./RevenueContactDetail.vue"));
 
 interface SelectedPeriod {
@@ -183,10 +175,7 @@ function closeContactDetail(): void {
   selectedContact.value = null;
 }
 
-async function openAppointmentEditor(appointment: Appointment): Promise<void> {
-  selectedPeriod.value = null;
-  selectedContact.value = null;
-  await nextTick();
+function openAppointmentEditor(appointment: Appointment): void {
   ui.openEditAppointment(appointment);
 }
 
@@ -407,6 +396,7 @@ watch(
       :appointments-stale="detailAppointmentsStale"
       :appointments-actions-disabled="detailAppointmentsActionsDisabled"
       :appointments-resolved-date="detailAppointmentsResolvedKey?.from ?? null"
+      :suspended="ui.appointmentDrawerOpen"
       @day-select="showDayAppointments"
       @appointment-select="openAppointmentEditor"
       @close="closePeriodDetail"
@@ -423,6 +413,7 @@ watch(
       :actions-disabled="contactAppointmentsActionsDisabled"
       :resolved-contact-names="contactAppointmentsResolvedKey?.contactNames ?? null"
       :restore-focus-element="selectedContact.trigger"
+      :suspended="ui.appointmentDrawerOpen"
       @appointment-select="openAppointmentEditor"
       @close="closeContactDetail"
     />
@@ -563,8 +554,8 @@ watch(
 .chart-data-table {
   position: absolute;
   z-index: 2;
-  right: 12px;
-  bottom: 10px;
+  top: 78px;
+  left: 12px;
   max-width: min(560px, calc(100% - 24px));
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm, 8px);

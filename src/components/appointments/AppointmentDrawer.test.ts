@@ -53,6 +53,15 @@ describe("AppointmentDrawer", () => {
     };
   }
 
+  function progressRadio(
+    wrapper: ReturnType<typeof mountDrawer>,
+    status: "scheduled" | "in_progress" | "pending_settlement" | "completed" | "cancelled",
+  ) {
+    return wrapper.get<HTMLInputElement>(
+      `input[name="appointment-progress-status"][value="${status}"]`,
+    );
+  }
+
   it("keeps the configured reminder value but leaves a new reminder disabled", () => {
     const wrapper = mountDrawer(60);
 
@@ -131,7 +140,8 @@ describe("AppointmentDrawer", () => {
     const entertainmentRadio = wrapper.get('input[type="radio"][value="entertainment"]');
     await entertainmentRadio.setValue(true);
     expect(wrapper.text()).not.toContain("账单信息");
-    expect(wrapper.get('select[aria-label="预约状态"]').findAll("option")).toHaveLength(4);
+    expect(wrapper.findAll('input[name="appointment-progress-status"]')).toHaveLength(4);
+    expect(wrapper.find('input[value="pending_settlement"]').exists()).toBe(false);
     expect(wrapper.find('select[aria-label="结算状态"]').exists()).toBe(false);
   });
 
@@ -172,9 +182,8 @@ describe("AppointmentDrawer", () => {
 
   it("requires an amount before a business appointment can be settled", async () => {
     const wrapper = mountDrawer();
-    const statusSelect = wrapper.get('select[aria-label="预约状态"]');
-    expect(statusSelect.findAll("option")).toHaveLength(5);
-    await statusSelect.setValue("completed");
+    expect(wrapper.findAll('input[name="appointment-progress-status"]')).toHaveLength(5);
+    await progressRadio(wrapper, "completed").setValue(true);
 
     await wrapper.get('button.button--primary[type="submit"]').trigger("click");
 
@@ -182,17 +191,17 @@ describe("AppointmentDrawer", () => {
     expect(wrapper.emitted("save")).toBeUndefined();
   });
 
-  it("places account before progress and keeps progress next to billing", () => {
+  it("places account in the primary column and keeps progress before billing", () => {
     const wrapper = mountDrawer();
     const accountFields = wrapper.get(".account-fields").element;
-    const progressSelect = wrapper.get('select[aria-label="预约状态"]').element;
+    const progressGroup = wrapper.get(".status-choice").element;
     const amountInput = wrapper.get('input[inputmode="decimal"]').element;
 
-    expect(wrapper.text()).toContain("账号与状态");
-    expect(accountFields.compareDocumentPosition(progressSelect)).toBe(
+    expect(wrapper.text()).toContain("状态与提醒");
+    expect(accountFields.compareDocumentPosition(progressGroup)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
-    expect(progressSelect.compareDocumentPosition(amountInput)).toBe(
+    expect(progressGroup.compareDocumentPosition(amountInput)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
   });
@@ -201,7 +210,7 @@ describe("AppointmentDrawer", () => {
     const wrapper = mountDrawer();
     await wrapper.get('input[placeholder="谁约的"]').setValue("零元预约");
     await wrapper.get('input[type="radio"][value="none"]').setValue(true);
-    await wrapper.get('select[aria-label="预约状态"]').setValue("completed");
+    await progressRadio(wrapper, "completed").setValue(true);
     await wrapper.get('input[inputmode="decimal"]').setValue("0");
     await wrapper.get('button.button--primary[type="submit"]').trigger("click");
 
@@ -235,20 +244,16 @@ describe("AppointmentDrawer", () => {
   it("offers completion and cancellation shortcuts only while editing", async () => {
     const createWrapper = mountDrawer();
     expect(createWrapper.find('button[aria-label="完成预约"]').exists()).toBe(false);
-    expect(createWrapper.find('button[aria-label="取消预约"]').exists()).toBe(false);
+    expect(createWrapper.find('button[aria-haspopup="menu"]').exists()).toBe(false);
     createWrapper.unmount();
 
     const editWrapper = mountDrawer(30, completedAppointment());
-    const actionButtons = editWrapper.findAll("button");
-    const completeButton = actionButtons.find(
-      (button) => button.attributes("aria-label") === "完成预约",
-    );
-    const cancelButton = actionButtons.find(
-      (button) => button.attributes("aria-label") === "取消预约",
-    );
-    expect(completeButton).toBeDefined();
+    expect(editWrapper.get('button[aria-label="完成预约"]').text()).toContain("标记完成");
+    await editWrapper.get('button[aria-haspopup="menu"]').trigger("click");
+    const cancelButton = editWrapper
+      .findAll('[role="menuitem"]')
+      .find((button) => button.text().trim() === "取消预约");
     expect(cancelButton).toBeDefined();
-    expect(actionButtons.find((button) => button.text().trim() === "关闭")).toBeDefined();
 
     await cancelButton?.trigger("click");
 
@@ -282,20 +287,20 @@ describe("AppointmentDrawer", () => {
     });
   });
 
-  it("uses the fixed short footer labels in the requested order", () => {
+  it("keeps copy and completion visible while using the edit save label", () => {
     const wrapper = mountDrawer(30, completedAppointment());
-    const groups = wrapper.findAll(".drawer__footer-actions");
+    const groups = wrapper.findAll(".drawer-footer__actions");
 
     expect(groups[0]!.findAll("button").map((button) => button.text().trim())).toEqual([
-      "删除",
       "复制",
-      "完成",
-      "取消",
+      "标记完成",
+      "更多操作",
     ]);
     expect(groups[1]!.findAll("button").map((button) => button.text().trim())).toEqual([
       "关闭",
-      "保存",
+      "保存修改",
     ]);
+    expect(wrapper.get(".drawer__title-row .badge").text()).toBe("待结算");
   });
 
   it("completes and saves an edited business appointment through the shortcut", async () => {
@@ -328,26 +333,32 @@ describe("AppointmentDrawer", () => {
       serviceStatus: "completed",
       settlementStatus: "settled",
     });
-    const status = wrapper.get('select[aria-label="预约状态"]');
+    const pending = progressRadio(wrapper, "pending_settlement");
+    const completed = progressRadio(wrapper, "completed");
 
-    await status.setValue("pending_settlement");
-    expect((status.element as HTMLSelectElement).value).toBe("completed");
-    await status.setValue("pending_settlement");
-    expect((status.element as HTMLSelectElement).value).toBe("pending_settlement");
+    await pending.setValue(true);
+    await wrapper.vm.$nextTick();
+    expect((pending.element as HTMLInputElement).checked).toBe(false);
+    expect((completed.element as HTMLInputElement).checked).toBe(true);
+    await pending.setValue(true);
+    await wrapper.vm.$nextTick();
+    expect((pending.element as HTMLInputElement).checked).toBe(true);
     expect(confirm).toHaveBeenCalledTimes(2);
   });
 
   it("only shows the delete action while editing and emits a delete request", async () => {
     const createWrapper = mountDrawer();
-    expect(createWrapper.find("button.button--danger").exists()).toBe(false);
+    expect(createWrapper.find('button[aria-haspopup="menu"]').exists()).toBe(false);
     createWrapper.unmount();
 
     const editWrapper = mountDrawer(30, completedAppointment());
-    const deleteButton = editWrapper.get("button.button--danger");
-    expect(deleteButton.text()).toContain("删除");
-    expect(deleteButton.attributes("aria-label")).toBe("删除预约");
+    await editWrapper.get('button[aria-haspopup="menu"]').trigger("click");
+    const deleteButton = editWrapper
+      .findAll('[role="menuitem"]')
+      .find((button) => button.text().trim() === "永久删除");
+    expect(deleteButton).toBeDefined();
 
-    await deleteButton.trigger("click");
+    await deleteButton?.trigger("click");
 
     expect(editWrapper.emitted("delete")).toHaveLength(1);
     expect(editWrapper.emitted("save")).toBeUndefined();
@@ -357,10 +368,10 @@ describe("AppointmentDrawer", () => {
     const wrapper = mountDrawer(30, completedAppointment());
     await wrapper.setProps({ deleting: true });
 
-    const deleteButton = wrapper.get("button.button--danger");
     const saveButton = wrapper.get('button.button--primary[type="submit"]');
-    expect(deleteButton.attributes("disabled")).toBeDefined();
-    expect(deleteButton.text()).toContain("删除中");
+    expect(wrapper.get('button[aria-label="复制为今日预约"]').attributes("disabled")).toBeDefined();
+    expect(wrapper.get('button[aria-label="完成预约"]').attributes("disabled")).toBeDefined();
+    expect(wrapper.get('button[aria-haspopup="menu"]').attributes("disabled")).toBeDefined();
     expect(saveButton.attributes("disabled")).toBeDefined();
   });
 

@@ -1,11 +1,6 @@
 <script setup lang="ts">
 import { BarChart, LineChart } from "echarts/charts";
-import {
-  GridComponent,
-  LegendComponent,
-  MarkPointComponent,
-  TooltipComponent,
-} from "echarts/components";
+import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
 import { use } from "echarts/core";
 import type { ECElementEvent } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
@@ -18,15 +13,7 @@ import {
 } from "../../composables/useEChartsLifecycle";
 import type { ReportGranularity, RevenuePoint } from "../../types/domain";
 
-use([
-  BarChart,
-  LineChart,
-  GridComponent,
-  LegendComponent,
-  MarkPointComponent,
-  TooltipComponent,
-  CanvasRenderer,
-]);
+use([BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
 
 const props = defineProps<{
   points: readonly RevenuePoint[];
@@ -164,12 +151,6 @@ const option = computed(() => ({
     },
     {
       type: "value",
-      name: "小时",
-      nameTextStyle: {
-        color: "#66736d",
-        fontFamily: appearance.activeAppearance.value.fontFamily,
-        fontSize: Math.max(12, appearance.activeAppearance.value.baseFontSize - 3),
-      },
       axisLabel: {
         color: "#66736d",
         fontFamily: appearance.activeAppearance.value.fontFamily,
@@ -186,20 +167,11 @@ const option = computed(() => ({
       cursor: props.drillable ? "pointer" : "default",
       barMaxWidth: 28,
       data: props.points.map((point) => point.settledMinor),
-      markPoint: activePoint.value
-        ? {
-            silent: true,
-            symbol: "circle",
-            symbolSize: 14,
-            label: { show: false },
-            data: [{ coord: [activePoint.value.period, activePoint.value.settledMinor] }],
-          }
-        : undefined,
       itemStyle: { borderRadius: [3, 3, 0, 0] },
       tooltip: { valueFormatter: (value: number) => `¥${(value / 100).toFixed(0)}` },
     },
     {
-      name: "业务工时",
+      name: "业务工时(小时)",
       type: "line",
       cursor: props.drillable ? "pointer" : "default",
       yAxisIndex: 1,
@@ -234,12 +206,16 @@ const option = computed(() => ({
       :autoresize="{ throttle: 120 }"
       @click="handleChartClick"
     />
+    <span v-if="activePoint" class="revenue-chart__keyboard-status" aria-hidden="true">
+      当前：{{ activePointLabel }}
+    </span>
     <span class="sr-only" aria-live="polite">{{ activePointLabel }}</span>
   </div>
 </template>
 
 <style scoped>
 .revenue-chart {
+  position: relative;
   width: 100%;
   height: 100%;
   min-height: 240px;
@@ -248,6 +224,32 @@ const option = computed(() => ({
 .revenue-chart__canvas {
   width: 100%;
   height: 100%;
+}
+
+.revenue-chart__keyboard-status {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  left: 12px;
+  max-width: calc(100% - 150px);
+  overflow: hidden;
+  padding: 5px 8px;
+  border: 1px solid var(--brand-border);
+  border-radius: 999px;
+  color: var(--brand-strong);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: var(--shadow-soft);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  visibility: hidden;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.revenue-chart:focus-visible .revenue-chart__keyboard-status {
+  visibility: visible;
 }
 
 .revenue-chart:focus-visible {

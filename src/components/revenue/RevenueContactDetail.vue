@@ -19,6 +19,7 @@ const props = defineProps<{
   actionsDisabled?: boolean;
   resolvedContactNames?: readonly string[] | null;
   restoreFocusElement?: HTMLElement | null;
+  suspended?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -37,7 +38,7 @@ const rangeLabel = computed(() =>
 );
 
 useModalFocus({
-  open: () => true,
+  open: () => !props.suspended,
   container: panelRef,
   close: () => emit("close"),
   restoreFocus: () => props.restoreFocusElement ?? null,
@@ -46,7 +47,7 @@ useModalFocus({
 
 <template>
   <Teleport to="body">
-    <div class="contact-detail-layer">
+    <div v-show="!suspended" class="contact-detail-layer">
       <button
         class="contact-detail-backdrop"
         type="button"

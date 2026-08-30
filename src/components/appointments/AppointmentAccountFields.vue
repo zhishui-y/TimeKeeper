@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ClipboardCopy, FileKey2, UserRoundX } from "@lucide/vue";
-import { computed } from "vue";
+import { ChevronDown, ClipboardCopy, FileKey2, UserRoundX } from "@lucide/vue";
+import { computed, shallowRef } from "vue";
 import { useRecentEmbeddedAccountPresets } from "../../composables/useRecentEmbeddedAccountPresets";
 import type {
   AccountProfile,
@@ -28,6 +28,7 @@ const selectedProfile = computed(() =>
 );
 const canCopyExistingPassword = computed(() => model.value.hasPassword);
 const embeddedPresetsEnabled = computed(() => model.value.kind === "embedded");
+const embeddedPresetsExpanded = shallowRef(false);
 const {
   items: embeddedPresets,
   loading: embeddedPresetsLoading,
@@ -190,24 +191,41 @@ function selectEmbeddedPreset(preset: EmbeddedAccountPreset): void {
       class="embedded-presets"
       aria-label="最近使用的一次性账号"
     >
-      <span class="embedded-presets__title">最近使用</span>
-      <p v-if="embeddedPresetsLoading" class="embedded-presets__state">账号加载中…</p>
-      <p v-else-if="embeddedPresetsError" class="embedded-presets__state is-error">
-        {{ embeddedPresetsError }}
-      </p>
-      <ul v-else-if="embeddedPresets.length" class="embedded-presets__list">
-        <li v-for="preset in embeddedPresets" :key="preset.sourceAppointmentId">
-          <button
-            class="embedded-preset"
-            type="button"
-            :title="embeddedPresetLabel(preset)"
-            @click="selectEmbeddedPreset(preset)"
-          >
-            {{ embeddedPresetLabel(preset) }}
-          </button>
-        </li>
-      </ul>
-      <p v-else class="embedded-presets__state">暂无使用过的一次性账号</p>
+      <button
+        class="embedded-presets__toggle"
+        type="button"
+        :aria-expanded="embeddedPresetsExpanded"
+        aria-controls="embedded-presets-panel"
+        :aria-label="embeddedPresetsExpanded ? '收起最近使用' : '展开最近使用'"
+        @click="embeddedPresetsExpanded = !embeddedPresetsExpanded"
+      >
+        <span class="embedded-presets__title">最近使用</span>
+        <ChevronDown
+          class="embedded-presets__chevron"
+          :class="{ 'is-expanded': embeddedPresetsExpanded }"
+          :size="16"
+          aria-hidden="true"
+        />
+      </button>
+      <div v-if="embeddedPresetsExpanded" id="embedded-presets-panel">
+        <p v-if="embeddedPresetsLoading" class="embedded-presets__state">账号加载中…</p>
+        <p v-else-if="embeddedPresetsError" class="embedded-presets__state is-error">
+          {{ embeddedPresetsError }}
+        </p>
+        <ul v-else-if="embeddedPresets.length" class="embedded-presets__list">
+          <li v-for="preset in embeddedPresets" :key="preset.sourceAppointmentId">
+            <button
+              class="embedded-preset"
+              type="button"
+              :title="embeddedPresetLabel(preset)"
+              @click="selectEmbeddedPreset(preset)"
+            >
+              {{ embeddedPresetLabel(preset) }}
+            </button>
+          </li>
+        </ul>
+        <p v-else class="embedded-presets__state">暂无使用过的一次性账号</p>
+      </div>
     </section>
 
     <div v-if="model.kind === 'profile'" class="profile-picker">
@@ -385,9 +403,37 @@ function selectEmbeddedPreset(preset: EmbeddedAccountPreset): void {
   font-weight: 700;
 }
 
+.embedded-presets__toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.embedded-presets__toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand) 66%, transparent);
+  outline-offset: 3px;
+}
+
+.embedded-presets__chevron {
+  flex: 0 0 auto;
+  color: var(--ink-muted);
+  transition: transform 160ms ease;
+}
+
+.embedded-presets__chevron.is-expanded {
+  transform: rotate(180deg);
+}
+
 .embedded-presets__list {
   display: grid;
-  max-height: 172px;
+  max-height: 116px;
   gap: 5px;
   margin: 0;
   overflow-y: auto;

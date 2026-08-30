@@ -87,6 +87,15 @@ describe("AppointmentAccountFields", () => {
     await flushPromises();
 
     expect(mockApi.listRecentEmbeddedAccountPresets).toHaveBeenCalledWith(10);
+    const recentToggle = wrapper.get('button[aria-label="展开最近使用"]');
+    expect(recentToggle.attributes("aria-expanded")).toBe("false");
+    expect(wrapper.find("#embedded-presets-panel").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("冰心诀-梦江南-20万-recent-login");
+
+    await recentToggle.trigger("click");
+    expect(wrapper.get('button[aria-label="收起最近使用"]').attributes("aria-expanded")).toBe(
+      "true",
+    );
     expect(wrapper.text()).toContain("冰心诀-梦江南-20万-recent-login");
     expect(wrapper.text()).toContain("职业未填-区服未填-装分未填-no-secret");
 

@@ -378,6 +378,9 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       await drawer.getByLabel("日期 *").fill(nextDate);
 
       await drawer.locator(".account-kind__item", { hasText: "一次性账号" }).click();
+      const recentToggle = drawer.getByRole("button", { name: "展开最近使用" });
+      await expect(recentToggle).toHaveAttribute("aria-expanded", "false");
+      await recentToggle.click();
       const recentAccount = drawer.getByRole("button", {
         name: "冰心诀-梦江南-20万-matrix_one_off",
       });
@@ -511,7 +514,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
         .click();
       const drawer = page.getByRole("dialog", { name: "编辑预约" });
       await drawer.getByLabel("联系人", { exact: true }).fill(editedContact);
-      await drawer.getByRole("button", { name: "保存预约" }).click();
+      await drawer.getByRole("button", { name: "保存修改" }).click();
       await expect(drawer).toBeHidden();
       await expect(appointmentRow(page, originalContact)).toHaveCount(0);
       await expect(appointmentRow(page, editedContact)).toHaveCount(1);

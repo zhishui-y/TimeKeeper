@@ -41,7 +41,7 @@ const RevenueChartStub = defineComponent({
 
 const RevenuePeriodDetailStub = defineComponent({
   name: "RevenuePeriodDetail",
-  props: ["granularity", "from", "to", "appointments"],
+  props: ["granularity", "from", "to", "appointments", "suspended"],
   emits: ["close", "daySelect", "appointmentSelect"],
   setup(props, { emit }) {
     return () =>
@@ -51,6 +51,7 @@ const RevenuePeriodDetailStub = defineComponent({
           class: "period-detail-stub",
           "data-granularity": props.granularity,
           "data-appointments": props.appointments.length,
+          "data-suspended": String(props.suspended),
         },
         [
           `${props.from}—${props.to}`,
@@ -96,7 +97,7 @@ const RevenueBreakdownPanelStub = defineComponent({
 
 const RevenueContactDetailStub = defineComponent({
   name: "RevenueContactDetail",
-  props: ["item", "from", "to", "appointments", "loading", "error", "stale"],
+  props: ["item", "from", "to", "appointments", "loading", "error", "stale", "suspended"],
   emits: ["close", "appointmentSelect"],
   setup(props, { emit }) {
     return () =>
@@ -105,6 +106,7 @@ const RevenueContactDetailStub = defineComponent({
         {
           class: "contact-detail-stub",
           "data-appointments": props.appointments.length,
+          "data-suspended": String(props.suspended),
           onClick: () => emit("appointmentSelect", dashboardAppointment),
         },
         props.item.name,
@@ -383,7 +385,7 @@ describe("RevenueDashboard", () => {
     wrapper.unmount();
   });
 
-  it("unmounts the period detail before opening the selected appointment editor", async () => {
+  it("keeps the period detail suspended while editing its selected appointment", async () => {
     mockRevenueSummaryRequests();
     vi.spyOn(mockApi, "listAppointments").mockResolvedValue([dashboardAppointment]);
     const wrapper = mountDashboard();
@@ -394,7 +396,7 @@ describe("RevenueDashboard", () => {
     await wrapper.get(".period-appointment-select").trigger("click");
     await flushPromises();
     const ui = useUiStore();
-    expect(wrapper.find(".period-detail-stub").exists()).toBe(false);
+    expect(wrapper.get(".period-detail-stub").attributes("data-suspended")).toBe("true");
     expect(ui.appointmentDrawerOpen).toBe(true);
     expect(ui.activeAppointment?.id).toBe(dashboardAppointment.id);
     wrapper.unmount();
@@ -421,7 +423,7 @@ describe("RevenueDashboard", () => {
     await wrapper.get(".contact-detail-stub").trigger("click");
     await flushPromises();
     const ui = useUiStore();
-    expect(wrapper.find(".contact-detail-stub").exists()).toBe(false);
+    expect(wrapper.get(".contact-detail-stub").attributes("data-suspended")).toBe("true");
     expect(ui.appointmentDrawerOpen).toBe(true);
     expect(ui.activeAppointment?.id).toBe(dashboardAppointment.id);
     wrapper.unmount();

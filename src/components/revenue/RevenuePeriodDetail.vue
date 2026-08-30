@@ -27,6 +27,7 @@ const props = defineProps<{
   appointmentsStale?: boolean;
   appointmentsActionsDisabled?: boolean;
   appointmentsResolvedDate?: string | null;
+  suspended?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -83,7 +84,7 @@ async function backToPeriod(): Promise<void> {
 }
 
 useModalFocus({
-  open: () => true,
+  open: () => !props.suspended,
   container: panelRef,
   close: () => emit("close"),
 });
@@ -91,7 +92,7 @@ useModalFocus({
 
 <template>
   <Teleport to="body">
-    <div class="period-detail-layer">
+    <div v-show="!suspended" class="period-detail-layer">
       <button
         class="period-detail-backdrop"
         type="button"
@@ -247,8 +248,7 @@ useModalFocus({
   inset: 0;
   width: 100%;
   border: 0;
-  background: rgba(20, 31, 27, 0.42);
-  backdrop-filter: blur(4px);
+  background: rgba(20, 31, 27, 0.48);
   cursor: default;
 }
 

@@ -10,6 +10,14 @@ interface BusinessAppointmentDraft {
   settlementStatus?: "unsettled" | "settled";
 }
 
+const progressStatusLabels = {
+  scheduled: "已预约",
+  in_progress: "进行中",
+  pending_settlement: "待结算",
+  completed: "完成",
+  cancelled: "已取消",
+} as const;
+
 async function createBusinessAppointment(
   page: Page,
   serviceDate: string,
@@ -31,7 +39,7 @@ async function createBusinessAppointment(
           ? "completed"
           : "pending_settlement"
         : draft.serviceStatus;
-    await drawer.getByLabel("预约状态").selectOption(progressStatus);
+    await drawer.getByRole("radio", { name: progressStatusLabels[progressStatus] }).check();
   }
   await drawer.getByRole("button", { name: "保存预约" }).click();
   await expect(drawer).toBeHidden();
@@ -327,6 +335,8 @@ test("收益周明细可下钻到当日并恢复键盘焦点", async ({ page }) 
 
   const canvas = page.locator(".revenue-chart canvas");
   await expect(canvas).toBeVisible();
+  const canvasElement = await canvas.elementHandle();
+  if (!canvasElement) throw new Error("收益趋势图画布节点不存在");
   const chartBox = await canvas.boundingBox();
   if (!chartBox) throw new Error("收益趋势图未生成可点击画布");
   await canvas.click({
@@ -338,6 +348,10 @@ test("收益周明细可下钻到当日并恢复键盘焦点", async ({ page }) 
 
   const detail = page.locator("aside.period-detail");
   await expect(detail).toBeVisible();
+  expect(await canvas.evaluate((element, original) => element === original, canvasElement)).toBe(
+    true,
+  );
+  expect(await detail.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await expect(detail.getByRole("heading", { name: "周收入明细" })).toBeVisible();
   expect(await detail.evaluate((element) => element.contains(document.activeElement))).toBe(true);
 
@@ -354,6 +368,10 @@ test("收益周明细可下钻到当日并恢复键盘焦点", async ({ page }) 
   await page.keyboard.press("Escape");
   await expect(detail).toBeHidden();
   await expect(page.locator(".revenue-chart")).toBeFocused();
+  const keyboardStatus = page.locator(".revenue-chart__keyboard-status");
+  await page.keyboard.press("End");
+  await expect(keyboardStatus).toBeVisible();
+  await expect(keyboardStatus).toContainText("当前：");
 });
 
 test("预约抽屉圈定键盘焦点并可用 Escape 关闭", async ({ page }) => {
@@ -549,6 +567,53 @@ test("娱乐预约不会显示账单字段", async ({ page }) => {
   await expect(page.getByRole("button", { name: "保存预约" })).toBeVisible();
 });
 
+test("预约抽屉使用双栏、状态胶囊与分层编辑操作", async ({ page }) => {
+  const today = chinaDateKey();
+  const contactName = "方案B布局验收";
+  await page.goto("/");
+  await page.getByRole("button", { name: "新建预约", exact: true }).click();
+  const createDrawer = page.getByRole("dialog", { name: "新建预约" });
+
+  await expect(createDrawer.getByRole("radio", { name: "已预约" })).toBeChecked();
+  await expect(createDrawer.getByRole("radio", { name: "待结算" })).toBeVisible();
+  const statusPills = createDrawer.locator(".status-choice__item");
+  const statusPillTops = await statusPills.evaluateAll((items) =>
+    items.map((item) => Math.round(item.getBoundingClientRect().top)),
+  );
+  expect(new Set(statusPillTops).size).toBe(1);
+  expect(
+    await createDrawer.evaluate((drawer) => ({
+      hasHorizontalOverflow: drawer.scrollWidth > drawer.clientWidth + 1,
+      columnCount: getComputedStyle(drawer.querySelector(".appointment-layout")!)
+        .gridTemplateColumns.split(" ")
+        .filter(Boolean).length,
+    })),
+  ).toEqual({ hasHorizontalOverflow: false, columnCount: 2 });
+  await createDrawer.getByRole("button", { name: "关闭", exact: true }).click();
+
+  await createBusinessAppointment(page, today, {
+    contactName,
+    startTime: "13:00",
+    endTime: "14:00",
+    amountYuan: "100",
+  });
+  const row = page.locator("article.appointment-row").filter({ hasText: contactName });
+  await row.getByRole("button", { name: "编辑预约" }).click();
+  const editDrawer = page.getByRole("dialog", { name: "编辑预约" });
+  await expect(editDrawer.getByRole("button", { name: "复制为今日预约" })).toBeVisible();
+  await expect(editDrawer.getByRole("button", { name: "完成预约" })).toBeVisible();
+  await expect(editDrawer.getByRole("button", { name: "保存修改" })).toBeVisible();
+
+  const moreActions = editDrawer.getByRole("button", { name: "更多操作" });
+  await moreActions.click();
+  await expect(editDrawer.getByRole("menu", { name: "更多预约操作" })).toBeVisible();
+  await expect(editDrawer.getByRole("menuitem", { name: "取消预约" })).toBeVisible();
+  await expect(editDrawer.getByRole("menuitem", { name: "永久删除" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(editDrawer.getByRole("menu", { name: "更多预约操作" })).toBeHidden();
+  await expect(moreActions).toBeFocused();
+});
+
 test("完整业务流程可从解锁走到收益与备份恢复", async ({ page }) => {
   test.setTimeout(60_000);
   const today = chinaDateKey();
@@ -589,8 +654,8 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
   await expect(targetRow).toContainText("已预约");
   await targetRow.getByRole("button", { name: "编辑预约" }).click();
   const progressDrawer = page.getByRole("dialog", { name: "编辑预约" });
-  await progressDrawer.getByLabel("预约状态").selectOption("in_progress");
-  await progressDrawer.getByRole("button", { name: "保存预约" }).click();
+  await progressDrawer.getByRole("radio", { name: "进行中" }).check();
+  await progressDrawer.getByRole("button", { name: "保存修改" }).click();
   await expect(progressDrawer).toBeHidden();
   await expect(targetRow).toContainText("进行中");
   await targetRow.getByRole("button", { name: "完成预约" }).click();
@@ -599,9 +664,9 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
   await targetRow.getByRole("button", { name: "填写闭环验收目标 的结算金额", exact: true }).click();
   const settlementDrawer = page.getByRole("dialog", { name: "编辑预约" });
   await expect(settlementDrawer.getByLabel("金额（元）")).toBeFocused();
-  await settlementDrawer.getByLabel("预约状态").selectOption("completed");
+  await settlementDrawer.getByRole("radio", { name: "完成" }).check();
   await settlementDrawer.getByLabel("收款方式").fill("微信");
-  await settlementDrawer.getByRole("button", { name: "保存预约" }).click();
+  await settlementDrawer.getByRole("button", { name: "保存修改" }).click();
   await expect(settlementDrawer).toBeHidden();
   await expect(page.getByRole("status")).toContainText("已完成；该预约仍与");
   await expect(targetRow).toContainText("完成");

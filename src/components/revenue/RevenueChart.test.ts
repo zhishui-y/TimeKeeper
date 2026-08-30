@@ -51,12 +51,13 @@ describe("RevenueChart", () => {
       },
     });
     const chartOption = wrapper.findComponent({ name: "VChart" }).props("option") as {
-      series: Array<{ name: string; stack?: string }>;
+      series: Array<{ name: string; stack?: string; markPoint?: unknown }>;
     };
 
     expect(chartOption.series[0].stack).toBe("revenue");
+    expect(chartOption.series[0].markPoint).toBeUndefined();
     expect(chartOption.series[1].stack).toBeUndefined();
-    expect(chartOption.series.map((series) => series.name)).toEqual(["已结收益", "业务工时"]);
+    expect(chartOption.series.map((series) => series.name)).toEqual(["已结收益", "业务工时(小时)"]);
   });
 
   it("emits the clicked point for a drillable bar", async () => {
@@ -70,7 +71,9 @@ describe("RevenueChart", () => {
       },
     });
 
-    wrapper.findComponent({ name: "VChart" }).vm.$emit("click", {
+    const chart = wrapper.findComponent({ name: "VChart" });
+    const optionBeforeClick = chart.props("option");
+    chart.vm.$emit("click", {
       componentType: "series",
       seriesType: "bar",
       dataIndex: 1,
@@ -78,6 +81,10 @@ describe("RevenueChart", () => {
     await nextTick();
 
     expect(wrapper.emitted("periodSelect")).toEqual([[points[1]]]);
+    expect(chart.props("option")).toBe(optionBeforeClick);
+    const keyboardStatus = wrapper.get(".revenue-chart__keyboard-status");
+    expect(keyboardStatus.attributes("aria-hidden")).toBe("true");
+    expect(keyboardStatus.text()).toContain("2026-08-03，已结收益 200.00 元");
   });
 
   it("focuses the chart before a pointer drill-down so detail can restore focus", async () => {
@@ -130,12 +137,19 @@ describe("RevenueChart", () => {
     });
     const chart = wrapper.get(".revenue-chart");
 
+    const keyboardStatus = wrapper.get(".revenue-chart__keyboard-status");
+    await chart.trigger("keydown", { key: "End" });
+    expect(keyboardStatus.text()).toContain("2026-08-03");
+    await chart.trigger("keydown", { key: "Home" });
+    expect(keyboardStatus.text()).toContain("2026-07-27");
     await chart.trigger("keydown", { key: "ArrowRight" });
     expect(wrapper.get('[aria-live="polite"]').text()).toContain("2026-08-03");
+    expect(keyboardStatus.text()).toContain("2026-08-03");
+    await chart.trigger("keydown", { key: "ArrowLeft" });
+    expect(keyboardStatus.text()).toContain("2026-07-27");
+    await chart.trigger("keydown", { key: "ArrowRight" });
     await chart.trigger("keydown", { key: "Enter" });
     expect(wrapper.emitted("periodSelect")).toEqual([[points[1]]]);
-    await chart.trigger("keydown", { key: "Home" });
-    expect(wrapper.get('[aria-live="polite"]').text()).toContain("2026-07-27");
   });
 
   it("emits line clicks and ignores non-series or disabled clicks", async () => {
