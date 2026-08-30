@@ -12,6 +12,7 @@ import {
   type ResizableEChartsInstance,
 } from "../../composables/useEChartsLifecycle";
 import type { ReportGranularity, RevenuePoint } from "../../types/domain";
+import { dateKeyWeekday } from "../../utils/chinaDateTime";
 
 use([BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
 
@@ -84,8 +85,15 @@ watch(
 const spansMultipleYears = computed(() => props.from.slice(0, 4) !== props.to.slice(0, 4));
 
 function formatPeriodLabel(period: string): string {
-  const label = props.granularity === "month" ? period.slice(5, 7) : period.slice(5);
-  return spansMultipleYears.value ? `${period.slice(0, 4)}\n${label}` : label;
+  const datePeriod = period.slice(0, props.granularity === "month" ? 7 : 10);
+  const label = props.granularity === "month" ? datePeriod.slice(5, 7) : datePeriod.slice(5);
+  return spansMultipleYears.value ? `${datePeriod.slice(0, 4)}\n${label}` : label;
+}
+
+function formatTooltipPeriod(period: string): string {
+  if (props.granularity !== "day") return period;
+  const weekday = dateKeyWeekday(period);
+  return weekday ? `${period} ${weekday}` : period;
 }
 
 const option = computed(() => ({
@@ -128,7 +136,7 @@ const option = computed(() => ({
   },
   xAxis: {
     type: "category",
-    data: props.points.map((point) => point.period),
+    data: props.points.map((point) => formatTooltipPeriod(point.period)),
     axisLine: { lineStyle: { color: "#d8ddd5" } },
     axisTick: { show: false },
     axisLabel: {

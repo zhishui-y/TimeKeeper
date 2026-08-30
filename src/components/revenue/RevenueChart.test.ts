@@ -4,6 +4,7 @@ import { nextTick } from "vue";
 import { mount } from "@vue/test-utils";
 import { describe, expect, it, vi } from "vitest";
 import type { RevenuePoint } from "../../types/domain";
+import { dateKeyWeekday } from "../../utils/chinaDateTime";
 import RevenueChart from "./RevenueChart.vue";
 
 vi.mock("vue-echarts", async () => {
@@ -207,8 +208,12 @@ describe("RevenueChart", () => {
         };
       };
 
-      expect(chartOption.xAxis.data).toEqual(periods);
-      expect(periods.map(chartOption.xAxis.axisLabel.formatter)).toEqual(labels);
+      const axisPeriods =
+        granularity === "day"
+          ? periods.map((period) => `${period} ${dateKeyWeekday(period)}`)
+          : periods;
+      expect(chartOption.xAxis.data).toEqual(axisPeriods);
+      expect(axisPeriods.map(chartOption.xAxis.axisLabel.formatter)).toEqual(labels);
       expect(chartOption.xAxis.axisLabel.hideOverlap).toBe(true);
       expect(chartOption.grid.bottom).toBe(from.slice(0, 4) === to.slice(0, 4) ? 36 : 50);
     },
