@@ -171,6 +171,7 @@ create/update 在同一 SQLite 事务中完成详情写入、返回 DTO 查询�
 
 - `get_dashboard_summary(date) -> DashboardSummary`
 - `get_revenue_summary(from, to, granularity) -> RevenueSummary`
+- `get_revenue_analytics_report(from, to) -> RevenueAnalyticsReport`
 - `list_revenue_contact_appointments(from, to, contactNames) -> Appointment[]`
 
 Dashboard 只统计非取消业务预约的已结金额，待结数量只包含服务已完成但未结算的业务预约。
@@ -185,6 +186,17 @@ Dashboard 只统计非取消业务预约的已结金额，待结数量只包含�
 大小写和分隔空格的 `QQ|` 前缀去除后精确合并，空后缀保留原名称；空收款渠道归入“未填写”。该规则
 只影响报表聚合，不改写预约。两组 `amountMinor` 之和都必须等于 `RevenueSummary.settledMinor`，
 零金额已结预约仍计入订单数。
+
+经营分析报表沿用收益查询的日期解析和“全部”范围规则，仅返回聚合 DTO，不返回完整预约或凭据。
+`overview`、`weeks` 与 `weekdays` 只统计非取消业务预约；已结收益与收款方式只含已结预约，待结场次
+只含已完成但未结算预约。完成工时要求服务状态为 `completed` 且起止时间完整，使用整数分钟；周和
+星期按 `serviceDate` 归属完整工时。每个自然周固定返回周一至周日七格，首尾范围外日期以
+`inRange=false` 标记；星期固定返回七项，小时固定返回 0–23 共 24 项，空范围也保留零值项。
+
+小时热力将已完成预约按其真实民用开始/结束时间与每个整点小时的重叠分钟分摊，跨天预约分别计入
+对应小时；`appointmentCount` 表示触及该小时的去重预约数。`contacts` 沿用收益联系人归一规则，
+按已结金额、预约数、名称稳定排序，同时返回已结贡献基点、总预约数、已结数、完成数、完成工时和
+平均客单价。所有金额及数量字段继续执行 JavaScript safe integer 检查。
 
 收益对象预约明细要求完整且有效的日期范围，以及至少一个去空、去重后的非空对象名。返回范围内
 非取消、业务、已结预约，并按收益汇总相同的联系人归一规则精确匹配；多对象用于“其他”合并分组。

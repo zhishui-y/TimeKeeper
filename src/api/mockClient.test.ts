@@ -488,6 +488,9 @@ describe("browser mock API", () => {
       await expect(mockApi.getRevenueSummary(date, date, "day")).rejects.toThrow(
         "报表金额合计超出安全整数范围",
       );
+      await expect(mockApi.getRevenueAnalyticsReport(date, date)).rejects.toThrow(
+        "报表金额合计超出安全整数范围",
+      );
     } finally {
       await mockApi.deleteAppointments({
         kind: "explicit",
@@ -548,6 +551,66 @@ describe("browser mock API", () => {
       expect(summary.paymentMethods.reduce((total, item) => total + item.amountMinor, 0)).toBe(
         summary.settledMinor,
       );
+    } finally {
+      await mockApi.deleteAppointments({ kind: "explicit", ids: createdIds });
+    }
+  });
+
+  it("mirrors weekly, weekday, hourly, and customer analytics in browser mode", async () => {
+    const createdIds: string[] = [];
+    try {
+      const overnight = await mockApi.createAppointment({
+        ...businessInput("2099-12-30", "23:30", "01:30", " QQ | 可乐 ", 10_000),
+        serviceStatus: "completed",
+        settlementStatus: "settled",
+        paymentMethod: "微信",
+      });
+      createdIds.push(overnight.appointment.id);
+      const pending = await mockApi.createAppointment({
+        ...businessInput("2099-12-31", "09:15", "10:45", "可乐", 5_000),
+        serviceStatus: "completed",
+      });
+      createdIds.push(pending.appointment.id);
+      const cancelled = await mockApi.createAppointment({
+        ...businessInput("2099-12-31", "18:00", "19:00", "排除对象", 8_000),
+        serviceStatus: "cancelled",
+        settlementStatus: "settled",
+      });
+      createdIds.push(cancelled.appointment.id);
+
+      const report = await mockApi.getRevenueAnalyticsReport("2099-12-30", "2099-12-31");
+      expect(report.overview).toMatchObject({
+        settledMinor: 10_000,
+        unsettledMinor: 5_000,
+        pendingCount: 1,
+        businessMinutes: 210,
+        appointmentCount: 2,
+        completedCount: 2,
+      });
+      expect(report.weeks).toHaveLength(1);
+      expect(report.weeks[0]?.days).toHaveLength(7);
+      expect(report.weeks[0]?.days.filter((day) => day.inRange)).toHaveLength(2);
+      expect(report.weekdays).toHaveLength(7);
+      expect(report.hours).toHaveLength(24);
+      expect(report.hours[23]).toMatchObject({ businessMinutes: 30, appointmentCount: 1 });
+      expect(report.hours[0]).toMatchObject({ businessMinutes: 60, appointmentCount: 1 });
+      expect(report.hours[1]).toMatchObject({ businessMinutes: 30, appointmentCount: 1 });
+      expect(report.hours[9]).toMatchObject({ businessMinutes: 45, appointmentCount: 1 });
+      expect(report.hours[10]).toMatchObject({ businessMinutes: 45, appointmentCount: 1 });
+      expect(report.contacts[0]).toMatchObject({
+        name: "可乐",
+        settledMinor: 10_000,
+        appointmentCount: 2,
+        businessMinutes: 210,
+      });
+      expect(report.paymentMethods).toEqual([
+        { name: "微信", amountMinor: 10_000, appointmentCount: 1 },
+      ]);
+
+      const empty = await mockApi.getRevenueAnalyticsReport("2099-12-29", "2099-12-29");
+      expect(empty.overview.appointmentCount).toBe(0);
+      expect(empty.weekdays).toHaveLength(7);
+      expect(empty.hours).toHaveLength(24);
     } finally {
       await mockApi.deleteAppointments({ kind: "explicit", ids: createdIds });
     }

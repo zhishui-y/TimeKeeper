@@ -461,6 +461,93 @@ pub struct RevenueSummary {
     pub points: Vec<RevenuePoint>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevenueAnalyticsOverview {
+    pub settled_minor: i64,
+    pub unsettled_minor: i64,
+    pub pending_count: i64,
+    pub business_minutes: i64,
+    pub average_hourly_minor: i64,
+    pub appointment_count: i64,
+    pub completed_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevenueAnalyticsDay {
+    pub date: String,
+    pub weekday: u8,
+    pub in_range: bool,
+    pub settled_minor: i64,
+    pub unsettled_minor: i64,
+    pub pending_count: i64,
+    pub business_minutes: i64,
+    pub appointment_count: i64,
+    pub completed_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevenueAnalyticsWeek {
+    pub from: String,
+    pub to: String,
+    pub settled_minor: i64,
+    pub unsettled_minor: i64,
+    pub pending_count: i64,
+    pub business_minutes: i64,
+    pub appointment_count: i64,
+    pub completed_count: i64,
+    pub days: Vec<RevenueAnalyticsDay>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevenueAnalyticsWeekday {
+    pub weekday: u8,
+    pub label: String,
+    pub settled_minor: i64,
+    pub unsettled_minor: i64,
+    pub pending_count: i64,
+    pub business_minutes: i64,
+    pub appointment_count: i64,
+    pub completed_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevenueAnalyticsHour {
+    pub hour: u8,
+    pub business_minutes: i64,
+    pub appointment_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevenueAnalyticsContact {
+    pub name: String,
+    pub settled_minor: i64,
+    pub revenue_share_bps: i64,
+    pub appointment_count: i64,
+    pub settled_count: i64,
+    pub completed_count: i64,
+    pub business_minutes: i64,
+    pub average_ticket_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevenueAnalyticsReport {
+    pub from: String,
+    pub to: String,
+    pub overview: RevenueAnalyticsOverview,
+    pub weeks: Vec<RevenueAnalyticsWeek>,
+    pub weekdays: Vec<RevenueAnalyticsWeekday>,
+    pub hours: Vec<RevenueAnalyticsHour>,
+    pub contacts: Vec<RevenueAnalyticsContact>,
+    pub payment_methods: Vec<RevenueBreakdownItem>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardSummary {

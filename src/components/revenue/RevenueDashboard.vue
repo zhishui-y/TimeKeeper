@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { CheckCircle2, Clock3, Coins, Gauge } from "@lucide/vue";
+import { CheckCircle2, Clock3, Coins, FileChartColumn, Gauge } from "@lucide/vue";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, shallowRef, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useAppointments } from "../../composables/useAppointments";
 import { useRevenue } from "../../composables/useRevenue";
+import { useRevenueAnalyticsReport } from "../../composables/useRevenueAnalyticsReport";
 import { useRevenueContactAppointments } from "../../composables/useRevenueContactAppointments";
 import { useRevenueRange } from "../../composables/useRevenueRange";
 import { useUiStore } from "../../stores/ui";
@@ -26,6 +27,7 @@ const RevenueChart = defineAsyncComponent({
   timeout: 20_000,
 });
 const RevenueContactDetail = defineAsyncComponent(() => import("./RevenueContactDetail.vue"));
+const RevenueReportDialog = defineAsyncComponent(() => import("./report/RevenueReportDialog.vue"));
 
 interface SelectedPeriod {
   granularity: ReportGranularity;
@@ -65,6 +67,15 @@ const {
 } = useAppointments({}, { immediate: false });
 const selectedPeriod = shallowRef<SelectedPeriod | null>(null);
 const selectedContact = shallowRef<SelectedContact | null>(null);
+const reportOpen = shallowRef(false);
+const reportTrigger = shallowRef<HTMLElement | null>(null);
+const {
+  report: analyticsReport,
+  loading: analyticsLoading,
+  error: analyticsError,
+  stale: analyticsStale,
+  load: loadAnalyticsReport,
+} = useRevenueAnalyticsReport();
 const {
   appointments: contactAppointments,
   loading: contactAppointmentsLoading,
@@ -175,6 +186,23 @@ function closeContactDetail(): void {
   selectedContact.value = null;
 }
 
+function openAnalyticsReport(): void {
+  if (!pendingNavigationReady.value || !summary.value) return;
+  reportTrigger.value =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  reportOpen.value = true;
+  void loadAnalyticsReport(summary.value.from, summary.value.to);
+}
+
+function retryAnalyticsReport(): void {
+  if (!summary.value) return;
+  void loadAnalyticsReport(summary.value.from, summary.value.to);
+}
+
+function closeAnalyticsReport(): void {
+  reportOpen.value = false;
+}
+
 function openAppointmentEditor(appointment: Appointment): void {
   ui.openEditAppointment(appointment);
 }
@@ -220,8 +248,14 @@ watch(
 );
 
 watch(
+  () => [revenueRange.requestRange.value.from, revenueRange.requestRange.value.to] as const,
+  closeAnalyticsReport,
+);
+
+watch(
   () => ui.dataRevision,
   () => {
+    closeAnalyticsReport();
     const selected = selectedContact.value;
     if (selected) {
       void loadContactAppointments(selected.from, selected.to, selected.item.memberNames);
@@ -234,6 +268,7 @@ watch(
   <div class="revenue-dashboard page-stack">
     <div class="page-toolbar revenue-toolbar">
       <RevenueRangeNavigator
+        class="revenue-range-control"
         :range-kind="revenueRange.rangeKind.value"
         :display-range="revenueRange.displayRange.value"
         :is-current-period="revenueRange.isCurrentPeriod.value"
@@ -246,6 +281,15 @@ watch(
         @update-custom-from="revenueRange.updateCustomDate('from', $event)"
         @update-custom-to="revenueRange.updateCustomDate('to', $event)"
       />
+      <button
+        class="revenue-report-button"
+        type="button"
+        :disabled="!pendingNavigationReady"
+        @click="openAnalyticsReport"
+      >
+        <FileChartColumn :size="16" aria-hidden="true" />
+        生成数据报表
+      </button>
     </div>
     <div v-if="loading" class="loading-line" />
     <div v-if="error" class="error-banner">{{ error }}</div>
@@ -417,6 +461,16 @@ watch(
       @appointment-select="openAppointmentEditor"
       @close="closeContactDetail"
     />
+    <RevenueReportDialog
+      v-if="reportOpen"
+      :report="analyticsReport"
+      :loading="analyticsLoading"
+      :error="analyticsError"
+      :stale="analyticsStale"
+      :restore-focus-element="reportTrigger"
+      @close="closeAnalyticsReport"
+      @retry="retryAnalyticsReport"
+    />
   </div>
 </template>
 
@@ -446,12 +500,53 @@ watch(
 
 .revenue-toolbar {
   min-height: 46px;
-  justify-content: flex-start;
+  justify-content: space-between;
+  gap: 12px;
   padding: 6px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg, 14px);
   background: color-mix(in srgb, var(--surface) 92%, transparent);
   box-shadow: var(--shadow-xs, 0 3px 14px rgba(31, 49, 42, 0.04));
+}
+
+.revenue-range-control {
+  flex: 1;
+}
+
+.revenue-report-button {
+  display: inline-flex;
+  height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 13px;
+  border: 1px solid color-mix(in srgb, var(--brand) 30%, var(--line));
+  border-radius: 9px;
+  color: white;
+  background: linear-gradient(145deg, var(--brand), var(--brand-strong));
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--brand) 18%, transparent);
+  font: inherit;
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    box-shadow 150ms ease,
+    transform 150ms ease,
+    opacity 150ms ease;
+}
+
+.revenue-report-button:hover:not(:disabled) {
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--brand) 27%, transparent);
+  transform: translateY(-1px);
+}
+
+.revenue-report-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.revenue-report-button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
 }
 
 .revenue-metrics {

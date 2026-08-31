@@ -47,6 +47,8 @@ const appointment: Appointment = {
   serviceStatus: "completed",
   settlementStatus: "settled",
   amountMinor: 12_000,
+  voicePlatform: "qq",
+  notes: "按日下钻备注",
   createdAt: "2026-08-01T00:00:00Z",
   updatedAt: "2026-08-01T00:00:00Z",
 };
@@ -147,6 +149,8 @@ describe("RevenuePeriodDetail", () => {
       global: { stubs: { Teleport: true } },
     });
 
+    expect(wrapper.text()).toContain("QQ");
+    expect(wrapper.text()).toContain("备注：按日下钻备注");
     await wrapper.get(".revenue-appointment").trigger("click");
     expect((wrapper.emitted("appointmentSelect")?.[0]?.[0] as Appointment).id).toBe(appointment.id);
   });

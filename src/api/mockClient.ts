@@ -11,6 +11,7 @@ import type {
   ContactPreset,
   EmbeddedAccountPreset,
   ReportGranularity,
+  RevenueAnalyticsReport,
   RevenuePoint,
   ServiceStatus,
 } from "../types/domain";
@@ -22,9 +23,11 @@ import { appointmentProgressStatus } from "../utils/appointmentProgress";
 import {
   chinaCivilNowValue,
   chinaDateKey,
+  addDateKeyDays,
   civilDateTimeValue,
   civilDurationInMinutes,
   civilTime,
+  dateKeyValue,
   endOfChinaWeek,
   startOfChinaWeek,
 } from "../utils/chinaDateTime";
@@ -354,6 +357,267 @@ function appointmentHours(item: Appointment): number {
     return 0;
   }
   return Math.max(civilDurationInMinutes(item.startsAt, item.endsAt) / 60, 0);
+}
+
+interface AnalyticsMetrics {
+  settledMinor: number;
+  unsettledMinor: number;
+  pendingCount: number;
+  businessMinutes: number;
+  appointmentCount: number;
+  completedCount: number;
+}
+
+interface RevenueScope {
+  from: string;
+  to: string;
+  appointments: Appointment[];
+}
+
+function emptyAnalyticsMetrics(): AnalyticsMetrics {
+  return {
+    settledMinor: 0,
+    unsettledMinor: 0,
+    pendingCount: 0,
+    businessMinutes: 0,
+    appointmentCount: 0,
+    completedCount: 0,
+  };
+}
+
+function addAnalyticsMetrics(target: AnalyticsMetrics, source: AnalyticsMetrics): void {
+  target.settledMinor = checkedSafeIntegerAdd(
+    target.settledMinor,
+    source.settledMinor,
+    "报表金额合计超出安全整数范围",
+  );
+  target.unsettledMinor = checkedSafeIntegerAdd(
+    target.unsettledMinor,
+    source.unsettledMinor,
+    "报表金额合计超出安全整数范围",
+  );
+  target.pendingCount = checkedSafeIntegerAdd(
+    target.pendingCount,
+    source.pendingCount,
+    "报表数量或工时超出支持范围",
+  );
+  target.businessMinutes = checkedSafeIntegerAdd(
+    target.businessMinutes,
+    source.businessMinutes,
+    "报表数量或工时超出支持范围",
+  );
+  target.appointmentCount = checkedSafeIntegerAdd(
+    target.appointmentCount,
+    source.appointmentCount,
+    "报表数量或工时超出支持范围",
+  );
+  target.completedCount = checkedSafeIntegerAdd(
+    target.completedCount,
+    source.completedCount,
+    "报表数量或工时超出支持范围",
+  );
+}
+
+function resolveRevenueScope(from: string, to: string): RevenueScope {
+  if ((!from && to) || (from && !to)) {
+    throw new Error("开始日期和结束日期必须同时填写，或同时留空查看全部记录");
+  }
+  const reportable = mockStore.appointments.filter(
+    (item) => item.mode === "business" && item.serviceStatus !== "cancelled",
+  );
+  const today = chinaDateKey();
+  const incomeDates = reportable
+    .filter(
+      (item) =>
+        item.settlementStatus === "settled" &&
+        (item.amountMinor ?? 0) > 0 &&
+        item.serviceDate <= today,
+    )
+    .map((item) => item.serviceDate)
+    .sort();
+  const resolvedFrom = from || incomeDates[0] || today;
+  const resolvedTo = to || today;
+  if (resolvedFrom > resolvedTo) throw new Error("开始日期不能晚于结束日期");
+  return {
+    from: resolvedFrom,
+    to: resolvedTo,
+    appointments: reportable.filter(
+      (item) => item.serviceDate >= resolvedFrom && item.serviceDate <= resolvedTo,
+    ),
+  };
+}
+
+function buildMockRevenueAnalyticsReport(from: string, to: string): RevenueAnalyticsReport {
+  const scope = resolveRevenueScope(from, to);
+  const daily = new Map<string, AnalyticsMetrics>();
+  for (let date = scope.from; date <= scope.to; date = addDateKeyDays(date, 1)) {
+    daily.set(date, emptyAnalyticsMetrics());
+  }
+  const overview = emptyAnalyticsMetrics();
+  const weekdays = Array.from({ length: 7 }, () => emptyAnalyticsMetrics());
+  const hourMinutes = Array.from({ length: 24 }, () => 0);
+  const hourAppointments = Array.from({ length: 24 }, () => new Set<string>());
+  const contacts = new Map<
+    string,
+    {
+      settledMinor: number;
+      appointmentCount: number;
+      settledCount: number;
+      completedCount: number;
+      businessMinutes: number;
+    }
+  >();
+  const paymentMethods = new Map<string, { amountMinor: number; appointmentCount: number }>();
+
+  for (const item of scope.appointments) {
+    const completed = item.serviceStatus === "completed";
+    const businessMinutes =
+      completed && item.startsAt && item.endsAt
+        ? Math.max(civilDurationInMinutes(item.startsAt, item.endsAt), 0)
+        : 0;
+    const metrics = emptyAnalyticsMetrics();
+    metrics.appointmentCount = 1;
+    metrics.completedCount = completed ? 1 : 0;
+    metrics.businessMinutes = businessMinutes;
+    if (item.settlementStatus === "settled") {
+      metrics.settledMinor = item.amountMinor ?? 0;
+      const name = item.paymentMethod?.trim() || "未填写";
+      const payment = paymentMethods.get(name) ?? { amountMinor: 0, appointmentCount: 0 };
+      payment.amountMinor = checkedSafeIntegerAdd(
+        payment.amountMinor,
+        metrics.settledMinor,
+        "报表金额合计超出安全整数范围",
+      );
+      payment.appointmentCount += 1;
+      paymentMethods.set(name, payment);
+    } else if (item.settlementStatus === "unsettled") {
+      metrics.unsettledMinor = item.amountMinor ?? 0;
+      metrics.pendingCount = completed ? 1 : 0;
+    }
+
+    addAnalyticsMetrics(overview, metrics);
+    addAnalyticsMetrics(daily.get(item.serviceDate) ?? emptyAnalyticsMetrics(), metrics);
+    const weekday = (new Date(dateKeyValue(item.serviceDate)).getUTCDay() + 6) % 7;
+    addAnalyticsMetrics(weekdays[weekday]!, metrics);
+
+    const contactName = revenueContactName(item.contactName);
+    const contact = contacts.get(contactName) ?? {
+      settledMinor: 0,
+      appointmentCount: 0,
+      settledCount: 0,
+      completedCount: 0,
+      businessMinutes: 0,
+    };
+    contact.appointmentCount += 1;
+    contact.businessMinutes += businessMinutes;
+    if (completed) contact.completedCount += 1;
+    if (item.settlementStatus === "settled") {
+      contact.settledMinor = checkedSafeIntegerAdd(
+        contact.settledMinor,
+        item.amountMinor ?? 0,
+        "报表金额合计超出安全整数范围",
+      );
+      contact.settledCount += 1;
+    }
+    contacts.set(contactName, contact);
+
+    if (completed && item.startsAt && item.endsAt) {
+      let cursor = civilDateTimeValue(item.startsAt);
+      const end = civilDateTimeValue(item.endsAt);
+      while (Number.isFinite(cursor) && cursor < end) {
+        const value = new Date(cursor);
+        const hour = value.getUTCHours();
+        const nextHour = Date.UTC(
+          value.getUTCFullYear(),
+          value.getUTCMonth(),
+          value.getUTCDate(),
+          hour + 1,
+        );
+        const segmentEnd = Math.min(end, nextHour);
+        const minutes = Math.floor((segmentEnd - cursor) / 60_000);
+        hourMinutes[hour] = checkedSafeIntegerAdd(
+          hourMinutes[hour]!,
+          minutes,
+          "报表数量或工时超出支持范围",
+        );
+        hourAppointments[hour]!.add(item.id);
+        cursor = segmentEnd;
+      }
+    }
+  }
+
+  const weeks: RevenueAnalyticsReport["weeks"] = [];
+  for (
+    let start = startOfChinaWeek(scope.from);
+    start <= scope.to;
+    start = addDateKeyDays(start, 7)
+  ) {
+    const total = emptyAnalyticsMetrics();
+    const days = Array.from({ length: 7 }, (_, index) => {
+      const date = addDateKeyDays(start, index);
+      const inRange = date >= scope.from && date <= scope.to;
+      const metrics = inRange
+        ? (daily.get(date) ?? emptyAnalyticsMetrics())
+        : emptyAnalyticsMetrics();
+      if (inRange) addAnalyticsMetrics(total, metrics);
+      return { date, weekday: index + 1, inRange, ...metrics };
+    });
+    weeks.push({
+      from: start,
+      to: addDateKeyDays(start, 6),
+      ...total,
+      days,
+    });
+  }
+
+  const labels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+  const averageHourlyMinor =
+    overview.businessMinutes > 0
+      ? checkedSafeIntegerAdd(
+          0,
+          Math.round((overview.settledMinor * 60) / overview.businessMinutes),
+          "报表平均时薪超出安全整数范围",
+        )
+      : 0;
+
+  return {
+    from: scope.from,
+    to: scope.to,
+    overview: { ...overview, averageHourlyMinor },
+    weeks,
+    weekdays: weekdays.map((metrics, index) => ({
+      weekday: index + 1,
+      label: labels[index]!,
+      ...metrics,
+    })),
+    hours: hourMinutes.map((businessMinutes, hour) => ({
+      hour,
+      businessMinutes,
+      appointmentCount: hourAppointments[hour]!.size,
+    })),
+    contacts: [...contacts.entries()]
+      .map(([name, value]) => ({
+        name,
+        ...value,
+        revenueShareBps:
+          overview.settledMinor > 0
+            ? Math.round((value.settledMinor * 10_000) / overview.settledMinor)
+            : 0,
+        averageTicketMinor:
+          value.settledCount > 0 ? Math.round(value.settledMinor / value.settledCount) : 0,
+      }))
+      .sort(
+        (a, b) =>
+          b.settledMinor - a.settledMinor ||
+          b.appointmentCount - a.appointmentCount ||
+          (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+      ),
+    paymentMethods: [...paymentMethods.entries()]
+      .map(([name, value]) => ({ name, ...value }))
+      .sort(
+        (a, b) => b.amountMinor - a.amountMinor || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+      ),
+  };
 }
 
 function getPasswordOrThrow(id: string): string {
@@ -992,27 +1256,10 @@ export const mockApi: ApiClient = {
     };
   },
   async getRevenueSummary(from, to, granularity) {
-    if ((!from && to) || (from && !to)) {
-      throw new Error("开始日期和结束日期必须同时填写，或同时留空查看全部记录");
-    }
-    const reportable = mockStore.appointments.filter(
-      (item) => item.mode === "business" && item.serviceStatus !== "cancelled",
-    );
-    const today = chinaDateKey();
-    const incomeDates = reportable
-      .filter(
-        (item) =>
-          item.settlementStatus === "settled" &&
-          (item.amountMinor ?? 0) > 0 &&
-          item.serviceDate <= today,
-      )
-      .map((item) => item.serviceDate)
-      .sort();
-    const resolvedFrom = from || incomeDates[0] || today;
-    const resolvedTo = to || today;
-    const scoped = reportable.filter(
-      (item) => item.serviceDate >= resolvedFrom && item.serviceDate <= resolvedTo,
-    );
+    const scope = resolveRevenueScope(from, to);
+    const resolvedFrom = scope.from;
+    const resolvedTo = scope.to;
+    const scoped = scope.appointments;
     const pointsMap = new Map<string, RevenuePoint>();
     const paymentMap = new Map<string, { amountMinor: number; appointmentCount: number }>();
     const contactMap = new Map<string, { amountMinor: number; appointmentCount: number }>();
@@ -1103,6 +1350,9 @@ export const mockApi: ApiClient = {
         ),
       points,
     };
+  },
+  async getRevenueAnalyticsReport(from, to) {
+    return structuredClone(buildMockRevenueAnalyticsReport(from, to));
   },
   async listRevenueContactAppointments(from, to, contactNames) {
     const normalizedFrom = from.trim();

@@ -20,6 +20,7 @@ import type {
   ExcelImportPreview,
   ExcelImportResult,
   ExcelImportSelection,
+  RevenueAnalyticsReport,
   RevenueSummary,
   LegacyCredentialMigrationResult,
 } from "../types/domain";
@@ -97,6 +98,8 @@ const nativeApi: ApiClient = {
   getDashboardSummary: (date) => invoke<DashboardSummary>("get_dashboard_summary", { date }),
   getRevenueSummary: (from, to, granularity) =>
     invoke<RevenueSummary>("get_revenue_summary", { from, to, granularity }),
+  getRevenueAnalyticsReport: (from, to) =>
+    invoke<RevenueAnalyticsReport>("get_revenue_analytics_report", { from, to }),
   listRevenueContactAppointments: (from, to, contactNames) =>
     invoke<Appointment[]>("list_revenue_contact_appointments", {
       from,

@@ -71,6 +71,26 @@ describe("AppointmentDrawer", () => {
     expect((wrapper.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false);
   });
 
+  it("lays out billing in three fields and keeps notes full-width below the voice row", () => {
+    const wrapper = mountDrawer();
+    const billing = wrapper.get(".form-grid--billing-fields");
+    expect(billing.findAll(".field__label").map((label) => label.text())).toEqual([
+      "金额（元）",
+      "收款方式",
+      "费率说明",
+    ]);
+    expect(billing.find('input[placeholder="支付宝/微信/QQ"]').exists()).toBe(false);
+    expect(billing.find('input[placeholder="例如：180元/小时，平台抽成20%"]').exists()).toBe(false);
+
+    const voice = wrapper.get(".form-grid--voice-fields");
+    expect(voice.findAll(".field__label").map((label) => label.text())).toEqual([
+      "语音",
+      "YY频道号码",
+      "备注",
+    ]);
+    expect(voice.findAll(".field")[2]?.classes()).toContain("form-grid__full");
+  });
+
   it("starts a blank appointment in profile mode with YY and shows the full profile label", () => {
     const account: AccountProfile = {
       id: "account-label",
@@ -112,6 +132,12 @@ describe("AppointmentDrawer", () => {
 
     await voice.setValue("qq");
     expect(wrapper.find('input[placeholder="可留空"]').exists()).toBe(false);
+    expect(
+      wrapper
+        .get(".form-grid--voice-fields")
+        .findAll(".field__label")
+        .map((label) => label.text()),
+    ).toEqual(["语音", "备注"]);
   });
 
   it("clears a one-time password when switching away from the embedded account", async () => {

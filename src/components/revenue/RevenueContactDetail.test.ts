@@ -16,6 +16,9 @@ const appointment: Appointment = {
   serviceStatus: "completed",
   settlementStatus: "settled",
   amountMinor: 12_000,
+  voicePlatform: "yy",
+  voiceChannel: "24680",
+  notes: "收益对象备注",
   createdAt: "2026-08-01T00:00:00Z",
   updatedAt: "2026-08-01T00:00:00Z",
 };
@@ -52,6 +55,8 @@ describe("RevenueContactDetail", () => {
     expect(wrapper.text()).toContain("2026年7月27日 — 2026年8月2日");
     expect(wrapper.get(".contact-detail__summary").text()).toContain("合并对象2 个");
     expect(wrapper.text()).toContain("QQ|南枝");
+    expect(wrapper.text()).toContain("YY·24680");
+    expect(wrapper.text()).toContain("备注：收益对象备注");
 
     await wrapper.get(".revenue-appointment").trigger("click");
     expect((wrapper.emitted("appointmentSelect")?.[0]?.[0] as Appointment).id).toBe(appointment.id);

@@ -18,6 +18,9 @@ const appointments: Appointment[] = [
     settlementStatus: "unsettled",
     amountMinor: 18_000,
     account: { source: "embedded", accountName: "剑胆琴心", password: null },
+    voicePlatform: "yy",
+    voiceChannel: "794676",
+    notes: "优先安排晚间时段",
     createdAt: "2026-08-01T00:00:00Z",
     updatedAt: "2026-08-01T00:00:00Z",
   },
@@ -56,6 +59,8 @@ describe("RevenueAppointmentList", () => {
     expect(wrapper.text()).toContain("小北");
     expect(wrapper.text()).toContain("¥180");
     expect(wrapper.text()).toContain("待结算");
+    expect(wrapper.text()).toContain("YY·794676");
+    expect(wrapper.text()).toContain("备注：优先安排晚间时段");
     expect(wrapper.text()).not.toContain("青禾");
 
     const row = wrapper.get(".revenue-appointment");
@@ -64,6 +69,48 @@ describe("RevenueAppointmentList", () => {
     expect((wrapper.emitted("appointmentSelect")?.[0]?.[0] as Appointment).id).toBe(
       appointments[0]?.id,
     );
+  });
+
+  it("shows fixed voice and notes lines without nesting interactive controls", () => {
+    const longNotes = "这是一条需要在狭窄信息列中省略但通过标题保留完整内容的长备注";
+    const target = appointments[0]!;
+    const voiceAppointments: Appointment[] = [
+      {
+        ...target,
+        id: "yy-channel",
+        voicePlatform: "yy",
+        voiceChannel: "123456",
+        notes: longNotes,
+      },
+      { ...target, id: "yy-empty", voicePlatform: "yy", voiceChannel: null, notes: null },
+      { ...target, id: "qq", voicePlatform: "qq", voiceChannel: null, notes: "QQ备注" },
+      {
+        ...target,
+        id: "no-voice",
+        voicePlatform: null,
+        voiceChannel: null,
+        notes: null,
+      },
+    ];
+    const wrapper = mount(RevenueAppointmentList, {
+      props: { appointments: voiceAppointments, loading: false, error: null, showDate: true },
+    });
+    const rows = wrapper.findAll(".revenue-appointment");
+
+    expect(rows.map((row) => row.get(".revenue-appointment__voice").text())).toEqual([
+      "YY·123456",
+      "YY",
+      "QQ",
+      "—",
+    ]);
+    expect(rows.map((row) => row.get(".revenue-appointment__notes").text())).toEqual([
+      `备注：${longNotes}`,
+      "备注：—",
+      "备注：QQ备注",
+      "备注：—",
+    ]);
+    expect(rows[0]?.get(".revenue-appointment__notes").attributes("title")).toBe(longNotes);
+    for (const row of rows) expect(row.element.querySelector("button")).toBeNull();
   });
 
   it("disables selection while loading, errored, stale, or explicitly disabled", async () => {

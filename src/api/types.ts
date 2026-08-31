@@ -27,6 +27,7 @@ import type {
   ExcelImportResult,
   ExcelImportSelection,
   ReportGranularity,
+  RevenueAnalyticsReport,
   RevenueSummary,
   ServiceStatus,
   LegacyCredentialMigrationResult,
@@ -95,6 +96,7 @@ export interface ApiClient {
     to: string,
     granularity: ReportGranularity,
   ): Promise<RevenueSummary>;
+  getRevenueAnalyticsReport(from: string, to: string): Promise<RevenueAnalyticsReport>;
   listRevenueContactAppointments(
     from: string,
     to: string,

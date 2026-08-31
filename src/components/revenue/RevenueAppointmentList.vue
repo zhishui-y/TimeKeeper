@@ -38,6 +38,14 @@ function selectAppointment(appointment: DeepReadonly<Appointment>): void {
   if (props.actionsDisabled || props.loading || props.error) return;
   emit("appointmentSelect", toRaw(appointment) as Appointment);
 }
+
+function voiceLabel(appointment: DeepReadonly<Appointment>): string {
+  if (appointment.voicePlatform === "yy") {
+    const channel = appointment.voiceChannel?.trim();
+    return channel ? `YY·${channel}` : "YY";
+  }
+  return appointment.voicePlatform === "qq" ? "QQ" : "—";
+}
 </script>
 
 <template>
@@ -72,6 +80,15 @@ function selectAppointment(appointment: DeepReadonly<Appointment>): void {
           <strong>{{ appointment.contactName }}</strong>
           <span>{{ appointment.content || "未填写预约内容" }}</span>
           <small>{{ appointment.account?.accountName || "未使用账号" }}</small>
+        </span>
+        <span class="revenue-appointment__metadata">
+          <span class="revenue-appointment__voice" :title="voiceLabel(appointment)">
+            {{ voiceLabel(appointment) }}
+          </span>
+          <span class="revenue-appointment__notes" :title="appointment.notes || undefined">
+            <span>备注：</span>
+            <span>{{ appointment.notes || "—" }}</span>
+          </span>
         </span>
         <span class="revenue-appointment__status">
           <span class="revenue-appointment__mode">{{ modeLabels[appointment.mode] }}</span>
@@ -129,7 +146,7 @@ function selectAppointment(appointment: DeepReadonly<Appointment>): void {
   display: grid;
   width: 100%;
   min-height: 82px;
-  grid-template-columns: 96px minmax(150px, 1fr) 128px 112px;
+  grid-template-columns: 96px minmax(120px, 1fr) 126px 128px 112px;
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
@@ -144,7 +161,7 @@ function selectAppointment(appointment: DeepReadonly<Appointment>): void {
 }
 
 .revenue-appointments--dated .revenue-appointment {
-  grid-template-columns: 126px minmax(150px, 1fr) 116px 90px;
+  grid-template-columns: 126px minmax(120px, 1fr) 126px 116px 90px;
 }
 
 .revenue-appointment:hover:not(:disabled) {
@@ -168,6 +185,7 @@ function selectAppointment(appointment: DeepReadonly<Appointment>): void {
 
 .revenue-appointment__time,
 .revenue-appointment__main,
+.revenue-appointment__metadata,
 .revenue-appointment__status,
 .revenue-appointment__billing {
   display: flex;
@@ -188,6 +206,33 @@ function selectAppointment(appointment: DeepReadonly<Appointment>): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.revenue-appointment__metadata {
+  color: var(--ink-muted);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+}
+
+.revenue-appointment__voice,
+.revenue-appointment__notes,
+.revenue-appointment__notes > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.revenue-appointment__voice {
+  color: var(--brand-strong);
+  font-weight: 700;
+}
+
+.revenue-appointment__notes {
+  display: flex;
+}
+
+.revenue-appointment__notes > span:first-child {
+  flex: 0 0 auto;
 }
 
 .revenue-appointment__main > strong {
@@ -238,7 +283,7 @@ function selectAppointment(appointment: DeepReadonly<Appointment>): void {
 @media (max-width: 680px) {
   .revenue-appointment,
   .revenue-appointments--dated .revenue-appointment {
-    grid-template-columns: 112px minmax(120px, 1fr) 100px;
+    grid-template-columns: 112px minmax(120px, 1fr) 116px 100px;
   }
 
   .revenue-appointment__billing {

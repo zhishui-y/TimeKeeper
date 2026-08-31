@@ -206,6 +206,79 @@ export interface RevenueSummary {
   points: RevenuePoint[];
 }
 
+export interface RevenueAnalyticsOverview {
+  settledMinor: number;
+  unsettledMinor: number;
+  pendingCount: number;
+  businessMinutes: number;
+  averageHourlyMinor: number;
+  appointmentCount: number;
+  completedCount: number;
+}
+
+export interface RevenueAnalyticsDay {
+  date: string;
+  weekday: number;
+  inRange: boolean;
+  settledMinor: number;
+  unsettledMinor: number;
+  pendingCount: number;
+  businessMinutes: number;
+  appointmentCount: number;
+  completedCount: number;
+}
+
+export interface RevenueAnalyticsWeek {
+  from: string;
+  to: string;
+  settledMinor: number;
+  unsettledMinor: number;
+  pendingCount: number;
+  businessMinutes: number;
+  appointmentCount: number;
+  completedCount: number;
+  days: RevenueAnalyticsDay[];
+}
+
+export interface RevenueAnalyticsWeekday {
+  weekday: number;
+  label: string;
+  settledMinor: number;
+  unsettledMinor: number;
+  pendingCount: number;
+  businessMinutes: number;
+  appointmentCount: number;
+  completedCount: number;
+}
+
+export interface RevenueAnalyticsHour {
+  hour: number;
+  businessMinutes: number;
+  appointmentCount: number;
+}
+
+export interface RevenueAnalyticsContact {
+  name: string;
+  settledMinor: number;
+  revenueShareBps: number;
+  appointmentCount: number;
+  settledCount: number;
+  completedCount: number;
+  businessMinutes: number;
+  averageTicketMinor: number;
+}
+
+export interface RevenueAnalyticsReport {
+  from: string;
+  to: string;
+  overview: RevenueAnalyticsOverview;
+  weeks: RevenueAnalyticsWeek[];
+  weekdays: RevenueAnalyticsWeekday[];
+  hours: RevenueAnalyticsHour[];
+  contacts: RevenueAnalyticsContact[];
+  paymentMethods: RevenueBreakdownItem[];
+}
+
 export interface DashboardSummary {
   todaySettledMinor: number;
   weekSettledMinor: number;

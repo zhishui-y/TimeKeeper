@@ -6,7 +6,12 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockApi } from "../../api/mockClient";
 import { useUiStore } from "../../stores/ui";
-import type { Appointment, ReportGranularity, RevenueSummary } from "../../types/domain";
+import type {
+  Appointment,
+  ReportGranularity,
+  RevenueAnalyticsReport,
+  RevenueSummary,
+} from "../../types/domain";
 import RevenueDashboard from "./RevenueDashboard.vue";
 
 const { routerPush } = vi.hoisted(() => ({ routerPush: vi.fn() }));
@@ -114,6 +119,25 @@ const RevenueContactDetailStub = defineComponent({
   },
 });
 
+const RevenueReportDialogStub = defineComponent({
+  name: "RevenueReportDialog",
+  props: ["report", "loading", "error", "stale", "restoreFocusElement"],
+  emits: ["close", "retry"],
+  setup(props, { emit }) {
+    return () =>
+      h(
+        "button",
+        {
+          class: "analytics-report-stub",
+          "data-from": props.report?.from ?? "",
+          "data-loading": String(props.loading),
+          onClick: () => emit("close"),
+        },
+        "经营数据报表",
+      );
+  },
+});
+
 const dashboardAppointment: Appointment = {
   id: "dashboard-appointment",
   serviceDate: "2026-07-27",
@@ -152,6 +176,27 @@ function revenueSummary(from: string, to: string, granularity: ReportGranularity
   };
 }
 
+function analyticsReport(from: string, to: string): RevenueAnalyticsReport {
+  return {
+    from,
+    to,
+    overview: {
+      settledMinor: 20_000,
+      unsettledMinor: 8_000,
+      pendingCount: 2,
+      businessMinutes: 240,
+      averageHourlyMinor: 5_000,
+      appointmentCount: 4,
+      completedCount: 3,
+    },
+    weeks: [],
+    weekdays: [],
+    hours: [],
+    contacts: [],
+    paymentMethods: [],
+  };
+}
+
 function mockRevenueSummaryRequests(allRange = { from: "2024-03-02", to: "2026-08-01" }) {
   return vi
     .spyOn(mockApi, "getRevenueSummary")
@@ -171,6 +216,7 @@ function mountDashboard() {
         RevenuePeriodDetail: RevenuePeriodDetailStub,
         RevenueBreakdownPanel: RevenueBreakdownPanelStub,
         RevenueContactDetail: RevenueContactDetailStub,
+        RevenueReportDialog: RevenueReportDialogStub,
       },
     },
   });
@@ -287,6 +333,7 @@ describe("RevenueDashboard", () => {
     expect(
       wrapper.get('button[aria-label="查看当前统计范围内的待结算预约"]').attributes("disabled"),
     ).toBeDefined();
+    expect(wrapper.get(".revenue-report-button").attributes("disabled")).toBeDefined();
 
     await toInput.setValue("2026-08-12");
     await flushPromises();
@@ -355,6 +402,41 @@ describe("RevenueDashboard", () => {
         progressStatus: "pending_settlement",
       },
     });
+
+    wrapper.unmount();
+  });
+
+  it("generates the report from the resolved all-records range and closes it on range change", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 1, 12, 0, 0));
+    const allRange = { from: "2024-03-02", to: "2026-08-01" };
+    mockRevenueSummaryRequests(allRange);
+    const getRevenueAnalyticsReport = vi
+      .spyOn(mockApi, "getRevenueAnalyticsReport")
+      .mockImplementation(async (from, to) => analyticsReport(from, to));
+    const wrapper = mountDashboard();
+    await flushPromises();
+
+    const toolbarButtons = wrapper.findAll(".revenue-toolbar button");
+    expect(toolbarButtons[toolbarButtons.length - 1]?.text()).toContain("生成数据报表");
+    const allButton = toolbarButtons.find((button) => button.text() === "全部");
+    if (!allButton) throw new Error("未找到全部统计范围按钮");
+    await allButton.trigger("click");
+    await flushPromises();
+
+    const reportButton = wrapper.get(".revenue-report-button");
+    expect(reportButton.attributes("disabled")).toBeUndefined();
+    await reportButton.trigger("click");
+    await flushPromises();
+
+    expect(getRevenueAnalyticsReport).toHaveBeenCalledWith(allRange.from, allRange.to);
+    expect(wrapper.get(".analytics-report-stub").attributes("data-from")).toBe(allRange.from);
+
+    const monthButton = toolbarButtons.find((button) => button.text() === "月");
+    if (!monthButton) throw new Error("未找到月统计范围按钮");
+    await monthButton.trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".analytics-report-stub").exists()).toBe(false);
 
     wrapper.unmount();
   });

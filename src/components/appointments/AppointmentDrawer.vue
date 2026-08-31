@@ -349,7 +349,7 @@ useModalFocus({
 
                 <section v-if="draft.mode === 'business'" class="form-card form-card--billing">
                   <h3>账单信息</h3>
-                  <div class="form-stack">
+                  <div class="form-grid form-grid--billing-fields">
                     <label class="field">
                       <span class="field__label">金额（元）</span>
                       <input
@@ -364,12 +364,7 @@ useModalFocus({
                     </label>
                     <label class="field">
                       <span class="field__label">收款方式</span>
-                      <input
-                        v-model="draft.paymentMethod"
-                        class="input"
-                        list="payment-methods"
-                        placeholder="支付宝/微信/QQ"
-                      />
+                      <input v-model="draft.paymentMethod" class="input" list="payment-methods" />
                       <datalist id="payment-methods">
                         <option value="支付宝" />
                         <option value="微信" />
@@ -378,18 +373,14 @@ useModalFocus({
                     </label>
                     <label class="field">
                       <span class="field__label">费率说明</span>
-                      <input
-                        v-model="draft.rateNote"
-                        class="input"
-                        placeholder="例如：180元/小时，平台抽成20%"
-                      />
+                      <input v-model="draft.rateNote" class="input" />
                     </label>
                   </div>
                 </section>
 
                 <section class="form-card">
                   <h3>语音与备注</h3>
-                  <div class="form-stack">
+                  <div class="form-grid form-grid--voice-fields">
                     <label class="field">
                       <span class="field__label">语音</span>
                       <select v-model="draft.voicePlatform" class="select" aria-label="语音平台">
@@ -409,7 +400,7 @@ useModalFocus({
                         @input="updateVoiceChannel(($event.target as HTMLInputElement).value)"
                       />
                     </label>
-                    <label class="field">
+                    <label class="field form-grid__full">
                       <span class="field__label">备注</span>
                       <textarea
                         v-model="draft.notes"
@@ -631,6 +622,18 @@ useModalFocus({
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.form-grid--billing-fields {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.form-grid--voice-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-grid__full {
+  grid-column: 1 / -1;
+}
+
 .form-grid__date {
   grid-column: 1 / -1;
   width: min(100%, 220px);
@@ -759,7 +762,9 @@ useModalFocus({
   }
 
   .mode-switch,
-  .form-grid--time {
+  .form-grid--time,
+  .form-grid--billing-fields,
+  .form-grid--voice-fields {
     grid-template-columns: 1fr;
   }
 
