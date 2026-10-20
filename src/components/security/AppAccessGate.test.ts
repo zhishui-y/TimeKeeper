@@ -3,6 +3,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mockApi } from "../../api/mockClient";
 import { useAppAccessStore } from "../../stores/appAccess";
 import AppAccessGate from "./AppAccessGate.vue";
 
@@ -10,6 +11,52 @@ describe("AppAccessGate", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.restoreAllMocks();
+  });
+
+  it("keeps the unlock error while clearing and refocusing the password for a retry", async () => {
+    const store = useAppAccessStore();
+    store.ready = true;
+    store.status = {
+      initialized: true,
+      unlocked: false,
+      legacyMigrationPendingCount: 0,
+      recoveryQuestion: "常用角色？",
+      dataRepairIssueCount: 0,
+      dataRepairIssues: [],
+    };
+    let rejectUnlock!: (cause: Error) => void;
+    const unlock = vi
+      .spyOn(mockApi, "unlockAppAccess")
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectUnlock = reject;
+          }),
+      )
+      .mockResolvedValueOnce({ ...store.status, unlocked: true });
+    const wrapper = mount(AppAccessGate, { attachTo: document.body });
+    const input = wrapper.get<HTMLInputElement>('input[aria-label="入口密码"]');
+
+    await input.setValue("incorrect-password");
+    await wrapper.get("form").trigger("submit");
+    expect(input.element.disabled).toBe(true);
+    await flushPromises();
+    rejectUnlock(new Error("入口密码错误"));
+    await flushPromises();
+
+    expect(wrapper.get('[role="alert"]').text()).toBe("入口密码错误");
+    expect(input.element.value).toBe("");
+    expect(input.element.disabled).toBe(false);
+    expect(document.activeElement).toBe(input.element);
+
+    await input.setValue("correct-password");
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(unlock).toHaveBeenCalledTimes(2);
+    expect(store.unlocked).toBe(true);
+    expect(input.element.value).toBe("");
+    wrapper.unmount();
   });
 
   it("validates both new password entries and the explicit reset confirmation", async () => {

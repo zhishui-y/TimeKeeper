@@ -115,7 +115,12 @@ watch(items, () => {
         >
           <span>
             <strong>{{ preset.contactName }}</strong>
-            <small>{{ preset.content || "未填写预约内容" }}</small>
+            <small :title="preset.notes?.trim() || undefined">
+              {{
+                (preset.content || "未填写预约内容") +
+                (preset.notes?.trim() ? ` | ${preset.notes.trim()}` : "")
+              }}
+            </small>
           </span>
           <span class="contact-preset__meta">
             <Clock3 :size="12" />

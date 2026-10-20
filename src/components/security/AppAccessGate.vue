@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { KeyRound, LockKeyhole, ShieldCheck, TriangleAlert } from "@lucide/vue";
-import { computed, shallowRef, watch } from "vue";
+import { computed, nextTick, shallowRef, watch } from "vue";
 import { useAppAccessStore } from "../../stores/appAccess";
 import { useUiStore } from "../../stores/ui";
 import AppBrandIcon from "../common/AppBrandIcon.vue";
@@ -19,6 +19,7 @@ const access = useAppAccessStore();
 const ui = useUiStore();
 const mode = shallowRef<GateMode>("access");
 const password = shallowRef("");
+const passwordInput = shallowRef<HTMLInputElement | null>(null);
 const confirmation = shallowRef("");
 const resetConfirmationText = shallowRef("");
 const recoveryQuestion = shallowRef("");
@@ -234,7 +235,13 @@ async function submit(): Promise<void> {
     }
     return;
   }
-  if (await access.unlock(password.value)) resetForm();
+  if (await access.unlock(password.value)) {
+    resetForm();
+  } else {
+    password.value = "";
+    await nextTick();
+    passwordInput.value?.focus();
+  }
 }
 
 watch(
@@ -278,6 +285,7 @@ watch(
             <div class="access-gate__input">
               <KeyRound :size="16" />
               <input
+                ref="passwordInput"
                 v-model="password"
                 :aria-label="
                   isLegacyUpgrade && mode === 'access'

@@ -33,6 +33,24 @@ describe("AppointmentContactFields", () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    ["优先打周常", "赛季冲分 | 优先打周常"],
+    ["  优先打周常  ", "赛季冲分 | 优先打周常"],
+    [null, "赛季冲分"],
+    ["", "赛季冲分"],
+    ["   ", "赛季冲分"],
+  ])("shows content and optional notes in the second line (%s)", async (notes, expected) => {
+    vi.useFakeTimers();
+    vi.spyOn(mockApi, "listContactPresets").mockResolvedValue([{ ...preset, notes }]);
+    const wrapper = mount(AppointmentContactFields, { props: { modelValue: "南" } });
+    await wrapper.get('input[aria-label="联系人"]').trigger("focus");
+    await vi.advanceTimersByTimeAsync(200);
+    await flushPromises();
+
+    expect(wrapper.get('[role="option"] > span:first-child > small').text()).toBe(expected);
+    wrapper.unmount();
+  });
+
   it("debounces contact search and applies a template only after explicit selection", async () => {
     vi.useFakeTimers();
     const listContactPresets = vi.spyOn(mockApi, "listContactPresets").mockResolvedValue([preset]);
