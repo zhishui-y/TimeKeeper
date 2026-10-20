@@ -54,6 +54,8 @@ export function appointmentToInput(appointment: Appointment): AppointmentInput {
     reminderMinutes: appointment.reminderMinutes,
     voicePlatform: appointment.voicePlatform,
     voiceChannel: appointment.voiceChannel,
+    teammate1: appointment.teammate1,
+    teammate2: appointment.teammate2,
     notes: appointment.notes,
   };
 }

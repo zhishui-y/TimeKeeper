@@ -109,6 +109,38 @@ mod tests {
     }
 
     #[test]
+    fn teammate_migration_preserves_existing_appointments() {
+        run_async(async {
+            let mut connection = sqlx::SqliteConnection::connect("sqlite::memory:")
+                .await
+                .unwrap();
+            let legacy = Migrator {
+                migrations: std::borrow::Cow::Owned(
+                    MIGRATOR
+                        .iter()
+                        .filter(|migration| migration.version <= 10)
+                        .cloned()
+                        .collect(),
+                ),
+                ..Migrator::DEFAULT
+            };
+            legacy.run(&mut connection).await.unwrap();
+            sqlx::query("INSERT INTO appointments (id, service_date, contact_name, mode, service_status, settlement_status, notes, created_at, updated_at) VALUES ('legacy', '2026-10-20', 'contact', 'entertainment', 'scheduled', 'not_applicable', 'original notes', '2026-10-20T00:00:00Z', '2026-10-20T00:00:00Z')")
+                .execute(&mut connection).await.unwrap();
+            MIGRATOR.run(&mut connection).await.unwrap();
+            let row = sqlx::query(
+                "SELECT notes, teammate1, teammate2 FROM appointments WHERE id = 'legacy'",
+            )
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+            assert_eq!(row.get::<String, _>("notes"), "original notes");
+            assert_eq!(row.get::<Option<String>, _>("teammate1"), None);
+            assert_eq!(row.get::<Option<String>, _>("teammate2"), None);
+        });
+    }
+
+    #[test]
     fn runs_initial_migration() {
         run_async(async {
             let database = Database::in_memory().await.unwrap();
@@ -147,6 +179,8 @@ mod tests {
                 "account_character_name",
                 "voice_platform",
                 "voice_channel",
+                "teammate1",
+                "teammate2",
             ] {
                 assert!(appointment_columns.iter().any(|name| name == expected));
             }

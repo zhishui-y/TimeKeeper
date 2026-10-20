@@ -203,6 +203,8 @@ function toAppointment(input: AppointmentInput, existing?: Appointment): Appoint
     voicePlatform: input.voicePlatform ?? null,
     voiceChannel: input.voicePlatform === "yy" ? input.voiceChannel?.trim() || null : null,
     notes: input.notes?.trim() || null,
+    teammate1: input.teammate1?.trim() || null,
+    teammate2: input.teammate2?.trim() || null,
     importFingerprint: existing?.importFingerprint ?? null,
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
@@ -801,6 +803,8 @@ export const mockApi: ApiClient = {
       reminderMinutes: source.reminderMinutes,
       voicePlatform: source.voicePlatform,
       voiceChannel: source.voiceChannel,
+      teammate1: source.teammate1,
+      teammate2: source.teammate2,
       notes: source.notes,
     });
   },
@@ -840,6 +844,8 @@ export const mockApi: ApiClient = {
         notes: item.notes,
         voicePlatform: item.voicePlatform,
         voiceChannel: item.voiceChannel,
+        teammate1: item.teammate1,
+        teammate2: item.teammate2,
       });
       if (result.length >= safeLimit) break;
     }

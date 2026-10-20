@@ -249,7 +249,7 @@ function selectEmbeddedPreset(preset: EmbeddedAccountPreset): void {
     </div>
 
     <div v-if="model.kind === 'embedded'" class="embedded-account">
-      <div class="embedded-account__grid">
+      <div class="embedded-account__grid embedded-account__grid--details">
         <label class="field">
           <span class="field__label">职业</span>
           <input
@@ -277,6 +277,8 @@ function selectEmbeddedPreset(preset: EmbeddedAccountPreset): void {
             @input="updateDetail('server', ($event.target as HTMLInputElement).value)"
           />
         </label>
+      </div>
+      <div class="embedded-account__grid">
         <label class="field">
           <span class="field__label">账号 *</span>
           <input
@@ -287,43 +289,42 @@ function selectEmbeddedPreset(preset: EmbeddedAccountPreset): void {
             @input="updateDetail('accountName', ($event.target as HTMLInputElement).value)"
           />
         </label>
+        <div v-if="model.credentialKind === 'keep'" class="credential-note">
+          <span>
+            {{
+              model.hasPassword ? "保留这条预约已有的密码" : "这条预约当前没有密码，保存时保持不变"
+            }}
+          </span>
+          <button
+            class="button button--compact button--ghost"
+            type="button"
+            @click="chooseNewPassword"
+          >
+            {{ model.hasPassword ? "更换密码" : "补充密码" }}
+          </button>
+        </div>
+        <div v-else-if="model.credentialKind === 'copyFromAppointment'" class="credential-note">
+          <span>保存时沿用所选历史预约的密码</span>
+          <button
+            class="button button--compact button--ghost"
+            type="button"
+            @click="chooseNewPassword"
+          >
+            改填密码
+          </button>
+        </div>
+        <label v-else class="field">
+          <span class="field__label">密码 *</span>
+          <input
+            class="input"
+            type="password"
+            :value="model.password"
+            autocomplete="new-password"
+            placeholder="仅保存到本条预约，不跟随账号档案更新"
+            @input="replacePassword(($event.target as HTMLInputElement).value)"
+          />
+        </label>
       </div>
-
-      <div v-if="model.credentialKind === 'keep'" class="credential-note">
-        <span>
-          {{
-            model.hasPassword ? "保留这条预约已有的密码" : "这条预约当前没有密码，保存时保持不变"
-          }}
-        </span>
-        <button
-          class="button button--compact button--ghost"
-          type="button"
-          @click="chooseNewPassword"
-        >
-          {{ model.hasPassword ? "更换密码" : "补充密码" }}
-        </button>
-      </div>
-      <div v-else-if="model.credentialKind === 'copyFromAppointment'" class="credential-note">
-        <span>保存时沿用所选历史预约的密码</span>
-        <button
-          class="button button--compact button--ghost"
-          type="button"
-          @click="chooseNewPassword"
-        >
-          改填密码
-        </button>
-      </div>
-      <label v-else class="field">
-        <span class="field__label">密码 *</span>
-        <input
-          class="input"
-          type="password"
-          :value="model.password"
-          autocomplete="new-password"
-          placeholder="仅保存到本条预约，不跟随账号档案更新"
-          @input="replacePassword(($event.target as HTMLInputElement).value)"
-        />
-      </label>
 
       <button
         v-if="appointmentId"
@@ -496,6 +497,10 @@ function selectEmbeddedPreset(preset: EmbeddedAccountPreset): void {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.embedded-account__grid--details {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .credential-note {

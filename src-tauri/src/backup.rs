@@ -2289,7 +2289,8 @@ async fn validate_database_rows(connection: &mut SqliteConnection) -> Result<(),
     }
 
     let mut appointment_rows = sqlx::query(
-        "SELECT appointments.*, NULL AS account_password FROM appointments ORDER BY id",
+        "SELECT appointments.*, NULL AS account_password, NULL AS teammate1, NULL AS teammate2
+         FROM appointments ORDER BY id",
     )
     .fetch(&mut *connection);
     while let Some(row) = appointment_rows
@@ -2938,6 +2939,8 @@ mod tests {
             account: None,
             voice_platform: None,
             voice_channel: None,
+            teammate1: None,
+            teammate2: None,
             rate_note: Some("测试计费".into()),
             payment_method: None,
             amount_minor: Some(amount_minor),
@@ -3053,6 +3056,18 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let database = dir.join("timekeeper.db");
         create_timekeeper_database(&database);
+        let teammate_appointment_id = runtime().block_on(async {
+            let db = Database::initialize(&database).await.unwrap();
+            let mut input = business_input("2026-08-03", "18:00", "19:00", 8000);
+            input.teammate1 = Some("teammate-a".into());
+            input.teammate2 = Some("teammate-b".into());
+            let appointment = create_appointment_impl(&db, input)
+                .await
+                .unwrap()
+                .appointment;
+            db.pool().close().await;
+            appointment.id
+        });
         let original_settings = serde_json::to_vec_pretty(&AppSettings::default()).unwrap();
         fs::write(dir.join(SETTINGS_ARCHIVE_NAME), &original_settings).unwrap();
         create_vault_files(&dir);
@@ -3072,6 +3087,15 @@ mod tests {
             .block_on(validate_staged_contents(verify_dir.clone(), manifest))
             .unwrap();
         fs::remove_dir_all(verify_dir).unwrap();
+        runtime().block_on(async {
+            let db = Database::initialize(&database).await.unwrap();
+            sqlx::query("UPDATE appointments SET teammate1 = NULL, teammate2 = NULL WHERE id = ?")
+                .bind(&teammate_appointment_id)
+                .execute(db.pool())
+                .await
+                .unwrap();
+            db.pool().close().await;
+        });
         let changed_settings = AppSettings {
             default_reminder_minutes: 45,
             ..AppSettings::default()
@@ -3085,11 +3109,20 @@ mod tests {
             .block_on(state.stage_restore(Path::new(&backup.path)))
             .unwrap();
         assert!(state.apply_pending_restore().unwrap());
+        runtime().block_on(async {
+            let db = Database::initialize(&database).await.unwrap();
+            let appointment = get_appointment_impl(&db, &teammate_appointment_id)
+                .await
+                .unwrap();
+            assert_eq!(appointment.teammate1.as_deref(), Some("teammate-a"));
+            assert_eq!(appointment.teammate2.as_deref(), Some("teammate-b"));
+            db.pool().close().await;
+        });
         assert_eq!(
             fs::read(dir.join(SETTINGS_ARCHIVE_NAME)).unwrap(),
             original_settings
         );
-        fs::remove_dir_all(dir).unwrap();
+        remove_test_dir_after_sqlite_shutdown(dir);
     }
 
     #[test]
@@ -3278,6 +3311,13 @@ mod tests {
         let v1_database = source_dir.join("database.sqlite3");
         create_v1_database(&v1_database);
         insert_v1_profile(&v1_database, "legacy-profile");
+        runtime().block_on(async {
+            let options = SqliteConnectOptions::new().filename(&v1_database);
+            let mut connection = SqliteConnection::connect_with(&options).await.unwrap();
+            sqlx::query("INSERT INTO appointments (id, service_date, contact_name, mode, service_status, settlement_status, notes, created_at, updated_at) VALUES ('legacy-appointment', '2026-10-20', 'legacy contact', 'entertainment', 'scheduled', 'not_applicable', 'legacy notes', '2026-10-20T00:00:00Z', '2026-10-20T00:00:00Z')")
+                .execute(&mut connection).await.unwrap();
+            connection.close().await.unwrap();
+        });
         let source_vault = VaultState::new(&source_dir).unwrap();
         source_vault
             .initialize("v1 restore compatibility password".into())
@@ -3351,8 +3391,14 @@ mod tests {
             .fetch_one(upgraded.pool())
             .await
             .unwrap();
-            assert_eq!(latest_version, 10);
+            assert_eq!(latest_version, 11);
             assert_eq!(queued, 1);
+            let appointment = get_appointment_impl(&upgraded, "legacy-appointment")
+                .await
+                .unwrap();
+            assert_eq!(appointment.notes.as_deref(), Some("legacy notes"));
+            assert_eq!(appointment.teammate1, None);
+            assert_eq!(appointment.teammate2, None);
             upgraded.pool().close().await;
         });
         assert_eq!(
@@ -3369,8 +3415,8 @@ mod tests {
     }
 
     #[test]
-    fn v2_restore_upgrades_trusted_0005_and_0006_prefixes_in_staging_copy() {
-        for latest_version in [5_i64, 6_i64] {
+    fn v2_restore_upgrades_trusted_prefixes_in_staging_copy() {
+        for latest_version in [5_i64, 6_i64, 10_i64] {
             let dir = test_dir(&format!("v2-prefix-{latest_version}"));
             fs::create_dir_all(&dir).unwrap();
             let database = dir.join("timekeeper.db");
@@ -3402,7 +3448,7 @@ mod tests {
                         .fetch_one(upgraded.pool())
                         .await
                         .unwrap();
-                assert_eq!(latest, 10);
+                assert_eq!(latest, 11);
                 let columns = sqlx::query_scalar::<_, String>(
                     "SELECT name FROM pragma_table_info('account_profiles') ORDER BY cid",
                 )
@@ -3411,6 +3457,10 @@ mod tests {
                 .unwrap();
                 assert!(columns.iter().any(|name| name == "weekly_wins"));
                 assert!(!columns.iter().any(|name| name == "usage_info"));
+                let teammate_columns: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM pragma_table_info('appointments') WHERE name IN ('teammate1', 'teammate2')",
+                ).fetch_one(upgraded.pool()).await.unwrap();
+                assert_eq!(teammate_columns, 2);
                 upgraded.pool().close().await;
             });
             remove_test_dir_after_sqlite_shutdown(dir);

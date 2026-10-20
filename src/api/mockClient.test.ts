@@ -1143,9 +1143,15 @@ describe("browser mock API", () => {
   });
 
   it("restores the in-memory demo data captured by a backup", async () => {
-    const created = await mockApi.createAppointment(
-      businessInput("2099-08-03", "10:00", "11:00", "备份恢复回归", 8_800),
-    );
+    const created = await mockApi.createAppointment({
+      ...businessInput("2099-08-03", "10:00", "11:00", "备份恢复回归", 8_800),
+      teammate1: "队友甲",
+      teammate2: "队友乙",
+    });
+    const presets = await mockApi.listContactPresets("备份恢复回归", 10);
+    expect(presets[0]).toMatchObject({ teammate1: "队友甲", teammate2: "队友乙" });
+    const copied = await mockApi.duplicateAppointment(created.appointment.id, "2099-08-04");
+    expect(copied.appointment).toMatchObject({ teammate1: "队友甲", teammate2: "队友乙" });
     const backup = await mockApi.createBackup("C:\\demo\\closed-loop.tkbackup");
 
     await mockApi.deleteAppointment(created.appointment.id);
@@ -1155,6 +1161,8 @@ describe("browser mock API", () => {
     await expect(mockApi.getAppointment(created.appointment.id)).resolves.toMatchObject({
       contactName: "备份恢复回归",
       settlementStatus: "unsettled",
+      teammate1: "队友甲",
+      teammate2: "队友乙",
     });
     await expect(mockApi.appAccessStatus()).resolves.toMatchObject({
       initialized: true,

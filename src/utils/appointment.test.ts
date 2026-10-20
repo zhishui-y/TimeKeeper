@@ -75,6 +75,8 @@ describe("combineDateTime", () => {
   it("keeps account source and character snapshots when calendar reschedules", () => {
     const input = rescheduledInput(
       appointment({
+        teammate1: "队友甲",
+        teammate2: "队友乙",
         account: {
           source: "profile",
           characterName: "清心",
@@ -95,6 +97,7 @@ describe("combineDateTime", () => {
         credential: { kind: "keep" },
       }),
     );
+    expect(input).toMatchObject({ teammate1: "队友甲", teammate2: "队友乙" });
   });
 
   it("sorts scheduled appointments from early to late and keeps pending times last", () => {

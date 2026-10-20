@@ -44,7 +44,7 @@ const APPOINTMENT_WITH_CREDENTIAL_SELECT: &str =
             a.account_source, a.account_character_name,
             a.voice_platform, a.voice_channel, a.rate_note, a.payment_method,
             a.amount_minor, a.reminder_minutes, a.notes, a.import_fingerprint,
-            a.created_at, a.updated_at, c.password AS account_password
+            a.created_at, a.updated_at, c.password AS account_password, a.teammate1, a.teammate2
      FROM appointments a
      LEFT JOIN appointment_credentials c ON c.appointment_id = a.id";
 
@@ -276,6 +276,8 @@ struct NormalizedAppointment {
     account: Option<AppointmentAccountInput>,
     voice_platform: Option<VoicePlatform>,
     voice_channel: Option<String>,
+    teammate1: Option<String>,
+    teammate2: Option<String>,
     rate_note: Option<String>,
     payment_method: Option<String>,
     amount_minor: Option<i64>,
@@ -546,6 +548,8 @@ fn normalize_input(input: AppointmentInput) -> Result<NormalizedAppointment, Str
         voice_platform,
         voice_channel,
         rate_note,
+        teammate1: optional_text(input.teammate1),
+        teammate2: optional_text(input.teammate2),
         payment_method,
         amount_minor,
         reminder_minutes: input.reminder_minutes,
@@ -604,6 +608,8 @@ pub(crate) fn appointment_from_row(row: &SqliteRow) -> Result<Appointment, Strin
         account,
         voice_platform,
         voice_channel: row.try_get("voice_channel").map_err(db_error)?,
+        teammate1: row.try_get("teammate1").map_err(db_error)?,
+        teammate2: row.try_get("teammate2").map_err(db_error)?,
         rate_note: row.try_get("rate_note").map_err(db_error)?,
         payment_method: row.try_get("payment_method").map_err(db_error)?,
         amount_minor: row.try_get("amount_minor").map_err(db_error)?,
@@ -658,6 +664,8 @@ fn appointment_from_selected_row(row: &SqliteRow) -> Result<Appointment, String>
         account,
         voice_platform,
         voice_channel: row.try_get(16).map_err(db_error)?,
+        teammate1: row.try_get(26).map_err(db_error)?,
+        teammate2: row.try_get(27).map_err(db_error)?,
         rate_note: row.try_get(17).map_err(db_error)?,
         payment_method: row.try_get(18).map_err(db_error)?,
         amount_minor: row.try_get(19).map_err(db_error)?,
@@ -1066,6 +1074,8 @@ pub(crate) async fn list_contact_presets_impl(
                 notes: appointment.notes,
                 voice_platform: appointment.voice_platform,
                 voice_channel: appointment.voice_channel,
+                teammate1: appointment.teammate1,
+                teammate2: appointment.teammate2,
             })
         })
         .collect()
@@ -1476,8 +1486,8 @@ async fn insert_normalized_appointment(
             account_source, account_character_name,
             voice_platform, voice_channel,
             rate_note, payment_method, amount_minor, reminder_minutes, notes,
-            created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            created_at, updated_at, teammate1, teammate2
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&input.service_date)
@@ -1503,6 +1513,8 @@ async fn insert_normalized_appointment(
     .bind(&input.notes)
     .bind(now)
     .bind(now)
+    .bind(&input.teammate1)
+    .bind(&input.teammate2)
     .execute(&mut **transaction)
     .await
     .map_err(db_error)?;
@@ -1613,7 +1625,8 @@ pub(crate) async fn update_appointment_impl(
             account_specialization = ?, account_gear_score = ?, account_server = ?,
             account_name = ?, account_source = ?, account_character_name = ?,
             voice_platform = ?, voice_channel = ?, rate_note = ?,
-            payment_method = ?, amount_minor = ?, reminder_minutes = ?, notes = ?, updated_at = ?
+            payment_method = ?, amount_minor = ?, reminder_minutes = ?, notes = ?, updated_at = ?,
+            teammate1 = ?, teammate2 = ?
          WHERE id = ?",
     )
     .bind(&input.service_date)
@@ -1638,6 +1651,8 @@ pub(crate) async fn update_appointment_impl(
     .bind(input.reminder_minutes)
     .bind(&input.notes)
     .bind(&now)
+    .bind(&input.teammate1)
+    .bind(&input.teammate2)
     .bind(id)
     .execute(&mut *transaction)
     .await
@@ -1742,6 +1757,8 @@ fn duplicate_input(
         account: None,
         voice_platform: source.voice_platform,
         voice_channel: source.voice_channel.clone(),
+        teammate1: source.teammate1.clone(),
+        teammate2: source.teammate2.clone(),
         rate_note: source.rate_note.clone(),
         payment_method: source.payment_method.clone(),
         amount_minor: source.amount_minor,

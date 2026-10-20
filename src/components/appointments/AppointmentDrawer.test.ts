@@ -86,9 +86,11 @@ describe("AppointmentDrawer", () => {
     expect(voice.findAll(".field__label").map((label) => label.text())).toEqual([
       "语音",
       "YY频道号码",
+      "队友1",
+      "队友2",
       "备注",
     ]);
-    expect(voice.findAll(".field")[2]?.classes()).toContain("form-grid__full");
+    expect(voice.findAll(".field")[4]?.classes()).toContain("form-grid__full");
   });
 
   it("starts a blank appointment in profile mode with YY and shows the full profile label", () => {
@@ -137,7 +139,7 @@ describe("AppointmentDrawer", () => {
         .get(".form-grid--voice-fields")
         .findAll(".field__label")
         .map((label) => label.text()),
-    ).toEqual(["语音", "备注"]);
+    ).toEqual(["语音", "队友1", "队友2", "备注"]);
   });
 
   it("clears a one-time password when switching away from the embedded account", async () => {

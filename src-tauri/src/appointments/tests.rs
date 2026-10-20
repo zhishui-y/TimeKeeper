@@ -35,6 +35,8 @@ fn business_input(date: &str, start: &str, end: &str) -> AppointmentInput {
         account: None,
         voice_platform: None,
         voice_channel: None,
+        teammate1: None,
+        teammate2: None,
         rate_note: Some("80/小时".into()),
         payment_method: None,
         amount_minor: Some(8_000),
@@ -200,6 +202,62 @@ fn resolves_cross_midnight_range_and_validates_voice() {
             .unwrap_err()
             .contains("只能包含数字")
     );
+}
+
+#[test]
+fn teammates_survive_mutations_reads_presets_and_duplication() {
+    run_async(async {
+        let database = Database::in_memory().await.unwrap();
+        let mut input = business_input("2026-08-03", "08:00", "09:00");
+        input.teammate1 = Some("  teammate-a  ".into());
+        input.teammate2 = Some("teammate-b".into());
+        let created = create_appointment_impl(&database, input.clone())
+            .await
+            .unwrap()
+            .appointment;
+        assert_eq!(created.teammate1.as_deref(), Some("teammate-a"));
+        assert_eq!(created.teammate2.as_deref(), Some("teammate-b"));
+        let items = list_appointments_impl(
+            &database,
+            AppointmentFilters {
+                from: Some("2026-08-03".into()),
+                to: Some("2026-08-03".into()),
+                ..AppointmentFilters::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(items[0].teammate1, created.teammate1);
+        assert_eq!(items[0].teammate2, created.teammate2);
+        let presets = list_contact_presets_impl(&database, None, None)
+            .await
+            .unwrap();
+        assert_eq!(presets[0].teammate1, created.teammate1);
+        assert_eq!(presets[0].teammate2, created.teammate2);
+        let duplicate =
+            duplicate_appointment_impl(&database, &created.id, Some("2026-08-10".into()))
+                .await
+                .unwrap()
+                .appointment;
+        assert_eq!(duplicate.teammate1, created.teammate1);
+        assert_eq!(duplicate.teammate2, created.teammate2);
+
+        input.teammate1 = Some("changed".into());
+        input.teammate2 = Some("   ".into());
+        update_appointment_impl(&database, &created.id, input)
+            .await
+            .unwrap();
+        let updated = get_appointment_impl(&database, &created.id).await.unwrap();
+        assert_eq!(updated.teammate1.as_deref(), Some("changed"));
+        assert_eq!(updated.teammate2, None);
+        let mut legacy_json =
+            serde_json::to_value(business_input("2026-08-03", "08:00", "09:00")).unwrap();
+        legacy_json.as_object_mut().unwrap().remove("teammate1");
+        legacy_json.as_object_mut().unwrap().remove("teammate2");
+        let legacy_input: AppointmentInput = serde_json::from_value(legacy_json).unwrap();
+        assert_eq!(legacy_input.teammate1, None);
+        assert_eq!(legacy_input.teammate2, None);
+    });
 }
 
 #[test]

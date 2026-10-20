@@ -68,7 +68,18 @@ function appointmentTitle(appointment: Appointment): string {
         </button>
         <div class="week-schedule__title">
           <span class="section-kicker">{{ isCurrentWeek ? "本周安排" : "每周安排" }}</span>
-          <h2>{{ isCurrentWeek ? "本周排班" : "每周排班" }}</h2>
+          <h2>
+            <template v-if="isCurrentWeek">本周排班</template>
+            <button
+              v-else
+              class="week-schedule__return"
+              type="button"
+              title="点击回到本周"
+              @click="emit('returnToCurrentWeek')"
+            >
+              每周排班
+            </button>
+          </h2>
         </div>
         <button
           class="button button--ghost button--compact"
@@ -79,14 +90,6 @@ function appointmentTitle(appointment: Appointment): string {
         </button>
       </div>
       <div class="week-schedule__details">
-        <button
-          v-if="!isCurrentWeek"
-          class="button button--ghost button--compact"
-          type="button"
-          @click="emit('returnToCurrentWeek')"
-        >
-          回到本周
-        </button>
         <div class="week-schedule__instructions">
           <span class="week-schedule__range" aria-live="polite">{{ weekRangeLabel }}</span>
           <span class="week-schedule__hint">点击日期查看预约，点击空白新增</span>
@@ -187,6 +190,27 @@ function appointmentTitle(appointment: Appointment): string {
 .week-schedule__title {
   flex: 0 0 auto;
   text-align: center;
+}
+
+.week-schedule__return {
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.week-schedule__return:hover {
+  color: var(--brand);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.week-schedule__return:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--brand);
+  outline-offset: 3px;
 }
 
 .week-schedule__instructions {

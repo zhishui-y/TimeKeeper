@@ -185,6 +185,10 @@ pub struct Appointment {
     pub account: Option<AppointmentAccount>,
     pub voice_platform: Option<VoicePlatform>,
     pub voice_channel: Option<String>,
+    #[serde(default)]
+    pub teammate1: Option<String>,
+    #[serde(default)]
+    pub teammate2: Option<String>,
     pub rate_note: Option<String>,
     pub payment_method: Option<String>,
     pub amount_minor: Option<i64>,
@@ -215,6 +219,10 @@ pub struct AppointmentInput {
     pub voice_platform: Option<VoicePlatform>,
     #[serde(default)]
     pub voice_channel: Option<String>,
+    #[serde(default)]
+    pub teammate1: Option<String>,
+    #[serde(default)]
+    pub teammate2: Option<String>,
     #[serde(default)]
     pub rate_note: Option<String>,
     #[serde(default)]
@@ -299,6 +307,10 @@ pub struct ContactPreset {
     pub notes: Option<String>,
     pub voice_platform: Option<VoicePlatform>,
     pub voice_channel: Option<String>,
+    #[serde(default)]
+    pub teammate1: Option<String>,
+    #[serde(default)]
+    pub teammate2: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

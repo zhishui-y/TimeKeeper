@@ -957,6 +957,8 @@ mod tests {
             account: None,
             voice_platform: None,
             voice_channel: None,
+            teammate1: None,
+            teammate2: None,
             rate_note: None,
             payment_method: Some("微信".into()),
             amount_minor: Some(amount_minor),

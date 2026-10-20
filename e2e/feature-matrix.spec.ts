@@ -85,7 +85,7 @@ async function createBusinessAppointment(
   await expect(drawer).toBeVisible();
   await drawer.getByLabel("日期 *").fill(today);
   await drawer.getByLabel("开始时间", { exact: true }).fill("06:00");
-  await drawer.getByLabel("结束时间（可留空）", { exact: true }).fill("07:00");
+  await drawer.getByLabel("结束时间", { exact: true }).fill("07:00");
   await drawer.getByLabel("联系人", { exact: true }).fill(contactName);
   await drawer.getByLabel("预约内容").fill(content);
   await drawer.getByLabel("金额（元）").fill("88");
@@ -309,7 +309,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       const drawer = page.getByRole("dialog", { name: "新建预约" });
       await drawer.getByLabel("日期 *").fill(templateDate);
       await drawer.getByLabel("开始时间", { exact: true }).fill("18:30");
-      await drawer.getByLabel("结束时间（可留空）").fill("20:00");
+      await drawer.getByLabel("结束时间").fill("20:00");
       await drawer.getByLabel("联系人").fill(contactName);
       await drawer.getByLabel("预约内容").fill("模板恢复验收");
       await drawer.locator(".account-kind__item", { hasText: "一次性账号" }).click();
@@ -452,7 +452,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
       await drawer.locator(".mode-switch__item", { hasText: "娱乐模式" }).click();
       await drawer.getByLabel("日期 *").fill(today);
       await drawer.getByLabel("开始时间", { exact: true }).fill("07:00");
-      await drawer.getByLabel("结束时间（可留空）", { exact: true }).fill("08:00");
+      await drawer.getByLabel("结束时间", { exact: true }).fill("08:00");
       await drawer.getByLabel("联系人", { exact: true }).fill(contactName);
       await drawer.getByLabel("预约内容").fill("仅供娱乐模式回归");
       await drawer.locator(".account-kind__item", { hasText: "不使用账号" }).click();

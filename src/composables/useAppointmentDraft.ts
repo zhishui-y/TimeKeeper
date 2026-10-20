@@ -55,6 +55,8 @@ export interface AppointmentDraft {
   reminderMinutes: number;
   voicePlatform: VoicePlatform | "";
   voiceChannel: string;
+  teammate1: string;
+  teammate2: string;
   notes: string;
 }
 
@@ -167,6 +169,8 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
     reminderMinutes: 30,
     voicePlatform: "yy",
     voiceChannel: "",
+    teammate1: "",
+    teammate2: "",
     notes: "",
   });
   const errors = shallowRef<string[]>([]);
@@ -242,6 +246,8 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
         (appointment?.voicePlatform ?? seedInput?.voicePlatform) === "yy"
           ? (appointment?.voiceChannel ?? seedInput?.voiceChannel ?? "")
           : "",
+      teammate1: appointment?.teammate1 ?? seedInput?.teammate1 ?? "",
+      teammate2: appointment?.teammate2 ?? seedInput?.teammate2 ?? "",
       notes: appointment?.notes ?? seedInput?.notes ?? "",
     });
     timeModified.value = false;
@@ -294,6 +300,8 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
       voicePlatform: preset.voicePlatform ?? "",
       voiceChannel: preset.voicePlatform === "yy" ? (preset.voiceChannel ?? "") : "",
       notes: preset.notes ?? "",
+      teammate1: preset.teammate1 ?? "",
+      teammate2: preset.teammate2 ?? "",
       ...(!editing
         ? {
             mode: preset.mode,
@@ -426,6 +434,8 @@ export function useAppointmentDraft(options: UseAppointmentDraftOptions) {
       voicePlatform: draft.voicePlatform || null,
       voiceChannel: draft.voicePlatform === "yy" ? text(draft.voiceChannel) || null : null,
       notes: text(draft.notes) || null,
+      teammate1: text(draft.teammate1) || null,
+      teammate2: text(draft.teammate2) || null,
     };
   }
 

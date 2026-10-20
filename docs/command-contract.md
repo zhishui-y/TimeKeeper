@@ -95,6 +95,10 @@ SQLite `LIKE` 中转义，不充当 wildcard；页面行、计数、全选快照
 角色名仍是历史快照，不关联或跟随档案。`voicePlatform` 接受 `yy`、`qq` 或 `null`；只有 YY 可
 保存纯数字 `voiceChannel`。
 
+`Appointment`、`AppointmentInput` 与 `ContactPreset` 包含可空文本 `teammate1`、`teammate2`。
+队友名称去首尾空白，空值保存为 `null`，独立于语音平台；编辑、预约复制、日历改期与联系人模板
+保留队友值。旧 Excel 导入不推测队友，两个字段均为空。
+
 `duplicate_appointment` 保留兼容并会立即创建记录；当前界面不调用它。预约记录表格和编辑抽屉先在
 前端生成北京时间今天的待保存草稿，业务状态重置为 `scheduled + unsettled`，娱乐状态重置为
 `scheduled + not_applicable`，再次点击保存后才调用 `create_appointment`。

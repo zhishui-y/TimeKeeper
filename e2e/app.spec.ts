@@ -28,7 +28,7 @@ async function createBusinessAppointment(
   await expect(drawer).toBeVisible();
   await drawer.getByLabel("日期 *").fill(serviceDate);
   await drawer.getByLabel("开始时间", { exact: true }).fill(draft.startTime);
-  await drawer.getByLabel("结束时间（可留空）", { exact: true }).fill(draft.endTime);
+  await drawer.getByLabel("结束时间", { exact: true }).fill(draft.endTime);
   await drawer.getByLabel("联系人", { exact: true }).fill(draft.contactName);
   await drawer.getByLabel("金额（元）").fill(draft.amountYuan);
   await drawer.locator(".account-kind__item", { hasText: "不使用账号" }).click();

@@ -50,11 +50,41 @@ function preset(): ContactPreset {
     reminderMinutes: 20,
     voicePlatform: "yy",
     voiceChannel: "123456",
+    teammate1: "青禾",
+    teammate2: "小北",
     notes: "历史模板",
   };
 }
 
 describe("useAppointmentDraft", () => {
+  it("loads, trims, copies, and clears optional teammate names", () => {
+    const onSave = vi.fn();
+    const record: Appointment = {
+      id: "with-teammates",
+      serviceDate: "2026-08-20",
+      contactName: "联系人",
+      mode: "entertainment",
+      serviceStatus: "scheduled",
+      settlementStatus: "not_applicable",
+      teammate1: "队友甲",
+      teammate2: "队友乙",
+      createdAt: "2026-08-01T00:00:00Z",
+      updatedAt: "2026-08-01T00:00:00Z",
+    };
+    const { draft, submit, duplicateAsToday } = setup({ appointment: record, onSave });
+    expect(draft.teammate1).toBe("队友甲");
+    expect(draft.teammate2).toBe("队友乙");
+    draft.teammate1 = "  修改后的队友  ";
+    draft.teammate2 = "   ";
+    submit();
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ teammate1: "修改后的队友", teammate2: null }),
+    );
+    expect(duplicateAsToday("2026-08-21", record.id).input).toMatchObject({
+      teammate1: "  修改后的队友  ",
+      teammate2: "   ",
+    });
+  });
   it("defaults a blank appointment to profile selection and YY voice", () => {
     const { draft } = setup();
 
@@ -87,6 +117,8 @@ describe("useAppointmentDraft", () => {
       reminderMinutes: 20,
       voicePlatform: "yy",
       voiceChannel: "123456",
+      teammate1: "青禾",
+      teammate2: "小北",
     });
     expect(draft.account).toMatchObject({
       kind: "embedded",

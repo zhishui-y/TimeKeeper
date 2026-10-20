@@ -58,6 +58,8 @@ export interface Appointment {
   reminderMinutes?: number | null;
   voicePlatform?: VoicePlatform | null;
   voiceChannel?: string | null;
+  teammate1?: string | null;
+  teammate2?: string | null;
   notes?: string | null;
   importFingerprint?: string | null;
   createdAt: string;
@@ -80,6 +82,8 @@ export interface AppointmentInput {
   reminderMinutes?: number | null;
   voicePlatform?: VoicePlatform | null;
   voiceChannel?: string | null;
+  teammate1?: string | null;
+  teammate2?: string | null;
   notes?: string | null;
 }
 
@@ -119,6 +123,8 @@ export interface ContactPreset {
   notes?: string | null;
   voicePlatform?: VoicePlatform | null;
   voiceChannel?: string | null;
+  teammate1?: string | null;
+  teammate2?: string | null;
 }
 
 export interface EmbeddedAccountPreset extends AppointmentAccountDetails {

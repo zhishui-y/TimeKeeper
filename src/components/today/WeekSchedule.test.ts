@@ -27,6 +27,7 @@ describe("WeekSchedule", () => {
       props: { days: [], isCurrentWeek: false, interactionsDisabled: true },
     });
     const buttons = wrapper.findAll(".week-schedule__header button");
+    expect(buttons.map((button) => button.text())).toEqual(["上一周", "每周排班", "下一周"]);
     await buttons[0]!.trigger("click");
     await buttons[1]!.trigger("click");
     await buttons[2]!.trigger("click");
@@ -34,6 +35,10 @@ describe("WeekSchedule", () => {
     expect(wrapper.emitted("returnToCurrentWeek")).toEqual([[]]);
     expect(wrapper.attributes("inert")).toBeUndefined();
     expect(wrapper.get(".week-grid").attributes("inert")).toBeDefined();
+    expect(wrapper.get("h2 button").attributes("title")).toBe("点击回到本周");
+    await wrapper.setProps({ isCurrentWeek: true });
+    expect(wrapper.get("h2").text()).toBe("本周排班");
+    expect(wrapper.find("h2 button").exists()).toBe(false);
     wrapper.unmount();
   });
 

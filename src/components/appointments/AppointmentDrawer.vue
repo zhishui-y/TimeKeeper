@@ -239,15 +239,8 @@ useModalFocus({
                       />
                     </label>
                     <div class="field">
-                      <label class="field__label" for="appointment-start-time">开始时间</label>
-                      <div class="time-field__control">
-                        <input
-                          id="appointment-start-time"
-                          v-model="draft.startTime"
-                          class="input"
-                          type="time"
-                          @input="markTimeModified"
-                        />
+                      <div class="time-field__heading">
+                        <label class="field__label" for="appointment-start-time">开始时间</label>
                         <button
                           class="time-field__button"
                           type="button"
@@ -257,40 +250,47 @@ useModalFocus({
                           现在
                         </button>
                       </div>
+                      <input
+                        id="appointment-start-time"
+                        v-model="draft.startTime"
+                        class="input"
+                        type="time"
+                        @input="markTimeModified"
+                      />
                     </div>
                     <div class="field">
-                      <label class="field__label" for="appointment-end-time">
-                        结束时间（可留空）
-                      </label>
-                      <div class="time-field__control time-field__control--end">
-                        <input
-                          id="appointment-end-time"
-                          v-model="draft.endTime"
-                          class="input"
-                          type="time"
-                          @input="markTimeModified"
-                        />
-                        <button
-                          class="time-field__button"
-                          type="button"
-                          aria-label="结束时间选择现在"
-                          @click="setCurrentTime('endTime')"
-                        >
-                          现在
-                        </button>
-                        <button
-                          class="time-field__button"
-                          type="button"
-                          aria-label="清空结束时间"
-                          :disabled="!draft.endTime"
-                          @click="clearEndTime"
-                        >
-                          清空
-                        </button>
+                      <div class="time-field__heading">
+                        <label class="field__label" for="appointment-end-time">结束时间</label>
+                        <div class="time-field__actions">
+                          <button
+                            class="time-field__button"
+                            type="button"
+                            aria-label="结束时间选择现在"
+                            @click="setCurrentTime('endTime')"
+                          >
+                            现在
+                          </button>
+                          <button
+                            class="time-field__button"
+                            type="button"
+                            aria-label="清空结束时间"
+                            :disabled="!draft.endTime"
+                            @click="clearEndTime"
+                          >
+                            清空
+                          </button>
+                        </div>
                       </div>
+                      <input
+                        id="appointment-end-time"
+                        v-model="draft.endTime"
+                        class="input"
+                        type="time"
+                        @input="markTimeModified"
+                      />
                     </div>
                   </div>
-                  <div class="form-stack">
+                  <div class="form-grid form-grid--contact-content">
                     <AppointmentContactFields
                       v-model="draft.contactName"
                       @select="applyContactPreset"
@@ -400,6 +400,16 @@ useModalFocus({
                         @input="updateVoiceChannel(($event.target as HTMLInputElement).value)"
                       />
                     </label>
+                    <div class="form-grid form-grid__full">
+                      <label class="field">
+                        <span class="field__label">队友1</span>
+                        <input v-model="draft.teammate1" class="input" placeholder="队友名称" />
+                      </label>
+                      <label class="field">
+                        <span class="field__label">队友2</span>
+                        <input v-model="draft.teammate2" class="input" placeholder="队友名称" />
+                      </label>
+                    </div>
                     <label class="field form-grid__full">
                       <span class="field__label">备注</span>
                       <textarea
@@ -619,7 +629,18 @@ useModalFocus({
 }
 
 .form-grid--time {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr 1fr 1.15fr;
+}
+
+.form-grid--time .field__label {
+  display: flex;
+  min-height: 26px;
+  align-items: center;
+}
+
+.form-grid--contact-content :deep(.contact-presets) {
+  right: auto;
+  width: calc(200% + 11px);
 }
 
 .form-grid--billing-fields {
@@ -635,28 +656,25 @@ useModalFocus({
 }
 
 .form-grid__date {
-  grid-column: 1 / -1;
-  width: min(100%, 220px);
+  min-width: 0;
 }
 
-.form-stack {
-  display: grid;
-  gap: 11px;
+.time-field__heading,
+.time-field__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.time-field__control {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 5px;
-}
-
-.time-field__control--end {
-  grid-template-columns: minmax(0, 1fr) auto auto;
+.time-field__heading {
+  min-height: 26px;
+  justify-content: space-between;
 }
 
 .time-field__button {
-  min-width: 38px;
-  padding: 0 6px;
+  min-width: 30px;
+  height: 26px;
+  padding: 0 4px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm, 8px);
   color: var(--brand-strong);
@@ -763,14 +781,14 @@ useModalFocus({
 
   .mode-switch,
   .form-grid--time,
+  .form-grid--contact-content,
   .form-grid--billing-fields,
   .form-grid--voice-fields {
     grid-template-columns: 1fr;
   }
 
-  .form-grid__date {
-    grid-column: auto;
-    width: auto;
+  .form-grid--contact-content :deep(.contact-presets) {
+    width: 100%;
   }
 }
 </style>
