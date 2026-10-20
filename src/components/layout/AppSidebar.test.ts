@@ -9,7 +9,7 @@ describe("AppSidebar", () => {
     });
 
     expect(wrapper.findAll(".nav__item").map((item) => item.text())).toEqual([
-      "今日",
+      "首页",
       "排班日历",
       "账号档案",
       "预约记录",

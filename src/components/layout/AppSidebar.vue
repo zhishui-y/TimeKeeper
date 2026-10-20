@@ -15,7 +15,7 @@ const emit = defineEmits<{
 }>();
 
 const navigation = [
-  { name: "today", label: "今日", icon: LayoutDashboard },
+  { name: "today", label: "首页", icon: LayoutDashboard },
   { name: "calendar", label: "排班日历", icon: CalendarDays },
   { name: "accounts", label: "账号档案", icon: BookUser },
   { name: "appointments", label: "预约记录", icon: Clock3 },

@@ -85,6 +85,10 @@ Vue 采用 Composition API、`<script setup lang="ts">`、Pinia 与 Vue Router�
 | Settings workspace      | 分类设置导航、外观预览、Excel 预览提交、通知、角色服务器、API 密钥与备份    |
 | `operations` store      | 跨路由长任务互斥、全局进度、Excel 单 token 与角色刷新结果                   |
 
+首页周排班由 `useHomeSchedule` 管理所选日期和查询范围，翻周保留所选星期，下方列表随日期切换；
+回到本周会选中今天。顶部概况始终按北京时间今天统计，与所浏览的周独立。午夜仅在浏览本周时跟随
+今天，浏览其他周时保持当前位置；范围加载沿用异步资源的过期响应保护，加载失败时仍可翻周返回。
+
 外观由 `useAppAppearance` 负责加载、预览、回退和持久化；`AppearanceSettingsPanel` 与
 `TypographyPreview` 负责字体和字号，字体不可用时原子回退到默认字体并反馈原因。字体变化会通知
 日历 `updateSize()` 与收益图表 `resize()`；ECharts 文本同步使用当前字体字号。外观字段写入

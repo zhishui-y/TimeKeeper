@@ -3,51 +3,42 @@ import { CalendarClock, CircleDollarSign, Clock3, WalletCards } from "@lucide/vu
 import { computed, onMounted, onUnmounted, shallowRef, watch } from "vue";
 import { useRouter } from "vue-router";
 import { api, errorMessage } from "../../api/client";
-import { useAppointments } from "../../composables/useAppointments";
+import { useHomeSchedule } from "../../composables/useHomeSchedule";
 import { useDashboard } from "../../composables/useDashboard";
 import { useUiStore } from "../../stores/ui";
 import { useOperationStore } from "../../stores/operations";
 import type { Appointment, ServiceStatus } from "../../types/domain";
 import { appointmentFiltersToQuery } from "../../utils/appointmentRouteQuery";
-import { findNextScheduledAppointment, sortAppointmentsByStartTime } from "../../utils/appointment";
-import {
-  addDateKeyDays,
-  chinaDateKey,
-  civilDifferenceInMinutes,
-  dateKeyWeekday,
-  endOfChinaWeek,
-  formatChinaDate,
-  parseDateKey,
-  startOfChinaWeek,
-} from "../../utils/chinaDateTime";
+import { findNextScheduledAppointment } from "../../utils/appointment";
+import { civilDifferenceInMinutes, formatChinaDate, parseDateKey } from "../../utils/chinaDateTime";
 import { formatCurrency, formatDateHeading, formatTimeRange } from "../../utils/formatters";
 import TodayAppointmentList from "./TodayAppointmentList.vue";
 import WeekSchedule from "./WeekSchedule.vue";
 
 const now = shallowRef(new Date());
 const router = useRouter();
-const todayKey = computed(() => chinaDateKey(now.value));
-const selectedDateKey = shallowRef(todayKey.value);
-const weekStartKey = computed(() => startOfChinaWeek(todayKey.value));
-const weekEndKey = computed(() => endOfChinaWeek(todayKey.value));
-const currentMonthLabel = computed(() => {
-  const parts = parseDateKey(todayKey.value);
-  return parts ? `${parts.year} · ${String(parts.month).padStart(2, "0")}` : todayKey.value;
-});
 const ui = useUiStore();
 const operations = useOperationStore();
 const {
-  filters,
-  items,
+  todayKey,
+  selectedDateKey,
+  isCurrentWeek,
+  todayAppointments,
+  selectedAppointments,
+  weekDays,
+  selectDate,
+  changeWeek,
+  returnToCurrentWeek,
   loading,
   error,
   stale,
   actionsDisabled,
   resolvedKey,
   load: loadAppointments,
-} = useAppointments({
-  from: weekStartKey.value,
-  to: weekEndKey.value,
+} = useHomeSchedule(now);
+const currentMonthLabel = computed(() => {
+  const parts = parseDateKey(todayKey.value);
+  return parts ? `${parts.year} · ${String(parts.month).padStart(2, "0")}` : todayKey.value;
 });
 const dashboard = useDashboard();
 const resultActionsDisabled = computed(
@@ -63,22 +54,6 @@ const staleDataLabel = computed(() => {
 });
 let clockTimer: ReturnType<typeof globalThis.setInterval> | undefined;
 
-const todayAppointments = computed(() =>
-  sortAppointmentsByStartTime(
-    items.value.filter(
-      (item) => item.serviceDate === todayKey.value && item.serviceStatus !== "cancelled",
-    ),
-  ),
-);
-
-const selectedAppointments = computed(() =>
-  sortAppointmentsByStartTime(
-    items.value.filter(
-      (item) => item.serviceDate === selectedDateKey.value && item.serviceStatus !== "cancelled",
-    ),
-  ),
-);
-
 const selectedDateIsToday = computed(() => selectedDateKey.value === todayKey.value);
 const selectedListKicker = computed(() => (selectedDateIsToday.value ? "今日安排" : "当日安排"));
 const selectedListHeading = computed(() =>
@@ -93,22 +68,6 @@ const nextSelectedAppointmentId = computed(() => {
   if (!selectedDateIsToday.value) return null;
   return nextTodayAppointmentId.value;
 });
-
-const weekDays = computed(() =>
-  Array.from({ length: 7 }, (_, index) => {
-    const dateKey = addDateKeyDays(weekStartKey.value, index);
-    const parts = parseDateKey(dateKey);
-    return {
-      date: dateKey,
-      weekday: dateKeyWeekday(dateKey, true),
-      dayNumber: parts ? String(parts.day) : "",
-      isToday: dateKey === todayKey.value,
-      appointments: sortAppointmentsByStartTime(
-        items.value.filter((item) => item.serviceDate === dateKey),
-      ),
-    };
-  }),
-);
 
 const nextCountdown = computed(() => {
   const next = dashboard.summary.value?.nextAppointment;
@@ -188,10 +147,6 @@ async function copyPassword(appointment: Appointment): Promise<void> {
   }
 }
 
-function selectDate(serviceDate: string): void {
-  selectedDateKey.value = serviceDate;
-}
-
 function openPendingAppointments(): void {
   void router.push({
     name: "appointments",
@@ -205,10 +160,7 @@ watch(
 );
 
 watch(todayKey, () => {
-  selectedDateKey.value = todayKey.value;
-  filters.from = weekStartKey.value;
-  filters.to = weekEndKey.value;
-  void refresh();
+  void dashboard.load(todayKey.value);
 });
 
 onMounted(() => {
@@ -237,7 +189,6 @@ onUnmounted(() => {
       <div class="today-lead__date">
         <span class="section-kicker">{{ currentMonthLabel }}</span>
         <h2>{{ formatDateHeading(todayKey) }}</h2>
-        <p>先看下一场，再安排今天。</p>
       </div>
       <div class="metric-grid">
         <div class="metric metric--next">
@@ -296,12 +247,15 @@ onUnmounted(() => {
     <WeekSchedule
       class="today-workspace__week"
       :days="weekDays"
+      :is-current-week="isCurrentWeek"
       :next-appointment-id="nextTodayAppointmentId"
       :selected-date="selectedDateKey"
       :interactions-disabled="resultActionsDisabled"
       @edit="ui.openEditAppointment"
       @create="ui.openCreateAppointment"
       @select-date="selectDate"
+      @change-week="changeWeek"
+      @return-to-current-week="returnToCurrentWeek"
     />
 
     <TodayAppointmentList
@@ -407,13 +361,6 @@ onUnmounted(() => {
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.today-lead__date p {
-  margin-top: 7px;
-  color: var(--ink-muted);
-  font-size: calc(13px + var(--app-font-size-offset, 0px));
-  line-height: 1.45;
 }
 
 .metric-grid {
@@ -552,10 +499,6 @@ onUnmounted(() => {
   .metric-grid {
     height: 90px;
   }
-
-  .today-lead__date p {
-    margin-top: 5px;
-  }
 }
 
 @media (max-width: 1180px) {
@@ -567,10 +510,6 @@ onUnmounted(() => {
 
   .today-lead__date h2 {
     font-size: calc(18px + var(--app-font-size-offset, 0px));
-  }
-
-  .today-lead__date p {
-    font-size: calc(12px + var(--app-font-size-offset, 0px));
   }
 
   .metric-grid {

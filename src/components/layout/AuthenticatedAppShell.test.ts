@@ -43,7 +43,7 @@ async function mountShell() {
         path: "/",
         name: "today",
         component: defineComponent({ template: "<div>今日内容</div>" }),
-        meta: { title: "今日工作台", subtitle: "今天" },
+        meta: { title: "工作台", subtitle: "今天" },
       },
       {
         path: "/settings",

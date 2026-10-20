@@ -59,7 +59,7 @@
 - `set_appointment_service_status(id, status) -> Appointment`
 - `settle_appointment(id, amountMinor, paymentMethod?) -> Appointment`
 
-`list_appointments` 是范围读取接口：`filters.from` 与 `filters.to` 必须同时提供，供今日工作台和
+`list_appointments` 是范围读取接口：`filters.from` 与 `filters.to` 必须同时提供，供首页工作台所选周和
 日历可见区间使用。`list_appointment_page` 用于历史记录，页码从 1 开始，默认每页 100、最大 200；
 返回 `items`、`totalCount`、`page`、`pageSize`、`totalPages`。计数与页面行在同一只读事务取得，
 排序固定为 `serviceDate DESC, startsAt DESC, createdAt DESC, id DESC`。`filters.query` 去除首尾

@@ -5,7 +5,7 @@ import AppHeader from "./AppHeader.vue";
 describe("AppHeader", () => {
   it("emits the global appointment creation action", async () => {
     const wrapper = mount(AppHeader, {
-      props: { title: "今日工作台", subtitle: "今天的安排" },
+      props: { title: "工作台", subtitle: "今天的安排" },
     });
 
     await wrapper.get(".header__actions .button--primary").trigger("click");
@@ -15,7 +15,7 @@ describe("AppHeader", () => {
 
   it("emits an explicit notification-settings action", async () => {
     const wrapper = mount(AppHeader, {
-      props: { title: "今日工作台", subtitle: "今天的安排" },
+      props: { title: "工作台", subtitle: "今天的安排" },
     });
 
     await wrapper.get('button[aria-label="通知设置"]').trigger("click");

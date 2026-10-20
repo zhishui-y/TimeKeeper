@@ -7,7 +7,7 @@ export const router = createRouter({
       path: "/",
       name: "today",
       component: () => import("../views/TodayView.vue"),
-      meta: { title: "今日工作台", subtitle: "今天的安排与本周节奏" },
+      meta: { title: "工作台", subtitle: "查看今日概况，按周管理预约安排" },
     },
     {
       path: "/calendar",

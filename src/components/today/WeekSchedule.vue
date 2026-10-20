@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ChevronLeft, ChevronRight } from "@lucide/vue";
+import { computed } from "vue";
 import type { Appointment } from "../../types/domain";
 import { formatTime, formatTimeRange } from "../../utils/formatters";
 import {
@@ -14,18 +16,30 @@ interface DaySchedule {
   appointments: Appointment[];
 }
 
-const props = defineProps<{
-  days: DaySchedule[];
-  nextAppointmentId?: string | null;
-  selectedDate?: string;
-  interactionsDisabled?: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    days: DaySchedule[];
+    isCurrentWeek?: boolean;
+    nextAppointmentId?: string | null;
+    selectedDate?: string;
+    interactionsDisabled?: boolean;
+  }>(),
+  { isCurrentWeek: true, nextAppointmentId: null, selectedDate: undefined },
+);
 
 const emit = defineEmits<{
   edit: [appointment: Appointment];
   create: [serviceDate: string];
   selectDate: [serviceDate: string];
+  changeWeek: [direction: -1 | 1];
+  returnToCurrentWeek: [];
 }>();
+
+const weekRangeLabel = computed(() => {
+  const first = props.days[0]?.date;
+  const last = props.days[props.days.length - 1]?.date;
+  return first && last ? `${first} 至 ${last}` : "";
+});
 
 function appointmentTitle(appointment: Appointment): string {
   const details = [
@@ -42,15 +56,44 @@ function appointmentTitle(appointment: Appointment): string {
 </script>
 
 <template>
-  <section class="week-schedule" :inert="interactionsDisabled">
+  <section class="week-schedule">
     <header class="week-schedule__header">
-      <div>
-        <span class="section-kicker">本周安排</span>
-        <h2>本周排班</h2>
+      <div class="week-schedule__navigation">
+        <button
+          class="button button--ghost button--compact"
+          type="button"
+          @click="emit('changeWeek', -1)"
+        >
+          <ChevronLeft :size="14" aria-hidden="true" />上一周
+        </button>
+        <div class="week-schedule__title">
+          <span class="section-kicker">{{ isCurrentWeek ? "本周安排" : "每周安排" }}</span>
+          <h2>{{ isCurrentWeek ? "本周排班" : "每周排班" }}</h2>
+        </div>
+        <button
+          class="button button--ghost button--compact"
+          type="button"
+          @click="emit('changeWeek', 1)"
+        >
+          下一周<ChevronRight :size="14" aria-hidden="true" />
+        </button>
       </div>
-      <span class="week-schedule__hint">点击空白处快速新增</span>
+      <div class="week-schedule__details">
+        <button
+          v-if="!isCurrentWeek"
+          class="button button--ghost button--compact"
+          type="button"
+          @click="emit('returnToCurrentWeek')"
+        >
+          回到本周
+        </button>
+        <div class="week-schedule__instructions">
+          <span class="week-schedule__range" aria-live="polite">{{ weekRangeLabel }}</span>
+          <span class="week-schedule__hint">点击日期查看预约，点击空白新增</span>
+        </div>
+      </div>
     </header>
-    <div class="week-grid">
+    <div class="week-grid" :inert="interactionsDisabled">
       <div
         v-for="day in days"
         :key="day.date"
@@ -132,6 +175,31 @@ function appointmentTitle(appointment: Appointment): string {
   color: var(--ink-strong);
   font-size: calc(16px + var(--app-font-size-offset, 0px));
   line-height: 1.2;
+}
+
+.week-schedule__navigation,
+.week-schedule__details {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.week-schedule__title {
+  flex: 0 0 auto;
+  text-align: center;
+}
+
+.week-schedule__instructions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+
+.week-schedule__range {
+  color: var(--ink);
+  font-size: calc(12px + var(--app-font-size-offset, 0px));
+  font-variant-numeric: tabular-nums;
 }
 
 .week-schedule__hint {

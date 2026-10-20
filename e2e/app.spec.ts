@@ -191,7 +191,7 @@ test("核心页面在桌面窗口中可访问且没有横向溢出", async ({ pa
   });
 
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "今日工作台" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
   await expectOnlyGlobalCreateAction(page);
   await expect(page.getByRole("button", { name: "记一笔预约", exact: true })).toHaveCount(0);
   const dateHeading = page.getByRole("heading", { name: /今天 · \d+月\d+日 周[一二三四五六日]/ });
@@ -264,7 +264,7 @@ test("核心页面在桌面窗口中可访问且没有横向溢出", async ({ pa
 
 test("今日待结场次仅传递待结状态且浏览器前进后退可恢复筛选", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "今日工作台" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
 
   await page.getByRole("button", { name: "查看待结算预约", exact: true }).click();
 
@@ -279,7 +279,7 @@ test("今日待结场次仅传递待结状态且浏览器前进后退可恢复�
   await expect(page.getByLabel("预约进度")).toHaveValue("pending_settlement");
 
   await page.goBack();
-  await expect(page.getByRole("heading", { name: "今日工作台", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "工作台", level: 1 })).toBeVisible();
 
   await page.goForward();
   await expect(page.getByRole("heading", { name: "预约记录", level: 1 })).toBeVisible();
@@ -457,7 +457,7 @@ test("排班日历隐私开关只保留时间并且仍可打开预约", async ({
     .getByRole("dialog", { name: "编辑预约" })
     .getByRole("button", { name: "关闭", exact: true })
     .click();
-  await page.getByRole("link", { name: "今日", exact: true }).click();
+  await page.getByRole("link", { name: "首页", exact: true }).click();
   await page.getByRole("link", { name: "排班日历" }).click();
   await expect(page.getByRole("button", { name: "隐藏预约详情" })).toBeVisible();
   await expect(page.locator(".calendar-event-card__contact").first()).toBeVisible();
@@ -633,7 +633,7 @@ test("完整业务流程可从解锁走到收益与备份恢复", async ({ page 
   await page.getByRole("link", { name: "收益总结" }).click();
   const baselineSettledMinor = await readSettledMinor(page);
 
-  await page.getByRole("link", { name: "今日", exact: true }).click();
+  await page.getByRole("link", { name: "首页", exact: true }).click();
   await createBusinessAppointment(page, today, {
     contactName: "闭环冲突基准",
     startTime: "09:00",

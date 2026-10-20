@@ -38,6 +38,44 @@ describe("TodayWorkspace", () => {
     vi.useRealTimers();
   });
 
+  it("navigates the schedule without changing today's summary and creates on the displayed date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-20T12:00:00+08:00"));
+    vi.spyOn(mockApi, "listAppointments").mockImplementation(async ({ from }) => [
+      appointment({ id: from, serviceDate: from, startsAt: null, endsAt: null }),
+    ]);
+    const summary = vi.spyOn(mockApi, "getDashboardSummary").mockResolvedValue({
+      todaySettledMinor: 10000,
+      weekSettledMinor: 20000,
+      pendingCount: 0,
+      nextAppointment: null,
+    });
+    const pinia = createPinia();
+    const wrapper = mount(TodayWorkspace, { global: { plugins: [pinia] } });
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("先看下一场，再安排今天");
+    const nextWeek = wrapper.findAll(".week-schedule__navigation button")[1]!;
+    await nextWeek.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get(".week-schedule__range").text()).toBe("2026-07-27 至 2026-08-02");
+    expect(wrapper.get(".today-list__header h2").text()).toContain("7月27日");
+    expect(wrapper.findAll(".appointment-row")).toHaveLength(1);
+    expect(summary).toHaveBeenCalledTimes(1);
+    expect(wrapper.get(".today-lead__date h2").text()).toContain("7月20日");
+    expect(
+      wrapper
+        .findAll(".metric .mono-number")
+        .slice(0, 2)
+        .map((value) => value.text()),
+    ).toEqual(["¥100", "¥200"]);
+
+    await wrapper.findAll(".week-day__track")[6]!.trigger("click");
+    expect(useUiStore(pinia).requestedDate).toBe("2026-08-02");
+    expect(useUiStore(pinia).appointmentDrawerOpen).toBe(true);
+    wrapper.unmount();
+  });
+
   it("refreshes the date, week range, and dashboard after midnight", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 6, 19, 23, 59, 50));

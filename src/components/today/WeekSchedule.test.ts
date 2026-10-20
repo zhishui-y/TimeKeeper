@@ -22,6 +22,21 @@ function appointment(overrides: Partial<Appointment>): Appointment {
 }
 
 describe("WeekSchedule", () => {
+  it("keeps week navigation available while result interactions are disabled", async () => {
+    const wrapper = mount(WeekSchedule, {
+      props: { days: [], isCurrentWeek: false, interactionsDisabled: true },
+    });
+    const buttons = wrapper.findAll(".week-schedule__header button");
+    await buttons[0]!.trigger("click");
+    await buttons[1]!.trigger("click");
+    await buttons[2]!.trigger("click");
+    expect(wrapper.emitted("changeWeek")).toEqual([[-1], [1]]);
+    expect(wrapper.emitted("returnToCurrentWeek")).toEqual([[]]);
+    expect(wrapper.attributes("inert")).toBeUndefined();
+    expect(wrapper.get(".week-grid").attributes("inert")).toBeDefined();
+    wrapper.unmount();
+  });
+
   it("opens creation when the empty schedule track is clicked", async () => {
     const wrapper = mount(WeekSchedule, {
       props: {

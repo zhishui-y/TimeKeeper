@@ -97,7 +97,7 @@ async function createBusinessAppointment(
 test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "今日工作台" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
   });
 
   test("外观分类支持字号联动、缺失字体回退和锁屏解锁", async ({ page }) => {
@@ -123,7 +123,7 @@ test.describe("浏览器演示模式功能矩阵（不代表 native 验收）", 
         ),
       )
       .toBe("18px");
-    await expect(page.getByRole("link", { name: "今日" })).toHaveCSS("font-size", "15px");
+    await expect(page.getByRole("link", { name: "首页" })).toHaveCSS("font-size", "15px");
     await expect(page.getByRole("button", { name: "保存设置", exact: true })).toHaveCSS(
       "font-size",
       "16px",
