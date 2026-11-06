@@ -89,6 +89,116 @@ describe("AccountsWorkspace batch delete feedback", () => {
     document.body.innerHTML = "";
   });
 
+  it("copies the last account's password on a single Tab and cancels on navigation away", async () => {
+    vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
+    vi.spyOn(mockApi, "copyAccountName").mockResolvedValue();
+    const copyPassword = vi.spyOn(mockApi, "copyAccountPassword").mockResolvedValue();
+    const wrapper = mount(AccountsWorkspace, { global: { plugins: [createPinia()] } });
+    await flushPromises();
+    await wrapper.get('button[aria-label="复制账号 账号一"]').trigger("click");
+    await flushPromises();
+    await wrapper.get('button[aria-label="复制账号 账号二"]').trigger("click");
+    await flushPromises();
+    const tab = () => {
+      const event = new KeyboardEvent("keydown", { key: "Tab", cancelable: true });
+      document.dispatchEvent(event);
+      return event;
+    };
+    expect(tab().defaultPrevented).toBe(true);
+    await flushPromises();
+    expect(copyPassword).toHaveBeenCalledExactlyOnceWith("account-2");
+    expect(tab().defaultPrevented).toBe(false);
+    await wrapper.get('button[aria-label="复制账号 账号一"]').trigger("click");
+    await flushPromises();
+    wrapper.unmount();
+    expect(tab().defaultPrevented).toBe(false);
+    expect(copyPassword).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves inline fields without losing other metadata, credentials or selection", async () => {
+    vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
+    vi.spyOn(mockApi, "reorderAccountProfiles").mockResolvedValue();
+    const update = vi
+      .spyOn(mockApi, "updateAccountProfile")
+      .mockImplementation(async (id, input) => {
+        const { credential, ...metadata } = input;
+        expect(credential).toEqual({ kind: "keep" });
+        return { ...profiles[0]!, ...metadata, id, updatedAt: "2026-11-06T00:00:00Z" };
+      });
+    const pinia = createPinia();
+    const wrapper = mount(AccountsWorkspace, { global: { plugins: [pinia] } });
+    await flushPromises();
+    wrapper.findComponent(AccountTable).vm.$emit("reorder", "account-1", "account-2", "after");
+    await flushPromises();
+    await wrapper.get('input[aria-label="选择账号 账号一"]').setValue(true);
+
+    for (const [label, value] of [
+      ["当前分", "2400"],
+      ["最高分", ""],
+      ["备注", "  新备注  "],
+    ]) {
+      await wrapper.get(`button[aria-label="编辑账号一 的${label}"]`).trigger("click");
+      const input = wrapper.get(`input[aria-label="编辑账号一 的${label}"]`);
+      await input.setValue(value);
+      await input.trigger("keydown", { key: "Enter" });
+      await flushPromises();
+    }
+
+    expect(update).toHaveBeenCalledTimes(3);
+    const lastInput = update.mock.calls[update.mock.calls.length - 1]![1];
+    expect(lastInput).toMatchObject({
+      contactName: "小林",
+      characterName: "角色一",
+      gearScore: "128000",
+      credential: { kind: "keep" },
+      currentScore: 2400,
+      highestScore: null,
+      notes: "新备注",
+      scoreUpdatedAt: "2026-07-28",
+    });
+    expect(lastInput).not.toHaveProperty("password");
+    const visible = wrapper.findComponent(AccountTable).props("profiles");
+    expect(visible.map((profile: AccountProfile) => profile.id)).toEqual([
+      "account-2",
+      "account-1",
+    ]);
+    const profile = visible.find((profile: AccountProfile) => profile.id === "account-1")!;
+    expect(profile.currentScore).toBe(2400);
+    expect(profile.highestScore).toBeNull();
+    expect(profile.notes).toBe("新备注");
+    expect(profile.weeklyWins).toBe(5);
+    expect(wrapper.findComponent(AccountTable).props("selectedIds")).toEqual(["account-1"]);
+    expect(useUiStore(pinia).accountRevision).toBe(3);
+    wrapper.unmount();
+  });
+
+  it("prevents duplicate saves while pending and preserves the old value on failure", async () => {
+    vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
+    vi.spyOn(mockApi, "getSettings").mockResolvedValue(settingsFixture);
+    const pending = deferred<AccountProfile>();
+    const update = vi.spyOn(mockApi, "updateAccountProfile").mockReturnValue(pending.promise);
+    const pinia = createPinia();
+    const wrapper = mount(AccountsWorkspace, { global: { plugins: [pinia] } });
+    await flushPromises();
+    await wrapper.get('button[aria-label="编辑账号一 的当前分"]').trigger("click");
+    const input = wrapper.get('input[aria-label="编辑账号一 的当前分"]');
+    await input.setValue("2500");
+    await input.trigger("keydown", { key: "Enter" });
+    await input.trigger("blur");
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(
+      wrapper.get('button[aria-label="编辑账号一 的最高分"]').attributes("disabled"),
+    ).toBeDefined();
+    pending.reject(new Error("模拟保存失败"));
+    await flushPromises();
+    expect(wrapper.get('button[aria-label="编辑账号一 的当前分"]').text()).toBe("2100");
+    expect(useUiStore(pinia).toast?.message).toBe("保存失败：模拟保存失败");
+    expect(useUiStore(pinia).accountRevision).toBe(0);
+    wrapper.unmount();
+  });
+
   it("shows progress immediately and an inline success result after deletion", async () => {
     const pendingDelete = deferred<number>();
     vi.spyOn(mockApi, "listAccountProfiles").mockResolvedValue(profiles);
@@ -228,7 +338,7 @@ describe("AccountsWorkspace batch delete feedback", () => {
     await wrapper.get('button[aria-label="复制账号 账号二"]').trigger("click");
     await flushPromises();
     expect(copyAccountName).toHaveBeenCalledWith("account-2");
-    expect(ui.toast?.message).toBe("账号已复制");
+    expect(ui.toast?.message).toBe("账号已复制，30秒内回到时约管家按 Tab 可复制密码");
 
     await wrapper.get('button[aria-label="复制角色名 角色二"]').trigger("click");
     await flushPromises();

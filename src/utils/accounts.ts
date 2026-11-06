@@ -5,6 +5,7 @@ export type AccountProfileSortKey =
 
 export type SortDirection = "asc" | "desc";
 export type AccountDropPlacement = "before" | "after";
+export type AccountEditableField = "currentScore" | "highestScore" | "notes";
 
 export interface AccountProfileFilters {
   contactName: string;

@@ -21,11 +21,13 @@ import {
 } from "../../utils/accountTableColumns";
 import type {
   AccountDropPlacement,
+  AccountEditableField,
   AccountProfileSortKey,
   SortDirection,
 } from "../../utils/accounts";
 import { formatShortDate } from "../../utils/formatters";
 import AccountColumnResizeHandle from "./AccountColumnResizeHandle.vue";
+import AccountEditableCell from "./AccountEditableCell.vue";
 
 interface AccountDragEvent {
   clientY: number;
@@ -61,6 +63,7 @@ const selectedIds = defineModel<string[]>("selectedIds", { required: true });
 
 const emit = defineEmits<{
   edit: [profile: AccountProfile];
+  saveField: [id: string, field: AccountEditableField, value: string];
   copy: [profile: AccountProfile];
   copyAccount: [profile: AccountProfile];
   copyCharacterName: [profile: AccountProfile];
@@ -112,39 +115,14 @@ function toggleOne(profileId: string, event: unknown): void {
   selectedIds.value = [...next];
 }
 
-function toggleSelection(profileId: string): void {
-  if (props.interactionsDisabled) return;
-  const next = new Set(selectedIds.value);
-  if (next.has(profileId)) {
-    next.delete(profileId);
-  } else {
-    next.add(profileId);
-  }
-  selectedIds.value = [...next];
-}
-
-function toggleRow(profileId: string, event: { target: unknown }): void {
-  const target = event.target as { closest?: (selector: string) => unknown } | null;
-  if (
-    typeof target?.closest === "function" &&
-    target.closest("button, input, select, textarea, a, [role='button'], [contenteditable='true']")
-  ) {
-    return;
-  }
-
-  toggleSelection(profileId);
-}
-
 function copyAccount(profile: AccountProfile): void {
   if (props.interactionsDisabled) return;
-  toggleSelection(profile.id);
   emit("copyAccount", profile);
 }
 
 function copyPassword(profile: AccountProfile): void {
   if (props.interactionsDisabled) return;
   if (!profile.password) return;
-  toggleSelection(profile.id);
   emit("copy", profile);
 }
 
@@ -494,7 +472,6 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
               'is-drop-after': dropTarget?.id === profile.id && dropTarget.placement === 'after',
             }"
             :aria-selected="selectedIdSet.has(profile.id)"
-            @click="toggleRow(profile.id, $event)"
             @dragover="dragOver(profile.id, $event)"
             @drop="dropOn(profile.id, $event)"
           >
@@ -553,7 +530,7 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
                 class="icon-button copy-button"
                 type="button"
                 :disabled="interactionsDisabled"
-                title="复制账号"
+                :title="profile.password ? '复制账号，30秒内按 Tab 可复制密码' : '复制账号'"
                 :aria-label="`复制账号 ${profile.accountName}`"
                 @click="copyAccount(profile)"
               >
@@ -572,8 +549,24 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
                 <ClipboardCopy :size="15" />
               </button>
             </td>
-            <td class="mono-number score-cell">{{ profile.currentScore ?? "—" }}</td>
-            <td class="mono-number score-cell">{{ profile.highestScore ?? "—" }}</td>
+            <td class="mono-number score-cell">
+              <AccountEditableCell
+                :value="profile.currentScore"
+                field="currentScore"
+                :label="`编辑${profile.accountName} 的当前分`"
+                :disabled="interactionsDisabled"
+                @save="emit('saveField', profile.id, 'currentScore', $event)"
+              />
+            </td>
+            <td class="mono-number score-cell">
+              <AccountEditableCell
+                :value="profile.highestScore"
+                field="highestScore"
+                :label="`编辑${profile.accountName} 的最高分`"
+                :disabled="interactionsDisabled"
+                @save="emit('saveField', profile.id, 'highestScore', $event)"
+              />
+            </td>
             <td class="muted">
               {{ profile.scoreUpdatedAt ? formatShortDate(profile.scoreUpdatedAt) : "—" }}
             </td>
@@ -583,7 +576,13 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
               :class="{ muted: !profile.notes }"
               :title="profile.notes || undefined"
             >
-              {{ profile.notes || "—" }}
+              <AccountEditableCell
+                :value="profile.notes || null"
+                field="notes"
+                :label="`编辑${profile.accountName} 的备注`"
+                :disabled="interactionsDisabled"
+                @save="emit('saveField', profile.id, 'notes', $event)"
+              />
             </td>
             <td>
               <div class="row-actions">
@@ -833,7 +832,6 @@ function cancelColumnResize(columnKey: AccountTableColumnKey, width: number): vo
 }
 
 .account-table tbody tr {
-  cursor: pointer;
   transition:
     background-color 140ms ease,
     box-shadow 140ms ease;

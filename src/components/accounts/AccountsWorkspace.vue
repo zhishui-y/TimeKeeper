@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, shallowRef, watch } from "vue";
 import { api, errorMessage } from "../../api/client";
 import { useAccounts } from "../../composables/useAccounts";
+import { useAccountClipboard } from "../../composables/useAccountClipboard";
 import { useAccountRoleDataRefresh } from "../../composables/useAccountRoleDataRefresh";
 import { useOperationStore } from "../../stores/operations";
 import { useAppAccessStore } from "../../stores/appAccess";
@@ -24,6 +25,7 @@ import {
   orderAccountProfilesByIds,
   uniqueAccountValues,
   type AccountDropPlacement,
+  type AccountEditableField,
   type AccountProfileFilters,
   type AccountProfileSortKey,
   type SortDirection,
@@ -45,6 +47,8 @@ const {
   actionsDisabled,
   resolvedKey,
   load,
+  savingField,
+  saveField,
   applyRoleDataRefreshPatch,
 } = useAccounts({
   immediate: false,
@@ -98,7 +102,16 @@ const roleDataRefresh = useAccountRoleDataRefresh({
   },
 });
 const activeFilterCount = computed(() => Object.values(accountFilters).filter(Boolean).length);
-const workspaceActionsDisabled = computed(() => actionsDisabled.value || operations.busy);
+const workspaceActionsDisabled = computed(
+  () => actionsDisabled.value || operations.busy || savingField.value,
+);
+const {
+  copyAccount,
+  copyPassword: copy,
+  copyCharacterName,
+} = useAccountClipboard(
+  () => workspaceActionsDisabled.value || drawerOpen.value || ui.appointmentDrawerOpen,
+);
 const resolvedFilterLabel = computed(() => {
   const key = resolvedKey.value;
   if (!key) return "上一组条件";
@@ -279,26 +292,6 @@ async function reorderProfiles(
   }
 }
 
-async function copyAccount(profile: AccountProfile): Promise<void> {
-  if (workspaceActionsDisabled.value) return;
-  try {
-    await api.copyAccountName(profile.id);
-    ui.notify("账号已复制", "success");
-  } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
-  }
-}
-
-async function copyCharacterName(profile: AccountProfile): Promise<void> {
-  if (workspaceActionsDisabled.value) return;
-  try {
-    await api.copyAccountCharacterName(profile.id);
-    ui.notify("角色名已复制", "success");
-  } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
-  }
-}
-
 async function save(input: AccountProfileInput): Promise<void> {
   if (savingAccount.value || workspaceActionsDisabled.value) return;
   savingAccount.value = true;
@@ -321,13 +314,17 @@ async function save(input: AccountProfileInput): Promise<void> {
   }
 }
 
-async function copy(profile: AccountProfile): Promise<void> {
+async function saveInlineField(
+  id: string,
+  field: AccountEditableField,
+  value: string,
+): Promise<void> {
   if (workspaceActionsDisabled.value) return;
   try {
-    await api.copyAccountPassword(profile.id);
-    ui.notify("密码已复制，剪贴板将在30秒后清空", "success");
+    await saveField(id, field, value);
+    ui.markAccountsChanged();
   } catch (cause) {
-    ui.notify(errorMessage(cause), "danger");
+    ui.notify(`保存失败：${errorMessage(cause)}`, "danger");
   }
 }
 
@@ -401,8 +398,13 @@ onMounted(() => {
 
 watch(
   () => items.value,
-  (currentItems) => {
-    manualOrderIds.value = currentItems.map((item) => item.id);
+  (currentItems, previousItems) => {
+    if (
+      currentItems.length !== previousItems.length ||
+      currentItems.some((item, index) => item.id !== previousItems[index]?.id)
+    ) {
+      manualOrderIds.value = currentItems.map((item) => item.id);
+    }
     const validIds = new Set(currentItems.map((item) => item.id));
     const next = selectedIds.value.filter((id) => validIds.has(id));
     if (next.length !== selectedIds.value.length) {
@@ -524,6 +526,7 @@ watch(
       :refreshing-ids="roleDataRefresh.targetIds.value"
       v-model:selected-ids="selectedIds"
       @edit="openEdit"
+      @save-field="saveInlineField"
       @copy="copy"
       @copy-account="copyAccount"
       @copy-character-name="copyCharacterName"

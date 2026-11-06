@@ -92,7 +92,7 @@ describe("AccountTable", () => {
     expect(updates[updates.length - 1]?.[0]).toEqual(["account-2"]);
   });
 
-  it("toggles additive selection from row clicks without hijacking row controls", async () => {
+  it("only selects from checkboxes, not rows, text or row controls", async () => {
     const wrapper = mount(AccountTable, {
       props: {
         profiles,
@@ -109,22 +109,21 @@ describe("AccountTable", () => {
     const rows = wrapper.findAll("tbody tr");
     expect(rows[0]!.attributes("aria-selected")).toBe("false");
     await rows[0]!.trigger("click");
-    let updates = wrapper.emitted("update:selectedIds") ?? [];
-    expect(updates[updates.length - 1]?.[0]).toEqual(["account-1"]);
+    await rows[0]!.get(".contact-cell").trigger("click");
+    expect(wrapper.emitted("update:selectedIds")).toBeUndefined();
 
     await wrapper.setProps({ selectedIds: ["account-1"] });
     expect(rows[0]!.classes()).toContain("is-selected");
     expect(rows[0]!.attributes("aria-selected")).toBe("true");
     await rows[1]!.trigger("click");
-    updates = wrapper.emitted("update:selectedIds") ?? [];
-    expect(updates[updates.length - 1]?.[0]).toEqual(["account-1", "account-2"]);
+    expect(wrapper.emitted("update:selectedIds")).toBeUndefined();
 
     const eventCount = wrapper.emitted("update:selectedIds")?.length;
     await wrapper.get('button[aria-label="编辑账号"]').trigger("click");
     expect(wrapper.emitted("update:selectedIds")?.length).toBe(eventCount);
   });
 
-  it("toggles row selection when copying an account or password", async () => {
+  it("preserves selection when copying an account or password", async () => {
     const wrapper = mount(AccountTable, {
       props: {
         profiles,
@@ -142,22 +141,22 @@ describe("AccountTable", () => {
     const passwordButton = wrapper.get('button[aria-label="复制账号一 的密码"]');
 
     await accountButton.trigger("click");
-    expect(wrapper.emitted("update:selectedIds")?.slice(-1)[0]?.[0]).toEqual(["account-1"]);
+    expect(wrapper.emitted("update:selectedIds")).toBeUndefined();
     expect(wrapper.emitted("copyAccount")).toHaveLength(1);
 
     await wrapper.setProps({ selectedIds: ["account-1"] });
     await accountButton.trigger("click");
-    expect(wrapper.emitted("update:selectedIds")?.slice(-1)[0]?.[0]).toEqual([]);
+    expect(wrapper.emitted("update:selectedIds")).toBeUndefined();
     expect(wrapper.emitted("copyAccount")).toHaveLength(2);
 
     await wrapper.setProps({ selectedIds: [] });
     await passwordButton.trigger("click");
-    expect(wrapper.emitted("update:selectedIds")?.slice(-1)[0]?.[0]).toEqual(["account-1"]);
+    expect(wrapper.emitted("update:selectedIds")).toBeUndefined();
     expect(wrapper.emitted("copy")).toHaveLength(1);
 
     await wrapper.setProps({ selectedIds: ["account-1"] });
     await passwordButton.trigger("click");
-    expect(wrapper.emitted("update:selectedIds")?.slice(-1)[0]?.[0]).toEqual([]);
+    expect(wrapper.emitted("update:selectedIds")).toBeUndefined();
     expect(wrapper.emitted("copy")).toHaveLength(2);
   });
 
