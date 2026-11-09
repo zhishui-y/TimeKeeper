@@ -423,10 +423,10 @@ export interface AccountRoleDataRefreshResult {
 
 export interface AccountRoleDataRefreshPatch {
   accountId: string;
-  gearScore: string;
-  currentScore: number;
+  gearScore: string | null;
+  currentScore: number | null;
   highestScore: number | null;
-  scoreUpdatedAt: string;
+  scoreUpdatedAt: string | null;
   weeklyWins: number | null;
   updatedAt: string;
 }

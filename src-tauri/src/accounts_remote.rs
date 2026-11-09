@@ -79,10 +79,10 @@ pub struct AccountRoleDataRefreshResult {
 #[serde(rename_all = "camelCase")]
 pub struct AccountRoleDataRefreshPatch {
     pub account_id: String,
-    pub gear_score: String,
-    pub current_score: i64,
+    pub gear_score: Option<String>,
+    pub current_score: Option<i64>,
     pub highest_score: Option<i64>,
-    pub score_updated_at: String,
+    pub score_updated_at: Option<String>,
     pub weekly_wins: Option<i64>,
     pub updated_at: String,
 }
@@ -107,10 +107,10 @@ struct AccountRoleDataTarget {
 #[derive(Debug, Clone)]
 struct AccountRoleDataUpdate {
     account_id: String,
-    gear_score: String,
-    current_score: i64,
+    gear_score: Option<String>,
+    current_score: Option<i64>,
     highest_score: Option<i64>,
-    score_updated_at: String,
+    score_updated_at: Option<String>,
     weekly_wins: Option<i64>,
 }
 
@@ -281,13 +281,13 @@ async fn commit_account_role_data_update(
     let updated_at = chrono::Utc::now().to_rfc3339();
     let result = sqlx::query(
         "UPDATE account_profiles SET
-            gear_score = ?, current_score = ?,
+            gear_score = COALESCE(?, gear_score), current_score = COALESCE(?, current_score),
             highest_score = CASE
                 WHEN ? IS NULL THEN highest_score
                 WHEN highest_score IS NULL OR highest_score < ? THEN ?
                 ELSE highest_score
             END,
-            score_updated_at = ?,
+            score_updated_at = COALESCE(?, score_updated_at),
             weekly_wins = CASE WHEN ? IS NULL THEN weekly_wins ELSE ? END,
             updated_at = ?
          WHERE id = ?",
@@ -312,12 +312,13 @@ async fn commit_account_role_data_update(
         "UPDATE legacy_numeric_repair_issues
          SET resolved_at = COALESCE(resolved_at, ?)
          WHERE entity_kind = 'account_profile' AND entity_id = ?
-           AND (field_name = 'current_score'
+           AND ((field_name = 'current_score' AND ? IS NOT NULL)
                 OR (field_name = 'highest_score' AND ? IS NOT NULL)
                 OR (field_name = 'weekly_wins' AND ? IS NOT NULL))",
     )
     .bind(&updated_at)
     .bind(&update.account_id)
+    .bind(update.current_score)
     .bind(update.highest_score)
     .bind(update.weekly_wins)
     .execute(&mut *transaction)
@@ -419,23 +420,40 @@ async fn fetch_account_role_data(
         Ok(payload) => payload,
         Err(message) => return failed(&message),
     };
-    let ParsedAccountRoleData::Updated {
-        gear_score,
-        current_score,
-        highest_score,
-        score_updated_at,
-        weekly_wins,
-    } = payload
-    else {
-        return AccountRoleDataFetchOutcome {
-            position: target.position,
-            item: result_item(
-                &target.account_id,
-                AccountRoleDataRefreshStatus::NoRecord,
-                "无角色战绩",
-            ),
-            update: None,
-        };
+    let update = match payload {
+        ParsedAccountRoleData::Updated {
+            gear_score,
+            current_score,
+            highest_score,
+            score_updated_at,
+            weekly_wins,
+        } => AccountRoleDataUpdate {
+            account_id: target.account_id.clone(),
+            gear_score: Some(gear_score),
+            current_score: Some(current_score),
+            highest_score,
+            score_updated_at: Some(score_updated_at),
+            weekly_wins,
+        },
+        ParsedAccountRoleData::WeeklyWinsOnly(weekly_wins) => AccountRoleDataUpdate {
+            account_id: target.account_id.clone(),
+            gear_score: None,
+            current_score: None,
+            highest_score: None,
+            score_updated_at: None,
+            weekly_wins: Some(weekly_wins),
+        },
+        ParsedAccountRoleData::NoRecord => {
+            return AccountRoleDataFetchOutcome {
+                position: target.position,
+                item: result_item(
+                    &target.account_id,
+                    AccountRoleDataRefreshStatus::NoRecord,
+                    "无角色战绩",
+                ),
+                update: None,
+            };
+        }
     };
 
     AccountRoleDataFetchOutcome {
@@ -445,20 +463,14 @@ async fn fetch_account_role_data(
             status: AccountRoleDataRefreshStatus::Updated,
             message: None,
         },
-        update: Some(AccountRoleDataUpdate {
-            account_id: target.account_id,
-            gear_score,
-            current_score,
-            highest_score,
-            score_updated_at,
-            weekly_wins,
-        }),
+        update: Some(update),
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ParsedAccountRoleData {
     NoRecord,
+    WeeklyWinsOnly(i64),
     Updated {
         gear_score: String,
         current_score: i64,
@@ -482,6 +494,15 @@ fn parse_account_role_data_response(bytes: &[u8]) -> Result<ParsedAccountRoleDat
         return Ok(ParsedAccountRoleData::NoRecord);
     }
 
+    let weekly_wins = parse_nullable_non_negative_safe_integer(object.get("week_win"), "week_win")?;
+    if ["equip", "score", "total_score", "time"]
+        .iter()
+        .all(|key| !object.contains_key(*key))
+        && let Some(wins) = weekly_wins
+    {
+        return Ok(ParsedAccountRoleData::WeeklyWinsOnly(wins));
+    }
+
     let gear_score = parse_gear_score(
         object
             .get("equip")
@@ -497,8 +518,6 @@ fn parse_account_role_data_response(bytes: &[u8]) -> Result<ParsedAccountRoleDat
             .and_then(Value::as_str)
             .ok_or_else(|| "服务器响应缺少有效的 time 字段".to_string())?,
     )?;
-    let weekly_wins = parse_nullable_non_negative_safe_integer(object.get("week_win"), "week_win")?;
-
     Ok(ParsedAccountRoleData::Updated {
         gear_score,
         current_score,
@@ -1020,6 +1039,116 @@ mod tests {
     }
 
     #[test]
+    fn weekly_wins_only_refresh_preserves_other_fields_including_nulls() {
+        run_async(async {
+            let database = Database::in_memory().await.unwrap();
+            let client = Client::builder().no_proxy().build().unwrap();
+            let (backup, data_dir) = test_backup_state();
+            for id in ["filled-account", "empty-account"] {
+                insert_account(&database, id, Some("test-server"), Some("test-role"), 300).await;
+                if id == "empty-account" {
+                    sqlx::query("UPDATE account_profiles SET gear_score = NULL, current_score = NULL, score_updated_at = NULL WHERE id = ?")
+                        .bind(id).execute(database.pool()).await.unwrap();
+                }
+                sqlx::query("UPDATE account_profiles SET weekly_wins = 59 WHERE id = ?")
+                    .bind(id)
+                    .execute(database.pool())
+                    .await
+                    .unwrap();
+                let snapshot_sql = "SELECT gear_score, current_score, highest_score, score_updated_at, notes, account_name, needs_review FROM account_profiles WHERE id = ?";
+                type Snapshot = (
+                    Option<String>,
+                    Option<i64>,
+                    Option<i64>,
+                    Option<String>,
+                    String,
+                    String,
+                    i64,
+                );
+                let before: Snapshot = sqlx::query_as(snapshot_sql)
+                    .bind(id)
+                    .fetch_one(database.pool())
+                    .await
+                    .unwrap();
+                for (body, wins) in [
+                    (r#"{"ok":true,"week_win":12}"#, 12_i64),
+                    (r#"{"ok":true,"week_win":0}"#, 0_i64),
+                ] {
+                    let (base_url, _, server) = spawn_http_server(1, Duration::ZERO, 200, body);
+                    let (channel, messages) = progress_channel();
+                    let result = refresh_account_role_data(
+                        database.pool(),
+                        &client,
+                        &base_url,
+                        "test-key",
+                        vec![id.into()],
+                        &backup,
+                        &channel,
+                    )
+                    .await
+                    .unwrap();
+                    server.join().unwrap();
+                    assert_eq!(result.updated_count, 1);
+                    assert_eq!(result.failed_count, 0);
+                    let after: Snapshot = sqlx::query_as(snapshot_sql)
+                        .bind(id)
+                        .fetch_one(database.pool())
+                        .await
+                        .unwrap();
+                    assert_eq!(after, before);
+                    let stored: i64 =
+                        sqlx::query_scalar("SELECT weekly_wins FROM account_profiles WHERE id = ?")
+                            .bind(id)
+                            .fetch_one(database.pool())
+                            .await
+                            .unwrap();
+                    assert_eq!(stored, wins);
+                    let messages = messages.lock().unwrap();
+                    assert_eq!(messages[0]["patch"]["weeklyWins"], wins);
+                    assert_eq!(
+                        messages[0]["patch"]["gearScore"],
+                        serde_json::json!(before.0)
+                    );
+                    assert_eq!(
+                        messages[0]["patch"]["currentScore"],
+                        serde_json::json!(before.1)
+                    );
+                    assert_eq!(
+                        messages[0]["patch"]["scoreUpdatedAt"],
+                        serde_json::json!(before.3)
+                    );
+                }
+            }
+            fs::remove_dir_all(data_dir).unwrap();
+        });
+    }
+
+    #[test]
+    fn weekly_wins_only_requires_valid_wins_and_no_incomplete_match_fields() {
+        for wins in [
+            "null",
+            "-1",
+            "1.5",
+            "true",
+            "9007199254740992",
+            "\"invalid\"",
+        ] {
+            let body = format!(r#"{{"ok":true,"week_win":{wins}}}"#);
+            assert!(
+                parse_account_role_data_response(body.as_bytes()).is_err(),
+                "{body}"
+            );
+        }
+        for field in ["equip", "score", "total_score", "time"] {
+            let body = format!(r#"{{"ok":true,"week_win":12,"{field}":null}}"#);
+            assert!(
+                parse_account_role_data_response(body.as_bytes()).is_err(),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
     fn operation_lock_rejects_overlapping_refreshes() {
         let state = AccountRoleDataRefreshState::new().unwrap();
         let guard = state.try_start().unwrap();
@@ -1282,10 +1411,10 @@ mod tests {
                 database.pool(),
                 AccountRoleDataUpdate {
                     account_id: "account-1".into(),
-                    gear_score: "200".into(),
-                    current_score: 250,
+                    gear_score: Some("200".into()),
+                    current_score: Some(250),
                     highest_score: Some(280),
-                    score_updated_at: "2026-08-03".into(),
+                    score_updated_at: Some("2026-08-03".into()),
                     weekly_wins: Some(7),
                 },
             )
@@ -1312,10 +1441,10 @@ mod tests {
                 database.pool(),
                 AccountRoleDataUpdate {
                     account_id: "account-1".into(),
-                    gear_score: "210".into(),
-                    current_score: 260,
+                    gear_score: Some("210".into()),
+                    current_score: Some(260),
                     highest_score: Some(290),
-                    score_updated_at: "2026-08-04".into(),
+                    score_updated_at: Some("2026-08-04".into()),
                     weekly_wins: None,
                 },
             )
@@ -1343,10 +1472,10 @@ mod tests {
                 database.pool(),
                 AccountRoleDataUpdate {
                     account_id: "account-1".into(),
-                    gear_score: "999".into(),
-                    current_score: 999,
+                    gear_score: Some("999".into()),
+                    current_score: Some(999),
                     highest_score: Some(999),
-                    score_updated_at: "2026-08-03".into(),
+                    score_updated_at: Some("2026-08-03".into()),
                     weekly_wins: Some(9),
                 },
             )
@@ -1356,10 +1485,10 @@ mod tests {
                 database.pool(),
                 AccountRoleDataUpdate {
                     account_id: "missing-account".into(),
-                    gear_score: "999".into(),
-                    current_score: 999,
+                    gear_score: Some("999".into()),
+                    current_score: Some(999),
                     highest_score: Some(999),
-                    score_updated_at: "2026-08-03".into(),
+                    score_updated_at: Some("2026-08-03".into()),
                     weekly_wins: Some(9),
                 },
             )
